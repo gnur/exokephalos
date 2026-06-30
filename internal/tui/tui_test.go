@@ -46,6 +46,7 @@ func setupTestRepo(t *testing.T) string {
 	importer.Import("../../example-repo/note", tmpDir, "note")
 	importer.Import("../../example-repo/webhook", tmpDir, "webhook")
 	importer.Import("../../example-repo/secret", tmpDir, "secret")
+	importer.Import("../../example-repo/docs", tmpDir, "doc")
 
 	return tmpDir
 }

@@ -59,6 +59,7 @@ tasks:
         EXO_DIR="$temp_dir" ./exo import ./example-repo/note note
         EXO_DIR="$temp_dir" ./exo import ./example-repo/webhook webhook
         EXO_DIR="$temp_dir" ./exo import ./example-repo/secret secret
+        EXO_DIR="$temp_dir" ./exo import ./example-repo/docs doc
         EXO_DIR="$temp_dir" ./exo
 
   dev:serve:
@@ -75,6 +76,7 @@ tasks:
         EXO_DIR="$temp_dir" ./exo import ./example-repo/note note
         EXO_DIR="$temp_dir" ./exo import ./example-repo/webhook webhook
         EXO_DIR="$temp_dir" ./exo import ./example-repo/secret secret
+        EXO_DIR="$temp_dir" ./exo import ./example-repo/docs doc
         EXO_DIR="$temp_dir" ./exo serve
 
   run:

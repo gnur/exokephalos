@@ -6,3 +6,4 @@ tmp/
 .zk/*
 notebook.db
 .exo/cache
+tmp-run

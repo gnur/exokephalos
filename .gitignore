@@ -7,3 +7,4 @@ tmp/
 notebook.db
 .exo/cache
 tmp-run
+.task/

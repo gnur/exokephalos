@@ -11,11 +11,13 @@ import (
 
 	"github.com/gnur/exokephalos/internal/cache"
 	"github.com/gnur/exokephalos/internal/config"
+	"github.com/gnur/exokephalos/internal/exporter"
 	"github.com/gnur/exokephalos/internal/handlers"
 	"github.com/gnur/exokephalos/internal/importer"
 	"github.com/gnur/exokephalos/internal/lsp"
 	"github.com/gnur/exokephalos/internal/repo"
 	"github.com/gnur/exokephalos/internal/tui"
+	"strings"
 )
 
 //go:embed templates/*
@@ -37,6 +39,11 @@ func main() {
 
 	if len(os.Args) > 1 && os.Args[1] == "import" {
 		runImport(dir)
+		return
+	}
+
+	if len(os.Args) > 1 && os.Args[1] == "export" {
+		runExport(dir)
 		return
 	}
 
@@ -188,6 +195,60 @@ func runImport(exoDir string) {
 	fmt.Printf("\nImport complete:\n")
 	fmt.Printf("  Imported: %d\n", result.Imported)
 	fmt.Printf("  Skipped:  %d\n", result.Skipped)
+
+	if len(result.Errors) > 0 {
+		fmt.Printf("\nErrors/Warnings:\n")
+		for _, err := range result.Errors {
+			fmt.Printf("  - %s\n", err)
+		}
+	}
+}
+
+func runExport(exoDir string) {
+	var outputDir string
+	var targetType string
+
+	for i := 2; i < len(os.Args); i++ {
+		if os.Args[i] == "--type" && i+1 < len(os.Args) {
+			targetType = os.Args[i+1]
+			i++
+		} else if strings.HasPrefix(os.Args[i], "--type=") {
+			targetType = strings.TrimPrefix(os.Args[i], "--type=")
+		} else {
+			outputDir = os.Args[i]
+		}
+	}
+
+	if outputDir == "" {
+		fmt.Fprintf(os.Stderr, "Usage: exo export <output-dir> [--type <type>]\n")
+		fmt.Fprintf(os.Stderr, "\nExports markdown files from EXO_DIR into the output directory.\n")
+		fmt.Fprintf(os.Stderr, "Files are placed in <output-dir>/<type>/<year>/<month>/<slug-title>.md\n")
+		os.Exit(1)
+	}
+
+	// Initialize cache (required to load items)
+	c, err := cache.New(exoDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error initializing cache: %v\n", err)
+		os.Exit(1)
+	}
+	defer c.Close()
+
+	opts := exporter.ExportOptions{
+		OutputDir:  outputDir,
+		TargetType: targetType,
+	}
+
+	fmt.Printf("Exporting from %s into %s", exoDir, outputDir)
+	if targetType != "" {
+		fmt.Printf(" (type: %s)", targetType)
+	}
+	fmt.Println()
+
+	result := exporter.Export(c, opts)
+
+	fmt.Printf("\nExport complete:\n")
+	fmt.Printf("  Exported: %d\n", result.Exported)
 
 	if len(result.Errors) > 0 {
 		fmt.Printf("\nErrors/Warnings:\n")

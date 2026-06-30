@@ -6,6 +6,15 @@
     <title>Exokephalos</title>
     <link rel="stylesheet" href="/static/css/output.css">
     <script src="/static/js/htmx.min.js"></script>
+    <script>
+        document.addEventListener('click', function(e) {
+            document.querySelectorAll('.relative > div').forEach(function(el) {
+                if (el.previousElementSibling && !el.previousElementSibling.contains(e.target) && !el.contains(e.target)) {
+                    el.classList.add('hidden');
+                }
+            });
+        });
+    </script>
 </head>
 <body hx-boost="true" hx-target="#main-content" hx-swap="innerHTML" class="bg-gray-900 text-gray-100 min-h-screen overflow-x-hidden">
     <nav class="bg-gray-950 text-white border-b border-gray-800">
@@ -18,8 +27,8 @@
                     <div class="relative">
                         <button onclick="this.nextElementSibling.classList.toggle('hidden')" class="hover:bg-gray-800 px-2 sm:px-3 py-2 rounded text-sm whitespace-nowrap">{{.Config.Name}}</button>
                         <div class="absolute hidden bg-gray-950 border border-gray-800 rounded shadow-lg mt-0 right-0 z-10 min-w-32">
-                            <a href="/views/{{.ID}}" class="block px-4 py-2 hover:bg-gray-800 text-sm">List</a>
-                            <a href="/views/{{.ID}}/stats" hx-boost="false" class="block px-4 py-2 hover:bg-gray-800 text-sm">Stats</a>
+                            <a href="/views/{{.ID}}" onclick="this.parentElement.classList.add('hidden')" class="block px-4 py-2 hover:bg-gray-800 text-sm">List</a>
+                            <a href="/views/{{.ID}}/stats" hx-boost="false" onclick="this.parentElement.classList.add('hidden')" class="block px-4 py-2 hover:bg-gray-800 text-sm">Stats</a>
                         </div>
                     </div>
                     {{else}}

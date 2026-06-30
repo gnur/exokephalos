@@ -100,6 +100,18 @@ func New(cfg *config.Config, baseDir string, r *repo.Repo, c *cache.Cache, templ
 						parts = append(parts, fmt.Sprintf("%v", item))
 					}
 					return strings.Join(parts, ", ")
+				case map[string]interface{}:
+					parts := make([]string, 0, len(val))
+					for k, v := range val {
+						parts = append(parts, fmt.Sprintf("%s: %v", k, v))
+					}
+					return strings.Join(parts, ", ")
+				case map[interface{}]interface{}:
+					parts := make([]string, 0, len(val))
+					for k, v := range val {
+						parts = append(parts, fmt.Sprintf("%v: %v", k, v))
+					}
+					return strings.Join(parts, ", ")
 				default:
 					return fmt.Sprintf("%v", val)
 				}

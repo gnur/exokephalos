@@ -14,6 +14,7 @@ import (
 	"github.com/gnur/exokephalos/internal/id"
 	"github.com/gnur/exokephalos/internal/markdown"
 	"github.com/gnur/exokephalos/internal/scanner"
+	"gopkg.in/yaml.v3"
 )
 
 // ViewList handles GET /views/{viewId} — lists items matching the view filter.
@@ -130,6 +131,14 @@ func (h *Handlers) ViewDetail(w http.ResponseWriter, r *http.Request) {
 	data["ItemID"] = itemID
 	data["Title"] = item.Title(viewCfg.TitleField)
 	data["Body"] = item.Body
+
+	var fmYAML string
+	if item.Frontmatter != nil {
+		if yb, err := yaml.Marshal(item.Frontmatter); err == nil {
+			fmYAML = string(yb)
+		}
+	}
+	data["FrontmatterYAML"] = fmYAML
 
 	h.render(w, r, "views/detail.html", data)
 }

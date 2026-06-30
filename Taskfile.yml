@@ -45,7 +45,7 @@ tasks:
     cmds:
       - npm run watch:css
 
-  run:
+  dev:tui:
     desc: Create a temp dir, import all example-repo types, and launch TUI
     deps: [build]
     cmds:
@@ -60,6 +60,27 @@ tasks:
         EXO_DIR="$temp_dir" ./exo import ./example-repo/webhook webhook
         EXO_DIR="$temp_dir" ./exo import ./example-repo/secret secret
         EXO_DIR="$temp_dir" ./exo
+
+  dev:serve:
+    desc: Create a temp dir, import all example-repo types, and start web UI server
+    deps: [build]
+    cmds:
+      - |
+        mkdir -p ./tmp-run
+        temp_dir=$(mktemp -d ./tmp-run/exo-XXXXXX)
+        echo "Created temporary EXO_DIR at $temp_dir"
+        mkdir -p "$temp_dir/.exo"
+        cp -r ./example-repo/.exo/* "$temp_dir/.exo/"
+        EXO_DIR="$temp_dir" ./exo import ./example-repo/book book
+        EXO_DIR="$temp_dir" ./exo import ./example-repo/note note
+        EXO_DIR="$temp_dir" ./exo import ./example-repo/webhook webhook
+        EXO_DIR="$temp_dir" ./exo import ./example-repo/secret secret
+        EXO_DIR="$temp_dir" ./exo serve
+
+  run:
+    desc: Alias for dev:tui
+    cmds:
+      - task dev:tui
 
   test:
     desc: Run integration tests

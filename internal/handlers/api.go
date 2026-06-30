@@ -25,7 +25,7 @@ func (h *Handlers) GetItemByID(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`{"error": "item not found"}`))
+		_, _ = w.Write([]byte(`{"error": "item not found"}`))
 		return
 	}
 

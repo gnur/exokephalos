@@ -108,7 +108,7 @@ func runServer(cfg *config.Config, dir string, r *repo.Repo, c *cache.Cache) {
 
 	// Ping
 	mux.HandleFunc("GET /ping", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("pong"))
+		_, _ = w.Write([]byte("pong"))
 	})
 
 	// Root redirect to default view

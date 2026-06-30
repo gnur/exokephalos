@@ -56,10 +56,10 @@ func (h *Handlers) WebhookReceive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body strings.Builder
-	body.WriteString(fmt.Sprintf("```%s\n%s\n```\n\n", bodyLang, bodyText))
+	fmt.Fprintf(&body, "```%s\n%s\n```\n\n", bodyLang, bodyText)
 	body.WriteString("```yaml\n")
 	for k, v := range headers {
-		body.WriteString(fmt.Sprintf("%s: %s\n", k, v))
+		fmt.Fprintf(&body, "%s: %s\n", k, v)
 	}
 	body.WriteString("```\n")
 
@@ -69,5 +69,5 @@ func (h *Handlers) WebhookReceive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"success"}`))
+	_, _ = w.Write([]byte(`{"status":"success"}`))
 }

@@ -158,13 +158,13 @@ func (h *Handlers) ViewEdit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodPost {
-		r.ParseForm()
+		_ = r.ParseForm()
 		content := r.FormValue("content")
 		if err := h.Repo.WriteRaw(item.Path, content); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		h.Cache.NotifyWrite(item.Path)
+		_ = h.Cache.NotifyWrite(item.Path)
 		http.Redirect(w, r, fmt.Sprintf("/views/%s/%s", viewID, itemID), http.StatusSeeOther)
 		return
 	}
@@ -211,7 +211,7 @@ func (h *Handlers) ViewDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("failed to delete item: %v", err), http.StatusInternalServerError)
 		return
 	}
-	h.Cache.NotifyDelete(item.Path)
+	_ = h.Cache.NotifyDelete(item.Path)
 	http.Redirect(w, r, fmt.Sprintf("/views/%s", viewID), http.StatusSeeOther)
 }
 
@@ -248,7 +248,7 @@ func (h *Handlers) ViewAction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("action failed: %v", err), 500)
 		return
 	}
-	h.Cache.NotifyWrite(item.Path)
+	_ = h.Cache.NotifyWrite(item.Path)
 
 	http.Redirect(w, r, fmt.Sprintf("/views/%s", viewID), http.StatusSeeOther)
 }
@@ -289,7 +289,7 @@ func (h *Handlers) ViewNewPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.ParseForm()
+	_ = r.ParseForm()
 
 	// Build vars from form values
 	vars := make(map[string]string)
@@ -338,7 +338,7 @@ func (h *Handlers) ViewNewPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	h.Cache.NotifyWrite(fullPath)
+	_ = h.Cache.NotifyWrite(fullPath)
 
 	http.Redirect(w, r, fmt.Sprintf("/views/%s", viewID), http.StatusSeeOther)
 }
@@ -513,11 +513,7 @@ func renderWebCreateTemplate(contentTmpl, viewID, baseDir string, vars map[strin
 		return "", "", fmt.Errorf("rendering content template: %w", err)
 	}
 
-	// Determine type
-	defaultType := viewID
-	if strings.HasSuffix(defaultType, "s") {
-		defaultType = defaultType[:len(defaultType)-1]
-	}
+	defaultType := strings.TrimSuffix(viewID, "s")
 
 	// Ensure id, type, tags, created are present in frontmatter
 	content, err = markdown.EnsureRequiredFields(content, idVal, defaultType)

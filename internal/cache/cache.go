@@ -57,7 +57,7 @@ func New(baseDir string) (*Cache, error) {
 	}
 
 	if err := c.scan(); err != nil {
-		watcher.Close()
+		_ = watcher.Close()
 		return nil, fmt.Errorf("initial scan: %w", err)
 	}
 
@@ -537,12 +537,12 @@ func (c *Cache) handleEvent(event fsnotify.Event) {
 			return
 		}
 		if filepath.Ext(path) == ".md" {
-			c.indexFile(path, relPath)
+			_ = c.indexFile(path, relPath)
 		}
 
 	case event.Has(fsnotify.Write):
 		if filepath.Ext(path) == ".md" {
-			c.indexFile(path, relPath)
+			_ = c.indexFile(path, relPath)
 		}
 
 	case event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename):
@@ -577,7 +577,7 @@ func (c *Cache) scanNewDir(dir string) {
 		if err != nil {
 			return nil
 		}
-		c.indexFile(path, relPath)
+		_ = c.indexFile(path, relPath)
 		return nil
 	})
 	if err != nil {

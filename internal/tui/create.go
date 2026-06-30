@@ -147,11 +147,7 @@ func renderCreateTemplate(contentTmpl, viewID, baseDir string, vars map[string]s
 		return "", "", fmt.Errorf("rendering content template: %w", err)
 	}
 
-	// Determine type
-	defaultType := viewID
-	if strings.HasSuffix(defaultType, "s") {
-		defaultType = defaultType[:len(defaultType)-1]
-	}
+	defaultType := strings.TrimSuffix(viewID, "s")
 
 	// Ensure id, type, tags, created are present in frontmatter
 	content, err = markdown.EnsureRequiredFields(content, idVal, defaultType)

@@ -61,7 +61,7 @@ func (r *Repo) CreateItem(path string, fm map[string]interface{}, body string) e
 	if err := markdown.WriteFrontmatter(path, fm, body); err != nil {
 		return err
 	}
-	r.Cache.NotifyWrite(path)
+	_ = r.Cache.NotifyWrite(path)
 	return nil
 }
 
@@ -70,7 +70,7 @@ func (r *Repo) UpdateItem(path string, fm map[string]interface{}, body string) e
 	if err := markdown.WriteFrontmatter(path, fm, body); err != nil {
 		return err
 	}
-	r.Cache.NotifyWrite(path)
+	_ = r.Cache.NotifyWrite(path)
 	return nil
 }
 
@@ -79,6 +79,6 @@ func (r *Repo) DeleteItem(path string) error {
 	if err := os.Remove(path); err != nil {
 		return err
 	}
-	r.Cache.NotifyDelete(path)
+	_ = r.Cache.NotifyDelete(path)
 	return nil
 }

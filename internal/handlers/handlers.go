@@ -358,7 +358,7 @@ func (h *Handlers) validateCSRF(r *http.Request) bool {
 		if err != nil {
 			return false
 		}
-		if u.Host != r.Host && !(isLocal(u.Host) && isLocal(r.Host)) {
+		if u.Host != r.Host && (!isLocal(u.Host) || !isLocal(r.Host)) {
 			return false
 		}
 	}
@@ -369,7 +369,7 @@ func (h *Handlers) validateCSRF(r *http.Request) bool {
 		if err != nil {
 			return false
 		}
-		if u.Host != r.Host && !(isLocal(u.Host) && isLocal(r.Host)) {
+		if u.Host != r.Host && (!isLocal(u.Host) || !isLocal(r.Host)) {
 			return false
 		}
 	}

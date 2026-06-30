@@ -139,10 +139,8 @@ func importFile(sourcePath, exoDir, typ string) (bool, string, error) {
 
 	// Build new frontmatter, preserving all original fields
 	newFM := make(map[string]interface{})
-	if fm != nil {
-		for k, v := range fm {
-			newFM[k] = v
-		}
+	for k, v := range fm {
+		newFM[k] = v
 	}
 	newFM["type"] = resolvedType
 	newFM["tags"] = resolvedTags
@@ -271,7 +269,7 @@ func hasNewIDFormat(idStr string, created time.Time, hasCreatedField bool) bool 
 			if c == '0' {
 				continue
 			}
-			if !((c >= 'a' && c <= 'z') || (c >= '2' && c <= '7')) {
+			if (c < 'a' || c > 'z') && (c < '2' || c > '7') {
 				return false
 			}
 		}
@@ -292,7 +290,7 @@ func hasNewIDFormat(idStr string, created time.Time, hasCreatedField bool) bool 
 
 	if len(idStr) == 9 {
 		for _, c := range idStr {
-			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
 				return false
 			}
 		}
@@ -338,17 +336,6 @@ func generateDeterministicID(created time.Time, sourcePath string) string {
 	return idStr
 }
 
-// deterministicRandomChars generates n random alphanumeric characters from a seed.
-func deterministicRandomChars(seed uint64, n int) string {
-	const base62Chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	result := make([]byte, n)
-	temp := seed
-	for i := range result {
-		result[i] = base62Chars[temp%62]
-		temp /= 62
-	}
-	return string(result)
-}
 
 // resolveTitle returns fm["title"] or first # Header or filename.
 func resolveTitle(fm map[string]interface{}, body, sourcePath string) string {

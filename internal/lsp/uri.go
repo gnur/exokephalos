@@ -1,7 +1,6 @@
 package lsp
 
 import (
-	"net/url"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -20,19 +19,4 @@ func pathToURI(path string) protocol.DocumentURI {
 	}
 
 	return protocol.DocumentURI("file://" + absPath)
-}
-
-func uriToPath(uri protocol.DocumentURI) string {
-	u, err := url.Parse(string(uri))
-	if err != nil {
-		return strings.TrimPrefix(string(uri), "file://")
-	}
-
-	path := u.Path
-	if runtime.GOOS == "windows" {
-		path = strings.TrimPrefix(path, "/")
-		path = strings.ReplaceAll(path, "/", "\\")
-	}
-
-	return path
 }

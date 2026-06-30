@@ -57,7 +57,7 @@ func containsTag(tags []string, tag string) bool {
 
 func createMarkDoneAction(text string, uri protocol.DocumentURI) *protocol.CodeAction {
 	lines := strings.Split(text, "\n")
-	var tagsLineIdx int = -1
+	var tagsLineIdx = -1
 	var tagsContent string
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -103,7 +103,7 @@ func createBookStatusActions(text string, uri protocol.DocumentURI, tags []strin
 	}
 
 	lines := strings.Split(text, "\n")
-	var tagsLineIdx int = -1
+	var tagsLineIdx = -1
 	var tagsContent string
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)

@@ -66,6 +66,11 @@ tasks:
     cmds:
       - go test -v -count=1 ./...
 
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run
+
   bench:
     desc: Run performance benchmarks (2000 notes, concurrent queries + deletes)
     cmds:

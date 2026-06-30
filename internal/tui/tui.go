@@ -93,8 +93,6 @@ type Model struct {
 	importInput     textinput.Model
 
 	// Create flow
-	createTemplate   string
-	createPath       string
 	createVars       map[string]string
 	pendingPrompts   []string
 	currentPromptIdx int
@@ -347,7 +345,7 @@ func (m Model) applyAction(actionName string) (tea.Model, tea.Cmd) {
 	if err := act.Apply(item.Path, item.Frontmatter, item.Body); err != nil {
 		m.status = fmt.Sprintf("Action failed: %v", err)
 	} else {
-		m.cache.NotifyWrite(item.Path)
+		_ = m.cache.NotifyWrite(item.Path)
 		m.status = fmt.Sprintf("Applied: %s", act.Description)
 	}
 

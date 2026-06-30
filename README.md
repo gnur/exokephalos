@@ -137,7 +137,6 @@ show_tags = true
 title_field = "title"
 sort_field = "published"
 sort_order = "desc"
-path_template = "articles/{{.Year}}/{{.Slug}}.md"
 template = """
 ---
 type: article
@@ -170,7 +169,6 @@ tags: []
 | `subtitle_field` | no | Frontmatter field for subtitle line |
 | `sort_field` | no | Frontmatter field to sort by (default: "created") |
 | `sort_order` | no | "asc" or "desc" (default: "desc") |
-| `path_template` | yes | Go template for file path on creation |
 | `template` | yes | Go template for file content on creation |
 | `preview_template` | no | Go template for TUI preview pane (receives frontmatter + `.Body`) |
 | `stats_template` | no | Embedded stats template name (e.g. "books/stats") |
@@ -234,7 +232,7 @@ These variables are automatically filled when creating items (never prompt the u
 | `{{.Year}}` | `2006` |
 | `{{.Month}}` | `01` |
 | `{{.Day}}` | `02` |
-| `{{.ID}}` | Random 5-char hex string |
+| `{{.ID}}` | Random 7-character lowercase base32 ID |
 | `{{.Slug}}` | Derived from `{{.Title}}` (lowercase, dashes) |
 
 Any other `{{.VarName}}` in the template prompts the user (TUI) or shows a form field (web).
@@ -338,6 +336,29 @@ EXO_DIR=/path/to/your/notes ./exo
 
 # Run web server
 EXO_DIR=/path/to/your/notes ./exo serve
+
+### CLI Subcommands
+
+Exokephalos supports several command line subcommands for maintenance and data integration:
+
+#### `import`
+Recursively imports all markdown files from a source directory, generates safe 7-character lowercase base32 IDs for them, and writes them into the structured `EXO_DIR` directory.
+```bash
+EXO_DIR=/path/to/your/notes ./exo import <source-dir> <type>
+```
+
+#### `export`
+Exports all items from your Exokephalos repository to a specified output folder, organizing them by type and date.
+* Path structure: `<output-dir>/<type>/<year>/<month>/<slug-title>.md`
+* Cleans output files by removing exo-specific metadata fields (`id`, `type`, and `created` from frontmatter).
+* Automatically resolves filename conflicts by appending sequential suffixes (`-1`, `-2`).
+```bash
+# Export all items
+EXO_DIR=/path/to/your/notes ./exo export /path/to/output/dir
+
+# Export a specific item type only
+EXO_DIR=/path/to/your/notes ./exo export /path/to/output/dir --type book
+```
 ```
 
 ### Development

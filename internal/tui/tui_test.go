@@ -1,24 +1,66 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/gnur/exokephalos/internal/cache"
 	"github.com/gnur/exokephalos/internal/config"
 	"github.com/gnur/exokephalos/internal/filter"
+	"github.com/gnur/exokephalos/internal/importer"
 	"github.com/gnur/exokephalos/internal/markdown"
 )
 
+func setupTestRepo(t *testing.T) string {
+	tmpDir := t.TempDir()
+
+	// Copy the .exo configuration directory
+	srcConfigDir := filepath.Join("../../example-repo", ".exo")
+	destConfigDir := filepath.Join(tmpDir, ".exo")
+	if err := os.MkdirAll(destConfigDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Copy config files
+	files, err := os.ReadDir(srcConfigDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if f.IsDir() && f.Name() == "cache" {
+			continue // skip cache
+		}
+		data, err := os.ReadFile(filepath.Join(srcConfigDir, f.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(destConfigDir, f.Name()), data, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Import each type from the raw folders in example-repo
+	importer.Import("../../example-repo/book", tmpDir, "book")
+	importer.Import("../../example-repo/note", tmpDir, "note")
+	importer.Import("../../example-repo/webhook", tmpDir, "webhook")
+	importer.Import("../../example-repo/secret", tmpDir, "secret")
+
+	return tmpDir
+}
+
 func TestViewFilterIntegration(t *testing.T) {
+	tmpDir := setupTestRepo(t)
+
 	// Load the example config
-	cfg, err := config.Load("../../example-repo")
+	cfg, err := config.Load(tmpDir)
 	if err != nil {
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
 	// Scan using cache
-	c, err := cache.New("../../example-repo")
+	c, err := cache.New(tmpDir)
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
@@ -157,18 +199,20 @@ func TestRenderCreateTemplate_KeepsExistingID(t *testing.T) {
 }
 
 func TestModelCreation(t *testing.T) {
-	cfg, err := config.Load("../../example-repo")
+	tmpDir := setupTestRepo(t)
+
+	cfg, err := config.Load(tmpDir)
 	if err != nil {
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	c, err := cache.New("../../example-repo")
+	c, err := cache.New(tmpDir)
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
 	defer c.Close()
 
-	model := New(cfg, "../../example-repo", c)
+	model := New(cfg, tmpDir, c)
 
 	if len(model.views) == 0 {
 		t.Fatal("No views created in model")

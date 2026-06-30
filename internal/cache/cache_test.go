@@ -78,7 +78,7 @@ func TestAll_SkipsHiddenDirs(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "visible.md"), "---\ntitle: Vis\ntype: note\n---\n")
 	writeTestFile(t, filepath.Join(dir, ".git", "config.md"), "---\ntitle: Git\ntype: note\n---\n")
-	writeTestFile(t, filepath.Join(dir, ".exo", "data.md"), "---\ntitle: Exo\ntype: note\n---\n")
+	writeTestFile(t, filepath.Join(dir, ".exo", "data.md"), "---\ntitle: exo\ntype: note\n---\n")
 
 	c, err := New(dir)
 	if err != nil {

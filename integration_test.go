@@ -127,7 +127,7 @@ func TestViewList_Notes(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	s := string(body)
 
-	assertContains(t, s, "Exokephalos")
+	assertContains(t, s, "exokephalos")
 	assertContains(t, s, "Notes")
 	assertContains(t, s, "Total:")
 	assertContains(t, s, "Parsing:")

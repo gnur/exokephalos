@@ -129,7 +129,7 @@ func runServer(cfg *config.Config, dir string, r *repo.Repo, c *cache.Cache) {
 	})
 
 	// Start HTTP server
-	fmt.Println("Exokephalos listening on :8293")
+	fmt.Println("exokephalos listening on :8293")
 	log.Fatal(http.ListenAndServe(":8293", h.TimingMiddleware(h.CSRFMiddleware(mux))))
 }
 

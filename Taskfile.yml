@@ -55,9 +55,10 @@ tasks:
         echo "Created temporary EXO_DIR at $temp_dir"
         mkdir -p "$temp_dir/.exo"
         cp -r ./example-repo/.exo/* "$temp_dir/.exo/"
-        EXO_DIR="$temp_dir" ./exo import ./example-repo/books book
-        EXO_DIR="$temp_dir" ./exo import ./example-repo/zettelkasten note
-        EXO_DIR="$temp_dir" ./exo import ./example-repo/webhooks webhook
+        EXO_DIR="$temp_dir" ./exo import ./example-repo/book book
+        EXO_DIR="$temp_dir" ./exo import ./example-repo/note note
+        EXO_DIR="$temp_dir" ./exo import ./example-repo/webhook webhook
+        EXO_DIR="$temp_dir" ./exo import ./example-repo/secret secret
         EXO_DIR="$temp_dir" ./exo
 
   test:

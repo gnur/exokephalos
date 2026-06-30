@@ -1,0 +1,15 @@
+---
+added: 2014-01-30T00:00:00Z
+author:
+  - Terry Pratchett
+cover: https://m.media-amazon.com/images/S/compressed.photo.goodreads.com/books/1168566175i/34502.jpg
+finished: 2014-02-18T00:00:00Z
+pages: 288
+started: null
+tags:
+  - read
+title: 'Soul Music (Discworld, #16; Death, #3)'
+url: https://www.goodreads.com/book/show/34502
+---
+
+

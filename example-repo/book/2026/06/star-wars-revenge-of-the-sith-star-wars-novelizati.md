@@ -1,0 +1,15 @@
+---
+added: 2015-08-02T00:00:00Z
+author:
+  - Matthew Woodring Stover
+cover: https://m.media-amazon.com/images/S/compressed.photo.goodreads.com/books/1388228249i/35458.jpg
+finished: 2015-08-04T00:00:00Z
+pages: 418
+started: null
+tags:
+  - read
+title: 'Star Wars: Revenge of the Sith (Star Wars Novelizations, #3)'
+url: https://www.goodreads.com/book/show/35458
+---
+
+

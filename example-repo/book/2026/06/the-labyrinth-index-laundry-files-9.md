@@ -1,0 +1,15 @@
+---
+added: 2017-10-31T00:00:00Z
+author:
+  - Charles Stross
+cover: https://m.media-amazon.com/images/S/compressed.photo.goodreads.com/books/1507646317i/36053406.jpg
+finished: 2019-01-13T00:00:00Z
+pages: 384
+started: null
+tags:
+  - read
+title: 'The Labyrinth Index (Laundry Files, #9)'
+url: https://www.goodreads.com/book/show/36053406
+---
+
+

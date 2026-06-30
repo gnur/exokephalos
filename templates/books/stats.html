@@ -1,0 +1,72 @@
+{{define "content"}}
+<h1 class="text-2xl font-bold mb-4">Book Stats</h1>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+    <div class="bg-gray-800 p-4 rounded shadow-sm shadow-gray-900/50 text-center">
+        <div class="text-3xl font-bold text-blue-600">{{.TotalRead}}</div>
+        <div class="text-gray-500">Books Read</div>
+    </div>
+    <div class="bg-gray-800 p-4 rounded shadow-sm shadow-gray-900/50 text-center">
+        <div class="text-3xl font-bold text-green-600">{{.Reading}}</div>
+        <div class="text-gray-500">Currently Reading</div>
+    </div>
+    <div class="bg-gray-800 p-4 rounded shadow-sm shadow-gray-900/50 text-center">
+        <div class="text-3xl font-bold text-orange-600">{{.ToRead}}</div>
+        <div class="text-gray-500">To Read</div>
+    </div>
+</div>
+
+<!-- 1000 Books Calculator -->
+<div class="bg-gray-800 p-4 rounded shadow-sm shadow-gray-900/50 mb-8">
+    <h2 class="text-lg font-semibold mb-2">Road to 1000 Books</h2>
+    <div class="flex items-center gap-4">
+        <div class="flex-1 bg-gray-700 rounded-full h-4 overflow-hidden">
+            <div class="bg-blue-600 h-4 rounded-full" style="width: {{if gt .TotalRead 0}}{{printf "%.1f" (divf (mulf (tof .TotalRead) 100.0) 1000.0)}}%{{else}}0%{{end}}"></div>
+        </div>
+        <span class="text-sm font-medium text-gray-400">{{.TotalRead}} / 1000</span>
+    </div>
+    <p class="text-sm text-gray-500 mt-2">{{.BooksRemaining}} books remaining. Estimated: {{.YearsTo1000}}</p>
+</div>
+
+<!-- Graph -->
+<div class="bg-gray-800 p-4 rounded shadow-sm shadow-gray-900/50 mb-8">
+    <h2 class="text-xl font-semibold mb-3">Books & Pages per Year</h2>
+    <canvas id="booksChart" height="100"></canvas>
+</div>
+
+<h2 class="text-xl font-semibold mb-3">Books per Year</h2>
+<div class="bg-gray-800 rounded shadow-sm shadow-gray-900/50 overflow-hidden">
+    <table class="w-full">
+        <thead class="bg-gray-800/50">
+            <tr><th class="px-4 py-2 text-left">Year</th><th class="px-4 py-2 text-left">Books</th><th class="px-4 py-2 text-left">Pages</th></tr>
+        </thead>
+        <tbody>
+            {{range .YearCounts}}
+            <tr class="border-t"><td class="px-4 py-2">{{.Year}}</td><td class="px-4 py-2">{{.Count}}</td><td class="px-4 py-2">{{.Pages}}</td></tr>
+            {{end}}
+        </tbody>
+    </table>
+</div>
+
+<script src="/static/js/chart.min.js"></script>
+<script>
+const data = [{{range .YearCounts}}{year:"{{.Year}}",count:{{.Count}},pages:{{.Pages}}},{{end}}];
+data.reverse();
+new Chart(document.getElementById('booksChart'), {
+    type: 'bar',
+    data: {
+        labels: data.map(d => d.year),
+        datasets: [
+            {label: 'Books', data: data.map(d => d.count), backgroundColor: 'rgba(59,130,246,0.7)', yAxisID: 'y'},
+            {label: 'Pages', data: data.map(d => d.pages), backgroundColor: 'rgba(249,115,22,0.4)', yAxisID: 'y1', type: 'line', borderColor: 'rgba(249,115,22,0.8)', fill: true}
+        ]
+    },
+    options: {
+        responsive: true,
+        scales: {
+            y: {position: 'left', title: {display: true, text: 'Books'}},
+            y1: {position: 'right', title: {display: true, text: 'Pages'}, grid: {drawOnChartArea: false}}
+        }
+    }
+});
+</script>
+{{end}}

@@ -1,0 +1,13 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/exo ."
+  bin = "./tmp/exo"
+  full_bin = "EXO_DIR=./example-repo EXO_NAME=exo-test ./tmp/exo"
+  include_ext = ["go", "html"]
+  exclude_dir = ["tmp", "node_modules", "static/css", ".git"]
+  delay = 1000
+
+[misc]
+  clean_on_exit = true

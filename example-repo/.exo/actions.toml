@@ -1,0 +1,16 @@
+default_view = "notes"
+
+[actions.finish-book]
+filter = '"reading" in tags'
+expr = '.tags -= ["reading"] | .tags += ["read"] | .finished = now'
+description = "Mark book as finished reading"
+
+[actions.start-book]
+filter = '"to-read" in tags'
+expr = '.tags -= ["to-read"] | .tags += ["reading"] | .started = now'
+description = "Start reading this book"
+
+[actions.mark-done]
+filter = '"todo" in tags && !("done" in tags)'
+expr = '.tags += ["done"]'
+description = "Mark item as done"

@@ -1,0 +1,112 @@
+version: "3"
+
+tasks:
+  build:
+    desc: Build the CSS, download vendor JS, and compile Go binary
+    deps: [css, vendor-js]
+    cmds:
+      - go build -o exo .
+
+  css:
+    desc: Build Tailwind CSS
+    cmds:
+      - npm run build:css
+
+  vendor-js:
+    desc: Download/update vendored JS dependencies
+    cmds:
+      - mkdir -p static/js
+      - curl -sL "https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js" -o static/js/htmx.min.js
+      - curl -sL "https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js" -o static/js/chart.min.js
+    sources:
+      - Taskfile.yml
+    generates:
+      - static/js/htmx.min.js
+      - static/js/chart.min.js
+
+  css:watch:
+    desc: Watch and rebuild Tailwind CSS on changes
+    cmds:
+      - npm run watch:css
+
+  dev:
+    desc: Run auto-reloading dev environment
+    deps: [css, vendor-js]
+    cmds:
+      - task --parallel dev:server dev:css
+
+  dev:server:
+    desc: Run Go server with auto-reload on file changes
+    cmds:
+      - go run github.com/air-verse/air@latest
+
+  dev:css:
+    desc: Watch Tailwind CSS
+    cmds:
+      - npm run watch:css
+
+  run:
+    desc: Run the built binary
+    deps: [build]
+    env:
+      EXO_DIR: ./example-repo
+    cmds:
+      - ./exo
+
+  test:
+    desc: Run integration tests
+    cmds:
+      - go test -v -count=1 ./...
+
+  bench:
+    desc: Run performance benchmarks (2000 notes, concurrent queries + deletes)
+    cmds:
+      - go test -bench=Benchmark -benchtime=1000x -cpu=4 -v -run='^$' -count=1 -timeout=300s
+
+  bench:full:
+    desc: Run full benchmarks across CPU configurations
+    cmds:
+      - go test -bench=Benchmark -benchtime=1000x -cpu=1,2,4,8 -v -run='^$' -count=1 -timeout=600s
+
+  deploy:
+    desc: Deploy to both fedora and imp, and install locally
+    cmds:
+      - task: deploy-local
+      - task: deploy-fedora
+      - task: deploy-imp
+
+  deploy-local:
+    desc: Build native binary and install to ~/.local/bin/
+    deps: [css, vendor-js]
+    cmds:
+      - go build -o exo .
+      - mkdir -p ~/.local/bin
+      - mv exo ~/.local/bin/exo
+
+  deploy-fedora:
+    desc: Build linux/amd64 binary and deploy to fedora
+    deps: [css, vendor-js]
+    cmds:
+      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o exo .
+      - ssh fedora "mkdir -p ~/.local/bin ~/.config/systemd/user"
+      - ssh fedora "systemctl --user stop exo || true"
+      - scp exo fedora:/home/erwin/.local/bin/exo
+      - ssh fedora "chmod +x ~/.local/bin/exo"
+      - scp deploy/exo.service fedora:/home/erwin/.config/systemd/user/exo.service
+      - ssh fedora "systemctl --user daemon-reload && systemctl --user enable exo && systemctl --user start exo"
+      - ssh fedora "tailscale serve --service=svc:exo http://localhost:8293"
+      - rm exo
+
+  deploy-imp:
+    desc: Build linux/amd64 binary and deploy to imp
+    deps: [css, vendor-js]
+    cmds:
+      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o exo .
+      - ssh imp "mkdir -p ~/.local/bin ~/.config/systemd/user"
+      - ssh imp "systemctl --user stop exo || true"
+      - scp exo imp:/home/erwin/.local/bin/exo
+      - ssh imp "chmod +x ~/.local/bin/exo"
+      - scp deploy/exo.service imp:/home/erwin/.config/systemd/user/exo.service
+      - ssh imp "systemctl --user daemon-reload && systemctl --user enable exo && systemctl --user start exo"
+      - ssh imp "sudo tailscale serve --service=svc:exo http://localhost:8293"
+      - rm exo

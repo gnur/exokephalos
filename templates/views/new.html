@@ -1,0 +1,26 @@
+{{define "content"}}
+<div class="max-w-2xl mx-auto">
+    <a href="/views/{{.ViewID}}" class="text-blue-400 hover:underline text-sm">&larr; Back to {{.View.Name}}</a>
+    <h1 class="text-2xl font-bold mt-4 mb-6">New {{.View.Name}}</h1>
+
+    <form method="POST" action="/views/{{.ViewID}}/new" class="space-y-4">
+        {{range .FormVars}}
+        <div>
+            <label for="{{.}}" class="block text-sm font-medium text-gray-300 mb-1">{{.}}</label>
+            <input type="text" id="{{.}}" name="{{.}}"
+                   class="w-full border border-gray-600 bg-gray-800 text-gray-100 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                   placeholder="Enter {{.}}">
+        </div>
+        {{end}}
+
+        {{if not .FormVars}}
+        <p class="text-gray-400 text-sm">This template has no user-provided fields. All values are auto-generated.</p>
+        {{end}}
+
+        <div class="flex gap-2 pt-2">
+            <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded font-medium">Create</button>
+            <a href="/views/{{.ViewID}}" class="bg-gray-700 hover:bg-gray-600 text-gray-200 px-4 py-2 rounded font-medium">Cancel</a>
+        </div>
+    </form>
+</div>
+{{end}}

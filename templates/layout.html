@@ -1,0 +1,51 @@
+{{define "layout"}}<!DOCTYPE html>
+<html lang="en" class="dark overflow-x-hidden">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Exokephalos</title>
+    <link rel="stylesheet" href="/static/css/output.css">
+    <script src="/static/js/htmx.min.js"></script>
+</head>
+<body hx-boost="true" hx-target="#main-content" hx-swap="innerHTML" class="bg-gray-900 text-gray-100 min-h-screen overflow-x-hidden">
+    <nav class="bg-gray-950 text-white border-b border-gray-800">
+        <div class="max-w-7xl mx-auto px-4">
+            <div class="flex items-center justify-between h-14">
+                <a href="/" class="font-bold text-lg shrink-0">Exo</a>
+                <div class="flex items-center space-x-1 sm:space-x-4 flex-wrap">
+                    {{range .NavViews}}
+                    {{if .Config.StatsTemplate}}
+                    <div class="relative">
+                        <button onclick="this.nextElementSibling.classList.toggle('hidden')" class="hover:bg-gray-800 px-2 sm:px-3 py-2 rounded text-sm whitespace-nowrap">{{.Config.Name}}</button>
+                        <div class="absolute hidden bg-gray-950 border border-gray-800 rounded shadow-lg mt-0 right-0 z-10 min-w-32">
+                            <a href="/views/{{.ID}}" class="block px-4 py-2 hover:bg-gray-800 text-sm">List</a>
+                            <a href="/views/{{.ID}}/stats" hx-boost="false" class="block px-4 py-2 hover:bg-gray-800 text-sm">Stats</a>
+                        </div>
+                    </div>
+                    {{else}}
+                    <a href="/views/{{.ID}}" class="hover:bg-gray-800 px-2 sm:px-3 py-2 rounded text-sm whitespace-nowrap">{{.Config.Name}}</a>
+                    {{end}}
+                    {{end}}
+                </div>
+            </div>
+        </div>
+    </nav>
+    <main id="main-content">
+        <div class="max-w-7xl mx-auto px-4 py-6">
+            {{template "content" .}}
+        </div>
+    </main>
+    <footer id="footer-timing" class="border-t border-gray-800 mt-8 py-3 text-center text-xs text-gray-500">
+        Total: {{.FooterTotalTime}} | Parsing: {{.FooterParseTime}} | Host: {{.FooterHostname}}
+    </footer>
+</body>
+</html>{{end}}
+
+{{define "partial"}}
+<div class="max-w-7xl mx-auto px-4 py-6">
+    {{template "content" .}}
+</div>
+<footer id="footer-timing" hx-swap-oob="true" class="border-t border-gray-800 mt-8 py-3 text-center text-xs text-gray-500">
+    Total: {{.FooterTotalTime}} | Parsing: {{.FooterParseTime}} | Host: {{.FooterHostname}}
+</footer>
+{{end}}

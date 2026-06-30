@@ -1,0 +1,103 @@
+{{define "content"}}
+<div class="flex gap-6">
+    {{if .View.ShowTags}}
+    <!-- Tag sidebar -->
+    <aside class="hidden lg:block w-56 shrink-0">
+        <div class="sticky top-6">
+            <h3 class="text-sm font-semibold text-gray-400 mb-2">Tags</h3>
+            <div class="space-y-0.5">
+                {{$viewID := .ViewID}}
+                {{$activeTags := .ActiveTags}}
+                {{range .TagCounts}}
+                <a href="{{toggleViewTag $viewID $activeTags .Tag}}"
+                   class="flex items-center justify-between px-2 py-1 rounded text-sm hover:bg-gray-800 {{if contains $activeTags .Tag}}bg-blue-600 text-white{{else}}text-gray-300{{end}}">
+                    <span class="truncate">{{.Tag}}</span>
+                    <span class="text-xs text-gray-500 ml-1">{{.Count}}</span>
+                </a>
+                {{end}}
+            </div>
+        </div>
+    </aside>
+    {{end}}
+
+    <!-- Main content -->
+    <div class="flex-1 min-w-0">
+        <div class="flex items-center justify-between mb-4">
+            <div>
+                <h1 class="text-2xl font-bold">{{.View.Name}}</h1>
+                {{if gt (len .Subviews) 1}}
+                <div class="flex gap-2 mt-2">
+                    {{$viewID := .ViewID}}
+                    {{$active := .ActiveSubview}}
+                    {{range .Subviews}}
+                    <a href="/views/{{$viewID}}?subview={{.Name}}"
+                       class="px-3 py-1 rounded text-sm {{if eq .Name $active}}bg-blue-600 text-white{{else}}bg-gray-800 text-gray-300 hover:bg-gray-700{{end}}">
+                        {{.Name}}
+                    </a>
+                    {{end}}
+                </div>
+                {{end}}
+            </div>
+            <a href="/views/{{.ViewID}}/new" class="bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded text-sm font-medium">+ New</a>
+        </div>
+
+        {{if .ActiveTags}}
+        <div class="flex gap-2 mb-3 flex-wrap">
+            {{$viewID := .ViewID}}
+            {{$activeTags := .ActiveTags}}
+            {{range .ActiveTags}}
+            <a href="{{toggleViewTag $viewID $activeTags .}}" class="inline-flex items-center gap-1 bg-blue-800 text-blue-200 px-2 py-0.5 rounded text-xs">
+                {{.}} <span class="text-blue-400">&times;</span>
+            </a>
+            {{end}}
+        </div>
+        {{end}}
+
+        {{$view := .View}}
+        {{$viewID := .ViewID}}
+        {{range .YearGroups}}
+        <div class="mb-4">
+            <div class="flex items-center gap-3 mb-2 mt-4 first:mt-0">
+                <h2 class="text-sm font-semibold text-gray-400 shrink-0">{{.Year}}</h2>
+                <div class="h-px bg-gray-700 flex-1"></div>
+                <span class="text-xs text-gray-500 shrink-0">{{len .Items}}</span>
+            </div>
+            <div class="space-y-1">
+                {{range .Items}}
+                {{$itemID := itemID .}}
+                {{$actions := itemActions .}}
+                <a href="/views/{{$viewID}}/{{$itemID}}" class="block px-3 py-2 rounded hover:bg-gray-800 border border-transparent hover:border-gray-700 group">
+                    <div class="flex items-center justify-between">
+                        <span class="font-semibold truncate">{{itemTitle . $view.TitleField}}</span>
+                        <span class="text-xs text-gray-500 shrink-0 ml-2">{{itemFm . $view.SortField}}</span>
+                    </div>
+                    {{if $view.ShowTags}}
+                    <div class="flex gap-1 mt-1 flex-wrap">
+                        {{range itemTags .}}
+                        <span class="bg-gray-700 text-gray-300 px-1.5 py-0.5 rounded text-xs">{{.}}</span>
+                        {{end}}
+                    </div>
+                    {{else if $view.SubtitleField}}
+                    <div class="text-sm text-gray-400 mt-0.5 truncate">{{itemSubtitle . $view.SubtitleField}}</div>
+                    {{end}}
+                    {{if $actions}}
+                    <div class="flex gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        {{range $actions}}
+                        <form method="post" action="{{actionURL $viewID $itemID .Name}}" class="inline" onsubmit="return confirm('{{.Name}}: {{.Description}}?')">
+                            <button type="submit" class="bg-gray-600 hover:bg-blue-600 text-gray-200 px-2 py-0.5 rounded text-xs transition-colors">{{.Name}}</button>
+                        </form>
+                        {{end}}
+                    </div>
+                    {{end}}
+                </a>
+                {{end}}
+            </div>
+        </div>
+        {{end}}
+
+        {{if not .Items}}
+        <p class="text-gray-500 text-center py-8">No items found.</p>
+        {{end}}
+    </div>
+</div>
+{{end}}

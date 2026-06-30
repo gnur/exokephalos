@@ -1,0 +1,26 @@
+{{define "content"}}
+<h1 class="text-2xl font-bold mb-4">Import Book from Goodreads</h1>
+
+{{if .Error}}
+<div class="bg-red-900/50 border border-red-700 text-red-200 px-4 py-3 rounded mb-4">{{.Error}}</div>
+{{end}}
+
+{{if .Success}}
+<div class="bg-green-900/50 border border-green-700 text-green-200 px-4 py-3 rounded mb-4">
+    Successfully imported "{{.Success}}"!
+    <a href="/books/detail/{{.Slug}}" class="underline ml-2">View book</a>
+</div>
+{{end}}
+
+<form method="POST" action="/books/import" class="max-w-lg">
+    <label class="block text-sm font-medium text-gray-300 mb-2" for="url">Goodreads Book URL</label>
+    <input type="url" name="url" id="url" required
+        placeholder="https://www.goodreads.com/book/show/..."
+        class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500 mb-4"
+        value="{{.URL}}">
+    <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-2 rounded">
+        Import Book
+    </button>
+    <a href="/books/to-read" class="ml-3 text-gray-400 hover:text-gray-200">Cancel</a>
+</form>
+{{end}}

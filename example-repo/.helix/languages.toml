@@ -1,0 +1,8 @@
+[[language]]
+name = "markdown"
+language-servers = [ "exokephalos" ]
+
+[[language-server]]
+name = "exokephalos"
+command = "exo"
+args = ["lsp"]

@@ -1,0 +1,8 @@
+node_modules/
+exo
+static/css/output.css
+static/js/
+tmp/
+.zk/*
+notebook.db
+.exo/cache

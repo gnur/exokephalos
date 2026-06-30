@@ -1,0 +1,15 @@
+{{define "content"}}
+<div class="max-w-4xl mx-auto">
+    <a href="javascript:history.back()" class="text-blue-600 hover:underline text-sm">&larr; Back</a>
+    <h1 class="text-2xl font-bold mt-4 mb-4">{{.Title}}</h1>
+    <form method="POST" action="{{.PostURL}}" class="space-y-4">
+        <div>
+            <textarea name="content" rows="30" class="w-full border border-gray-600 bg-gray-800 text-gray-100 rounded px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">{{.Content}}</textarea>
+        </div>
+        <div class="flex gap-2">
+            <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded font-medium">Save</button>
+            <a href="javascript:history.back()" class="bg-gray-700 hover:bg-gray-600 text-gray-200 px-4 py-2 rounded font-medium">Cancel</a>
+        </div>
+    </form>
+</div>
+{{end}}

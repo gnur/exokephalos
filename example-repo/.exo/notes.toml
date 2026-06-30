@@ -1,0 +1,32 @@
+[views.notes]
+name = "Notes"
+key = "n"
+filter = 'type == "note" && !("read" in tags || "to-read" in tags || "reading" in tags || "stopped-reading" in tags)'
+show_tags = true
+title_field = "title"
+subtitle_field = ""
+sort_field = "created"
+sort_order = "desc"
+template = """
+---
+type: note
+tags: []
+id: {{.ID}}
+created: {{.Date}}
+title: "{{.Title}}"
+---
+
+# {{.Title}}
+"""
+
+[[views.notes.subviews]]
+name = "All"
+filter = "true"
+
+[[views.notes.subviews]]
+name = "Todo"
+filter = '"todo" in tags && !("done" in tags)'
+
+[[views.notes.subviews]]
+name = "Recipes"
+filter = '"recept" in tags'

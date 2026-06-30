@@ -1,0 +1,22 @@
+{{define "content"}}
+{{$itemActions := itemActions .Item}}
+<div class="max-w-4xl mx-auto">
+    <div class="flex items-center justify-between mb-4">
+        <a href="/views/{{.ViewID}}" class="text-blue-400 hover:underline text-sm">&larr; Back to {{.View.Name}}</a>
+        <div class="flex gap-2">
+            {{range $itemActions}}
+            <form method="post" action="{{actionURL $.ViewID $.ItemID .Name}}" class="inline" onsubmit="return confirm('{{.Name}}: {{.Description}}?')">
+                <button type="submit" class="bg-green-700 hover:bg-green-600 text-gray-200 px-3 py-1.5 rounded text-sm transition-colors">{{.Name}}</button>
+            </form>
+            {{end}}
+            <a href="/views/{{$.ViewID}}/edit/{{$.ItemID}}" class="bg-gray-700 hover:bg-gray-600 text-gray-200 px-3 py-1.5 rounded text-sm">Edit</a>
+        </div>
+    </div>
+
+    <h1 class="text-2xl font-bold mb-4">{{.Title}}</h1>
+
+    <div class="prose prose-invert max-w-none">
+        {{markdown .Body}}
+    </div>
+</div>
+{{end}}

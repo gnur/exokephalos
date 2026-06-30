@@ -1,0 +1,20 @@
+[views.webhooks]
+name = "Webhooks"
+key = "w"
+filter = 'type == "webhook" || type == "alert"'
+show_tags = false
+title_field = "source"
+subtitle_field = "type"
+sort_field = "timestamp"
+sort_order = "desc"
+template = """
+---
+source: "{{.Source}}"
+timestamp: {{.DateTime}}
+type: webhook
+---
+"""
+
+[[views.webhooks.subviews]]
+name = "All"
+filter = "true"

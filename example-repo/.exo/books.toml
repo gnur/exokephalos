@@ -1,0 +1,40 @@
+[views.books]
+name = "Books"
+key = "b"
+filter = '("read" in tags || "to-read" in tags || "reading" in tags || "stopped-reading" in tags)'
+show_tags = false
+title_field = "title"
+subtitle_field = "author"
+sort_field = "added"
+sort_order = "desc"
+template = """
+---
+type: book
+tags: [to-read]
+author: {{.Author}}
+title: "{{.Title}}"
+pages: {{.Pages}}
+cover: "{{.Cover}}"
+url: "{{.URL}}"
+added: {{.Date}}
+started:
+finished:
+---
+"""
+stats_template = "books/stats"
+
+[[views.books.subviews]]
+name = "All"
+filter = "true"
+
+[[views.books.subviews]]
+name = "To Read"
+filter = '"to-read" in tags'
+
+[[views.books.subviews]]
+name = "Reading"
+filter = '"reading" in tags'
+
+[[views.books.subviews]]
+name = "Read"
+filter = '"read" in tags'

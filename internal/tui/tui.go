@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"text/template"
@@ -1005,7 +1006,12 @@ func (m Model) editSelected() (tea.Model, tea.Cmd) {
 	if editor == "" {
 		editor = "vim"
 	}
-	c := exec.Command(editor, item.Path)
+	relPath, err := filepath.Rel(m.baseDir, item.Path)
+	if err != nil {
+		relPath = item.Path
+	}
+	c := exec.Command(editor, relPath)
+	c.Dir = m.baseDir
 	return m, tea.ExecProcess(c, func(err error) tea.Msg {
 		return refreshMsg{}
 	})

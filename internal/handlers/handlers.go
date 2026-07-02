@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -22,6 +23,8 @@ import (
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/yuin/goldmark"
 )
+
+var wikiLinkRegex = regexp.MustCompile(`\[\[\s*([a-zA-Z0-9]+)\s*\]\]`)
 
 type contextKey string
 
@@ -70,14 +73,6 @@ func New(cfg *config.Config, baseDir string, r *repo.Repo, c *cache.Cache, templ
 					}
 				}
 				return false
-			},
-			"markdown": func(s string) template.HTML {
-				var buf bytes.Buffer
-				if err := goldmark.Convert([]byte(s), &buf); err != nil {
-					return template.HTML(template.HTMLEscapeString(s))
-				}
-				sanitized := bluemonday.UGCPolicy().SanitizeBytes(buf.Bytes())
-				return template.HTML(sanitized)
 			},
 			"tof": func(i int) float64 { return float64(i) },
 			"mulf": func(a, b float64) float64 { return a * b },
@@ -237,6 +232,51 @@ func New(cfg *config.Config, baseDir string, r *repo.Repo, c *cache.Cache, templ
 	}
 	h.funcMap["actionURL"] = func(viewID, itemID, actionName string) string {
 		return fmt.Sprintf("/views/%s/items/%s/actions/%s", viewID, itemID, actionName)
+	}
+
+	h.funcMap["markdown"] = func(s string) template.HTML {
+		s = wikiLinkRegex.ReplaceAllStringFunc(s, func(match string) string {
+			submatches := wikiLinkRegex.FindStringSubmatch(match)
+			if len(submatches) < 2 {
+				return match
+			}
+			idVal := strings.ToLower(submatches[1])
+			item, err := h.Cache.GetByID(idVal)
+			if err != nil {
+				return match
+			}
+
+			viewID := item.Type + "s"
+			if _, ok := h.Cfg.Views[viewID]; !ok {
+				for k := range h.Cfg.Views {
+					if strings.Contains(k, item.Type) {
+						viewID = k
+						break
+					}
+				}
+			}
+			if _, ok := h.Cfg.Views[viewID]; !ok {
+				if h.Cfg.DefaultView != "" {
+					viewID = h.Cfg.DefaultView
+				} else {
+					viewID = "notes"
+				}
+			}
+
+			viewCfg := h.Cfg.Views[viewID]
+			title := item.Title(viewCfg.TitleField)
+			if title == "" {
+				title = submatches[1]
+			}
+			return fmt.Sprintf("[%s](/views/%s/%s)", title, viewID, idVal)
+		})
+
+		var buf bytes.Buffer
+		if err := goldmark.Convert([]byte(s), &buf); err != nil {
+			return template.HTML(template.HTMLEscapeString(s))
+		}
+		sanitized := bluemonday.UGCPolicy().SanitizeBytes(buf.Bytes())
+		return template.HTML(sanitized)
 	}
 
 	// Verify template FS has the layout file

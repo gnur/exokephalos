@@ -578,6 +578,92 @@ func TestImportCLI(t *testing.T) {
 		t.Error("expected imported file to be written to exoDir")
 	}
 }
+func TestWikiLinks(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "exo-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Copy example-repo config
+	cmd := exec.Command("cp", "-a", "./example-repo/.", tmpDir)
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write our custom test files to tmpDir before Cache/Handlers initialization
+	noteADir := filepath.Join(tmpDir, "note", "2026", "06")
+	if err := os.MkdirAll(noteADir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Note A (the target)
+	noteAPath := filepath.Join(noteADir, "itema.md")
+	noteAContent := `---
+id: itema
+type: note
+title: "Linked Note A"
+created: 2026-06-30
+tags: []
+---
+Body A`
+	if err := os.WriteFile(noteAPath, []byte(noteAContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Note B (the linker)
+	noteBPath := filepath.Join(noteADir, "itemb.md")
+	noteBContent := `---
+id: itemb
+type: note
+title: "Note B"
+created: 2026-06-30
+tags: []
+---
+This is a link to [[itema]] and a broken link to [[nonexistent]].`
+	if err := os.WriteFile(noteBPath, []byte(noteBContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.Load(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := cache.New(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	r := repo.New(tmpDir, c)
+	h, err := handlers.New(cfg, tmpDir, r, c, os.DirFS("."))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /views/{viewId}/{itemId}", h.ViewDetail)
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/views/notes/itemb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	html := string(body)
+
+	// Assert linked item A is rendered correctly as an HTML link with title
+	assertContains(t, html, `<a href="/views/notes/itema" rel="nofollow">Linked Note A</a>`)
+	// Assert broken link remains unrendered / kept as [[nonexistent]]
+	assertContains(t, html, `[[nonexistent]]`)
+}
+
 
 func assertContains(t *testing.T, body, substr string) {
 	t.Helper()

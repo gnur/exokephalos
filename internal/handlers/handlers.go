@@ -20,6 +20,7 @@ import (
 	"github.com/gnur/exokephalos/internal/filter"
 	"github.com/gnur/exokephalos/internal/repo"
 	"github.com/gnur/exokephalos/internal/scanner"
+	"github.com/gnur/exokephalos/internal/version"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/yuin/goldmark"
 )
@@ -439,6 +440,7 @@ func (h *Handlers) render(w http.ResponseWriter, r *http.Request, name string, d
 	data["FooterTotalTime"] = fmt.Sprintf("%.2fms", float64(totalTime.Microseconds())/1000)
 	data["FooterParseTime"] = fmt.Sprintf("%.2fms", float64(parseTime.Microseconds())/1000)
 	data["FooterHostname"] = h.hostname
+	data["FooterVersion"] = version.String()
 
 	// Inject nav data for layout
 	data["NavViews"] = h.Cfg.OrderedViews()

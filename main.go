@@ -17,6 +17,7 @@ import (
 	"github.com/gnur/exokephalos/internal/lsp"
 	"github.com/gnur/exokephalos/internal/repo"
 	"github.com/gnur/exokephalos/internal/tui"
+	"github.com/gnur/exokephalos/internal/version"
 	"strings"
 )
 
@@ -30,6 +31,11 @@ func main() {
 	dir := os.Getenv("EXO_DIR")
 	if dir == "" {
 		dir = "./example-repo"
+	}
+
+	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version") {
+		fmt.Println(version.String())
+		return
 	}
 
 	if len(os.Args) > 1 && os.Args[1] == "helix-init" {

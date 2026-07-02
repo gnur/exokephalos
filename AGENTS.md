@@ -73,6 +73,14 @@ When receiving a feature request, always ask whether it applies to:
 - Use `task dev:serve` to spin up a sandboxed Web UI environment with imported example files.
 - Use `task test` to run all package integration tests.
 
+## Version
+
+- Version is set at build time via `-ldflags` in `internal/version/`.
+- The version string is `git describe --tags --always --dirty` output (or `dev` fallback).
+- Build time is injected as an RFC 3339 UTC timestamp.
+- Displayed via `exo version` / `exo --version` and in the web UI footer.
+- Add `-ldflags="{{.LDFLAGS}}"` to any new `go build` commands in `Taskfile.yml`.
+
 ## Build
 
 ```bash

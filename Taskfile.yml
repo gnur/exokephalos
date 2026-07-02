@@ -1,11 +1,18 @@
 version: "3"
 
+vars:
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo "dev"
+  BUILD_TIME:
+    sh: date -u +"%Y-%m-%dT%H:%M:%SZ"
+  LDFLAGS: '-s -w -X github.com/gnur/exokephalos/internal/version.Version={{.VERSION}} -X github.com/gnur/exokephalos/internal/version.BuildTime={{.BUILD_TIME}}'
+
 tasks:
   build:
     desc: Build the CSS, download vendor JS, and compile Go binary
     deps: [css, vendor-js]
     cmds:
-      - go build -o exo .
+      - go build -ldflags="{{.LDFLAGS}}" -o exo .
 
   css:
     desc: Build Tailwind CSS
@@ -116,7 +123,7 @@ tasks:
     desc: Build native binary and install to ~/.local/bin/
     deps: [css, vendor-js]
     cmds:
-      - go build -o exo .
+      - go build -ldflags="{{.LDFLAGS}}" -o exo .
       - mkdir -p ~/.local/bin
       - mv exo ~/.local/bin/exo
 
@@ -124,7 +131,7 @@ tasks:
     desc: Build linux/amd64 binary and deploy to fedora
     deps: [css, vendor-js]
     cmds:
-      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o exo .
+      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="{{.LDFLAGS}}" -o exo .
       - ssh fedora "mkdir -p ~/.local/bin ~/.config/systemd/user"
       - ssh fedora "systemctl --user stop exo || true"
       - scp exo fedora:/home/erwin/.local/bin/exo
@@ -138,7 +145,7 @@ tasks:
     desc: Build linux/amd64 binary and deploy to imp
     deps: [css, vendor-js]
     cmds:
-      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o exo .
+      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="{{.LDFLAGS}}" -o exo .
       - ssh imp "mkdir -p ~/.local/bin ~/.config/systemd/user"
       - ssh imp "systemctl --user stop exo || true"
       - scp exo imp:/home/erwin/.local/bin/exo

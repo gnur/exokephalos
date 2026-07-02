@@ -45,7 +45,7 @@
         </div>
     </main>
     <footer id="footer-timing" class="border-t border-gray-800 mt-8 py-3 text-center text-xs text-gray-500">
-        Total: {{.FooterTotalTime}} | Parsing: {{.FooterParseTime}} | Host: {{.FooterHostname}}
+        {{.FooterVersion}} | Total: {{.FooterTotalTime}} | Parsing: {{.FooterParseTime}} | Host: {{.FooterHostname}}
     </footer>
 </body>
 </html>{{end}}
@@ -55,6 +55,6 @@
     {{template "content" .}}
 </div>
 <footer id="footer-timing" hx-swap-oob="true" class="border-t border-gray-800 mt-8 py-3 text-center text-xs text-gray-500">
-    Total: {{.FooterTotalTime}} | Parsing: {{.FooterParseTime}} | Host: {{.FooterHostname}}
+    {{.FooterVersion}} | Total: {{.FooterTotalTime}} | Parsing: {{.FooterParseTime}} | Host: {{.FooterHostname}}
 </footer>
 {{end}}

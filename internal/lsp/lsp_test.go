@@ -484,3 +484,148 @@ func TestRemoveTagFromLine(t *testing.T) {
 		})
 	}
 }
+
+func TestGetSemanticTokens(t *testing.T) {
+	tests := []struct {
+		name     string
+		text     string
+		checkFn  func([]uint32) bool
+	}{
+		{
+			name: "wikilink decorator token",
+			text: "See [[abc123]] here",
+			checkFn: func(tokens []uint32) bool {
+				if len(tokens) < 5 {
+					return false
+				}
+				deltaLine := tokens[0]
+				deltaChar := tokens[1]
+				length := tokens[2]
+				tokenType := tokens[3]
+				return deltaLine == 0 && deltaChar == 4 && length == 10 && tokenType == 0
+			},
+		},
+		{
+			name: "body tag keyword token",
+			text: "---\ntags: []\n---\n\nSee :mytag: here",
+			checkFn: func(tokens []uint32) bool {
+				if len(tokens) < 5 {
+					return false
+				}
+				tokenType := tokens[3]
+				return tokenType == 1
+			},
+		},
+		{
+			name: "no frontmatter tags in body",
+			text: "---\ntags: [test]\n---\n\nNo tags here",
+			checkFn: func(tokens []uint32) bool {
+				return len(tokens) == 0
+			},
+		},
+		{
+			name: "multiple wikilinks",
+			text: "[[a]] and [[b]]",
+			checkFn: func(tokens []uint32) bool {
+				return len(tokens) >= 10
+			},
+		},
+		{
+			name: "empty document",
+			text: "",
+			checkFn: func(tokens []uint32) bool {
+				return len(tokens) == 0
+			},
+		},
+		{
+			name: "hash tag keyword token",
+			text: "---\ntags: []\n---\n\nSee #mytag here",
+			checkFn: func(tokens []uint32) bool {
+				if len(tokens) < 5 {
+					return false
+				}
+				// First token should be hash tag at line 4 (delta=4), char 4, length 6 ("#mytag")
+				deltaLine := tokens[0]
+				deltaChar := tokens[1]
+				length := tokens[2]
+				tokenType := tokens[3]
+				return deltaLine == 4 && deltaChar == 4 && length == 6 && tokenType == 1
+			},
+		},
+		{
+			name: "mixed colon and hash tags",
+			text: "---\ntags: []\n---\n\n:colon: and #hash",
+			checkFn: func(tokens []uint32) bool {
+				// Should have at least 2 tokens (both tags)
+				return len(tokens) >= 10
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokens := GetSemanticTokens(tt.text)
+			if !tt.checkFn(tokens) {
+				t.Errorf("token validation failed for %q, got %v", tt.name, tokens)
+			}
+		})
+	}
+}
+
+func TestDetectHashTagContext(t *testing.T) {
+	tests := []struct {
+		name        string
+		prefix      string
+		expectedCtx CompletionContext
+		expectedPfx string
+	}{
+		{
+			name:        "hash tag at start",
+			prefix:      "#my",
+			expectedCtx: CompletionContextBodyTag,
+			expectedPfx: "my",
+		},
+		{
+			name:        "hash tag with space before",
+			prefix:      "text #my",
+			expectedCtx: CompletionContextBodyTag,
+			expectedPfx: "my",
+		},
+		{
+			name:        "hash in word (not tag)",
+			prefix:      "ab#cd",
+			expectedCtx: CompletionContextNone,
+			expectedPfx: "",
+		},
+		{
+			name:        "hash in heading (not tag)",
+			prefix:      "# Heading",
+			expectedCtx: CompletionContextNone,
+			expectedPfx: "",
+		},
+		{
+			name:        "hash after punctuation",
+			prefix:      "text(#tag",
+			expectedCtx: CompletionContextBodyTag,
+			expectedPfx: "tag",
+		},
+		{
+			name:        "no hash",
+			prefix:      "regular text",
+			expectedCtx: CompletionContextNone,
+			expectedPfx: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, pfx := detectHashTagContext(tt.prefix)
+			if ctx != tt.expectedCtx {
+				t.Errorf("expected context %v, got %v", tt.expectedCtx, ctx)
+			}
+			if pfx != tt.expectedPfx {
+				t.Errorf("expected prefix %q, got %q", tt.expectedPfx, pfx)
+			}
+		})
+	}
+}

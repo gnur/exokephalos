@@ -146,15 +146,31 @@ func runHelixInit(dir string) {
 		os.Exit(1)
 	}
 
+	// Get the absolute path to the exo binary and directory
+	exePath, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error determining executable path: %v\n", err)
+		os.Exit(1)
+	}
+
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error determining absolute directory path: %v\n", err)
+		os.Exit(1)
+	}
+
 	configPath := filepath.Join(helixDir, "languages.toml")
-	configContent := `[[language]]
+	configContent := fmt.Sprintf(`[[language]]
 name = "markdown"
 language-servers = ["exokephalos"]
 
 [language-server.exokephalos]
-command = "exo"
+command = "%s"
 args = ["lsp"]
-`
+
+[language-server.exokephalos.environment]
+EXO_DIR = "%s"
+`, exePath, absDir)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing languages.toml: %v\n", err)
@@ -162,7 +178,7 @@ args = ["lsp"]
 	}
 
 	fmt.Printf("Created %s\n", configPath)
-	fmt.Println("Helix will now use exo lsp for markdown files in this directory.")
+	fmt.Printf("Helix will now use %s lsp for markdown files in %s\n", exePath, absDir)
 }
 
 func runImport(exoDir string) {

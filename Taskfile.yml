@@ -46,7 +46,7 @@ tasks:
       - npm run watch:css
 
   dev:tui:
-    desc: Create a temp dir, import all example-repo types, and launch TUI
+    desc: Create a temp dir, import all example-repo types, set up Helix LSP, and launch TUI
     deps: [build]
     cmds:
       - |
@@ -60,6 +60,7 @@ tasks:
         EXO_DIR="$temp_dir" ./exo import ./example-repo/webhook webhook
         EXO_DIR="$temp_dir" ./exo import ./example-repo/secret secret
         EXO_DIR="$temp_dir" ./exo import ./example-repo/docs doc
+        EXO_DIR="$temp_dir" ./exo helix-init
         EXO_DIR="$temp_dir" ./exo
 
   dev:serve:

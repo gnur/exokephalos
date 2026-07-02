@@ -48,6 +48,8 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 	changeKind := protocol.TextDocumentSyncKindFull
 	version := "1.0.0"
 	resolveSupport := true
+	prepareProvider := true
+	fullTokens := true
 	return &protocol.InitializeResult{
 		Capabilities: protocol.ServerCapabilities{
 			TextDocumentSync: &protocol.TextDocumentSyncOptions{
@@ -56,7 +58,7 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 				Save:      &protocol.SaveOptions{IncludeText: &includeText},
 			},
 			CompletionProvider: &protocol.CompletionOptions{
-				TriggerCharacters: []string{"[", ":", "-"},
+				TriggerCharacters: []string{"[", ":", "-", "#"},
 			},
 			HoverProvider:      true,
 			DefinitionProvider: true,
@@ -64,6 +66,14 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 				ResolveProvider: &resolveSupport,
 			},
 			InlayHintProvider: true,
+			SemanticTokensProvider: &protocol.SemanticTokensOptions{
+				Legend: SemanticTokenLegend,
+				Full:   fullTokens,
+			},
+			ReferencesProvider: true,
+			RenameProvider: &protocol.RenameOptions{
+				PrepareProvider: &prepareProvider,
+			},
 		},
 		ServerInfo: &protocol.ServerInfo{
 			Name:    "exokephalos-lsp",
@@ -88,6 +98,7 @@ func (s *Server) DidOpen(ctx context.Context, params *protocol.DidOpenTextDocume
 	s.mu.Lock()
 	s.documents[params.TextDocument.URI] = params.TextDocument.Text
 	s.mu.Unlock()
+	s.publishDiagnostics(params.TextDocument.URI, params.TextDocument.Text)
 	return nil
 }
 
@@ -98,6 +109,7 @@ func (s *Server) DidChange(ctx context.Context, params *protocol.DidChangeTextDo
 				s.mu.Lock()
 				s.documents[params.TextDocument.URI] = text
 				s.mu.Unlock()
+				s.publishDiagnostics(params.TextDocument.URI, text)
 			}
 		}
 	}
@@ -108,6 +120,7 @@ func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 	s.mu.Lock()
 	delete(s.documents, params.TextDocument.URI)
 	s.mu.Unlock()
+	s.publishDiagnostics(params.TextDocument.URI, "")
 	return nil
 }
 
@@ -116,6 +129,7 @@ func (s *Server) DidSave(ctx context.Context, params *protocol.DidSaveTextDocume
 		s.mu.Lock()
 		s.documents[params.TextDocument.URI] = *params.Text
 		s.mu.Unlock()
+		s.publishDiagnostics(params.TextDocument.URI, *params.Text)
 	}
 	return nil
 }
@@ -318,7 +332,14 @@ func (s *Server) PrepareCallHierarchy(ctx context.Context, params *protocol.Call
 }
 
 func (s *Server) PrepareRename(ctx context.Context, params *protocol.PrepareRenameParams) (*protocol.PrepareRenameResult, error) {
-	return nil, nil
+	s.mu.RLock()
+	text, ok := s.documents[params.TextDocument.URI]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, nil
+	}
+
+	return PrepareRename(ctx, s.cache, text, int(params.Position.Line), int(params.Position.Character))
 }
 
 func (s *Server) PrepareTypeHierarchy(ctx context.Context, params *protocol.TypeHierarchyPrepareParams) ([]protocol.TypeHierarchyItem, error) {
@@ -330,11 +351,25 @@ func (s *Server) RangeFormatting(ctx context.Context, params *protocol.DocumentR
 }
 
 func (s *Server) References(ctx context.Context, params *protocol.ReferenceParams) ([]protocol.Location, error) {
-	return nil, nil
+	s.mu.RLock()
+	text, ok := s.documents[params.TextDocument.URI]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, nil
+	}
+
+	return GetReferences(ctx, s.cache, text, int(params.Position.Line), int(params.Position.Character))
 }
 
 func (s *Server) Rename(ctx context.Context, params *protocol.RenameParams) (*protocol.WorkspaceEdit, error) {
-	return nil, nil
+	s.mu.RLock()
+	text, ok := s.documents[params.TextDocument.URI]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, nil
+	}
+
+	return ReworkEdits(ctx, s.cache, text, int(params.Position.Line), int(params.Position.Character), params.NewName)
 }
 
 func (s *Server) SelectionRange(ctx context.Context, params *protocol.SelectionRangeParams) ([]protocol.SelectionRange, error) {
@@ -342,7 +377,15 @@ func (s *Server) SelectionRange(ctx context.Context, params *protocol.SelectionR
 }
 
 func (s *Server) SemanticTokensFull(ctx context.Context, params *protocol.SemanticTokensParams) (*protocol.SemanticTokens, error) {
-	return nil, nil
+	s.mu.RLock()
+	text, ok := s.documents[params.TextDocument.URI]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, nil
+	}
+
+	tokens := GetSemanticTokens(text)
+	return &protocol.SemanticTokens{Data: tokens}, nil
 }
 
 func (s *Server) SemanticTokensFullDelta(ctx context.Context, params *protocol.SemanticTokensDeltaParams) (any, error) {

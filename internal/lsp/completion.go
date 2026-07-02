@@ -44,6 +44,10 @@ func DetectCompletionContext(text string, line, char int) (CompletionContext, st
 		return ctx, p
 	}
 
+	if ctx, p := detectHashTagContext(prefix); ctx != CompletionContextNone {
+		return ctx, p
+	}
+
 	return CompletionContextNone, ""
 }
 
@@ -126,6 +130,27 @@ func detectBodyTagContext(prefix string) (CompletionContext, string) {
 				return CompletionContextNone, ""
 			}
 		}
+	}
+
+	return CompletionContextBodyTag, tagPrefix
+}
+
+func detectHashTagContext(prefix string) (CompletionContext, string) {
+	hashIdx := strings.LastIndex(prefix, "#")
+	if hashIdx == -1 {
+		return CompletionContextNone, ""
+	}
+
+	if hashIdx > 0 {
+		prevChar := prefix[hashIdx-1]
+		if (prevChar >= 'a' && prevChar <= 'z') || (prevChar >= 'A' && prevChar <= 'Z') || (prevChar >= '0' && prevChar <= '9') {
+			return CompletionContextNone, ""
+		}
+	}
+
+	tagPrefix := prefix[hashIdx+1:]
+	if strings.Contains(tagPrefix, " ") || strings.Contains(tagPrefix, "\n") {
+		return CompletionContextNone, ""
 	}
 
 	return CompletionContextBodyTag, tagPrefix

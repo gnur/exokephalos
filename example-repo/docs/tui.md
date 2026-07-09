@@ -7,8 +7,10 @@ exo features an interactive terminal user interface built on Bubble Tea, providi
 To start the TUI mode, run the `exo` command with no arguments:
 
 ```bash
-exo
+EXO_DIR=/path/to/your/notes exo
 ```
+
+`EXO_DIR` must point at the data directory containing `.exo/*.toml` or `.exo.toml`. If it is not set, exo uses `./example-repo`.
 
 ## Keybindings
 

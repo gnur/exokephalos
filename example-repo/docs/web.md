@@ -7,11 +7,13 @@ exokephalos includes a beautiful, premium, responsive web interface utilizing HT
 To spin up the web interface, run the server subcommand:
 
 ```bash
-exo serve
+EXO_DIR=/path/to/your/notes exo serve
 ```
 
 By default, the server listens locally at:
 `http://localhost:8293`
+
+`EXO_DIR` must point at the data directory containing `.exo/*.toml` or `.exo.toml`. If it is not set, exo uses `./example-repo`.
 
 ## Features
 

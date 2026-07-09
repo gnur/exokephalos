@@ -7,6 +7,8 @@ It offers three distinct interfaces:
 2. **Web UI**: A modern, responsive web server powered by HTMX (`exo serve`).
 3. **LSP Server**: A Language Server Protocol server that provides auto-completions, hover previews, and wiki-link go-to-definition in text editors (`exo lsp`).
 
+Start with the Quickstart doc to create a data directory, set `EXO_DIR`, and add the first `.exo/` configuration file.
+
 ---
 
 ## Fully Configurable Types
@@ -30,7 +32,7 @@ Because there is no fixed database schema, you can introduce any arbitrary type 
 
 ## Common Expression Language (CEL) Views
 
-Views define the collections displayed in both the TUI and Web interfaces. Views are configured via `.toml` files in your `.exo/` configuration directory. 
+Views define the collections displayed in both the TUI and Web interfaces. Views are configured via `.toml` files in your `.exo/` configuration directory, or in a single `.exo.toml` file at the root of `EXO_DIR`.
 
 Each view compiles a [Google CEL (Common Expression Language)](https://github.com/google/cel-go) filter expression to select matching markdown files from the repository.
 

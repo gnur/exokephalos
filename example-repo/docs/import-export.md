@@ -4,18 +4,18 @@ exokephalos provides subcommands to import raw markdown files into the repositor
 
 ## Import Command
 
-The `import` command reads raw markdown files from a source directory, parses their frontmatter, normalizes them, and moves them to the structured exokephalos directory layout.
+The `import` command reads raw markdown files from a source directory, parses their frontmatter, normalizes them, and writes them to the structured exokephalos directory layout.
 
 ### Usage
 
 ```bash
-exo import <source-directory> <type>
+EXO_DIR=/path/to/your/notes exo import <source-directory> <type>
 ```
 
 For example, to import a directory of raw notes as the `note` type:
 
 ```bash
-exo import ~/Desktop/my-old-notes note
+EXO_DIR=/path/to/your/notes exo import ~/Desktop/my-old-notes note
 ```
 
 ### What Happens During Import?
@@ -35,19 +35,19 @@ The `export` command copies files from your exokephalos repository into a target
 ### Usage
 
 ```bash
-exo export <output-directory> [--type <type>]
+EXO_DIR=/path/to/your/notes exo export <output-directory> [--type <type>]
 ```
 
 For example, to export all items in the repository:
 
 ```bash
-exo export ~/Desktop/my-exported-workspace
+EXO_DIR=/path/to/your/notes exo export ~/Desktop/my-exported-workspace
 ```
 
 To export only `note` type items:
 
 ```bash
-exo export ~/Desktop/my-exported-notes --type note
+EXO_DIR=/path/to/your/notes exo export ~/Desktop/my-exported-notes --type note
 ```
 
 ### What Happens During Export?

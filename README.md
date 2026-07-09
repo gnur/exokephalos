@@ -15,6 +15,91 @@ A self-hosted, file-based personal knowledge management and life-tracking applic
 - **Dual interface** — Full-featured TUI (default) and web interface (`exo serve`)
 - **LSP server** — Language Server Protocol support for editors (`exo lsp`)
 
+## Quickstart
+
+This assumes you already have the `exo` binary available. exo stores all data in a directory you choose and reads configuration from that directory.
+
+### 1. Create a data directory
+
+```bash
+mkdir -p ~/notes/.exo
+export EXO_DIR=~/notes
+```
+
+`EXO_DIR` is the only required environment variable. It points at your exo data directory. If it is not set, exo uses `./example-repo`.
+
+### 2. Add a minimal config file
+
+Create `~/notes/.exo/notes.toml`:
+
+```toml
+default_view = "notes"
+
+[views.notes]
+name = "Notes"
+key = "n"
+filter = 'type == "note"'
+show_tags = true
+title_field = "title"
+sort_field = "created"
+sort_order = "desc"
+template = """
+---
+type: note
+tags: []
+id: {{.ID}}
+created: {{.Date}}
+title: "{{.Title}}"
+---
+
+# {{.Title}}
+"""
+```
+
+The config can live in either `.exo/*.toml` files or a single `.exo.toml` file at the root of `EXO_DIR`. The `.exo/` directory style is recommended because it lets you split views and actions into separate files.
+
+Each view needs:
+
+| Field | Purpose |
+|-------|---------|
+| `name` | Display name in the TUI and web UI |
+| `key` | Unique ordering/navigation key for the view |
+| `filter` | CEL expression selecting matching markdown files |
+| `template` | Go template used when creating a new item |
+
+Optional fields such as `show_tags`, `title_field`, `subtitle_field`, `sort_field`, `sort_order`, `preview_template`, `stats_template`, and `subviews` control display and filtering behavior.
+
+### 3. Add your first note
+
+You can create notes from the TUI, or add a markdown file manually:
+
+```bash
+mkdir -p ~/notes/notes
+cat > ~/notes/notes/first-note.md <<'EOF'
+---
+type: note
+tags: []
+id: first01
+created: 2026-07-09
+title: "First note"
+---
+
+# First note
+
+Hello from exo.
+EOF
+```
+
+Every item is a markdown file with YAML frontmatter. The `type` field determines which view can see it; the example view above shows items where `type == "note"`.
+
+### 4. Run exo
+
+```bash
+EXO_DIR=~/notes exo        # TUI
+EXO_DIR=~/notes exo serve  # Web UI on :8293
+EXO_DIR=~/notes exo lsp    # LSP server on stdio
+```
+
 ## Configuration
 
 All views are defined in `.exo/` configuration files (or a single `.exo.toml` file) at the root of your data directory (`EXO_DIR`). The app scans all `.md` files recursively and filters them by frontmatter using [CEL expressions](https://github.com/google/cel-go).
@@ -32,7 +117,6 @@ show_tags = true
 title_field = "title"
 sort_field = "created"
 sort_order = "desc"
-path_template = "notes/{{.ID}}-{{.Slug}}.md"
 template = """
 ---
 type: note
@@ -59,7 +143,6 @@ show_tags = true
 title_field = "title"
 sort_field = "created"
 sort_order = "desc"
-path_template = "zettelkasten/{{.ID}}-{{.Slug}}.md"
 template = """
 ---
 type: note
@@ -89,7 +172,6 @@ title_field = "title"
 subtitle_field = "author"
 sort_field = "added"
 sort_order = "desc"
-path_template = "books/{{.Slug}}.md"
 stats_template = "books/stats"
 template = """
 ---
@@ -378,7 +460,7 @@ Helix: Run `exo helix-init` to automatically create `.helix/languages.toml` with
 - Go `html/template` for web rendering
 - Flat-file markdown storage (git-friendly)
 
-## Getting Started
+## Build And Run
 
 ### Prerequisites
 
@@ -386,7 +468,7 @@ Helix: Run `exo helix-init` to automatically create `.helix/languages.toml` with
 - Node.js (for Tailwind CSS)
 - [Task](https://taskfile.dev) (optional, for convenience commands)
 
-### Running
+See [Quickstart](#quickstart) for the required `EXO_DIR` setup and minimal config.
 
 ```bash
 # Install CSS dependencies
@@ -400,6 +482,7 @@ EXO_DIR=/path/to/your/notes ./exo
 
 # Run web server
 EXO_DIR=/path/to/your/notes ./exo serve
+```
 
 ### CLI Subcommands
 
@@ -422,7 +505,6 @@ EXO_DIR=/path/to/your/notes ./exo export /path/to/output/dir
 
 # Export a specific item type only
 EXO_DIR=/path/to/your/notes ./exo export /path/to/output/dir --type book
-```
 ```
 
 ### Development

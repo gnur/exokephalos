@@ -182,11 +182,11 @@ tags: []
 
 #### `[actions.<name>]`
 
-Actions are user-triggered transformations that modify an item's frontmatter on disk. The `filter` field uses CEL to determine which items the action applies to, and `expr` uses [yq](https://github.com/mikefarah/yq) syntax to describe the transformation.
+Actions are user-triggered transformations that modify an item's frontmatter on disk. The optional `filter` field uses CEL to determine which items the action applies to, and `expr` uses [yq](https://github.com/mikefarah/yq) syntax to describe the transformation.
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `filter` | yes | CEL expression — item must match for the action to appear |
+| `filter` | no | CEL expression — item must match for the action to be enabled; omitted means always enabled |
 | `expr` | yes | yq expression describing the frontmatter mutation |
 | `description` | yes | Human-readable label shown in the UI |
 
@@ -252,8 +252,12 @@ Run `exo` to launch the terminal UI. Keybindings:
 | `space` | Toggle tag selection (tags pane) |
 | `/` | Search (filters by title) |
 | `esc` | Clear search / close popup |
-| `a` | Open actions popup — press the first letter of an action name to execute (e.g. `f` for finish-book, `i` for Goodreads import) |
+| `:` | Open fuzzy action picker |
 | `q` | Quit |
+
+The action picker includes configured actions plus built-ins like Goodreads import and Hardcover search. Actions whose CEL filter does not match are grayed out; selecting one shows the required CEL expression.
+
+An `All` view is always available with key `0`; it shows every item regardless of type.
 
 ### Web Interface
 

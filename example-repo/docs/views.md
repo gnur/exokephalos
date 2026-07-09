@@ -2,6 +2,8 @@
 
 Views are custom collections that define how different markdown files in your repository are queried, displayed, and filtered.
 
+exo also adds a built-in `All` view with key `0`. This view uses the filter `true`, so it shows every item regardless of type in both the TUI and web interface at `/views/all`.
+
 ## Configuring Views
 
 Views are configured in your `.exo.toml` file under `[views.<view_id>]`.

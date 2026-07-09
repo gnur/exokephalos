@@ -3,6 +3,7 @@ package action
 import (
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/gnur/exokephalos/internal/config"
 	"github.com/gnur/exokephalos/internal/filter"
@@ -20,9 +21,13 @@ type Action struct {
 }
 
 func Compile(name string, cfg config.ActionConfig) (*Action, error) {
-	prog, err := filter.Compile(cfg.Filter)
-	if err != nil {
-		return nil, fmt.Errorf("action %q: compiling filter: %w", name, err)
+	var prog *filter.Program
+	var err error
+	if strings.TrimSpace(cfg.Filter) != "" {
+		prog, err = filter.Compile(cfg.Filter)
+		if err != nil {
+			return nil, fmt.Errorf("action %q: compiling filter: %w", name, err)
+		}
 	}
 
 	eval := yqlib.NewStringEvaluator()
@@ -46,6 +51,9 @@ func Compile(name string, cfg config.ActionConfig) (*Action, error) {
 }
 
 func (a *Action) Match(fm map[string]interface{}) bool {
+	if a.celProg == nil {
+		return true
+	}
 	ok, err := a.celProg.Eval(fm)
 	if err != nil {
 		log.Printf("action: failed to evaluate filter for action %s: %v", a.Name, err)

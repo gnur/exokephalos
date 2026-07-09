@@ -39,6 +39,23 @@ func TestCompile_InvalidCEL(t *testing.T) {
 	}
 }
 
+func TestCompile_EmptyFilterMatchesAnyFrontmatter(t *testing.T) {
+	cfg := config.ActionConfig{
+		Expr:        `.tags += ["done"]`,
+		Description: "Mark as done",
+	}
+	a, err := Compile("mark-done", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if a.Filter != "" {
+		t.Errorf("filter = %q", a.Filter)
+	}
+	if !a.Match(map[string]interface{}{"type": "note"}) {
+		t.Fatal("expected empty filter action to match")
+	}
+}
+
 func TestCompile_InvalidYQ(t *testing.T) {
 	cfg := config.ActionConfig{
 		Filter:      `true`,
@@ -209,5 +226,3 @@ func TestApply_NowExpression(t *testing.T) {
 		t.Error("expected 'updated' field in output")
 	}
 }
-
-

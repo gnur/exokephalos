@@ -19,7 +19,7 @@ The TUI uses intuitive, single-key commands:
 | `n` | Create a new item (interactive wizard using templates) |
 | `e` / `Enter` | Open the item in your editor (`$EDITOR`) |
 | `d` / `Delete` | Delete the currently selected item |
-| `a` / `Space` | Open custom actions context menu for the selected item |
+| `:` | Open fuzzy action picker |
 | `Tab` | Cycle forwards through subview tabs |
 | `Shift + Tab` | Cycle backwards through subview tabs |
 | `j` / `Down` | Move selection down |
@@ -27,3 +27,7 @@ The TUI uses intuitive, single-key commands:
 | `/` | Focus search bar to filter list |
 | `Esc` | Clear search or close modals |
 | `q` / `Ctrl + C` | Exit the TUI |
+
+The action picker includes configured actions plus built-ins like Goodreads import and Hardcover search. Actions whose CEL filter does not match are grayed out; selecting one shows the required CEL expression.
+
+An `All` view is always available with key `0`; it shows every item regardless of type.

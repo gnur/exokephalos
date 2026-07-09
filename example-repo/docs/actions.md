@@ -8,7 +8,7 @@ Actions are defined under the `[actions]` section in `.exo.toml` or in configura
 
 Each action configuration contains:
 - `description`: The label describing the action.
-- `filter`: A boolean filter expression matching current tags or frontmatter to determine if the action is applicable to the selected item.
+- `filter`: Optional boolean CEL expression matching current tags or frontmatter to determine if the action is applicable to the selected item. If omitted, the action is always applicable.
 - `expr`: A `yq` expression that modifies the frontmatter structure.
 
 ### Example Action Config
@@ -34,8 +34,10 @@ expr = '.tags += ["done"]'
 
 ### Terminal Interface (TUI)
 1. Select an item in any view.
-2. Press `a` (or `Space`) to open the action menu.
-3. Type the hotkey corresponding to the action (e.g., matching the action's description prefix or name) and press `Enter` to run the `yq` update.
+2. Press `:` to open the fuzzy action picker.
+3. Type to filter by action name or description, use `Up`/`Down` to select, and press `Enter` to run the `yq` update.
+
+Actions whose CEL filter does not match the selected item are shown grayed out. Selecting one shows the required CEL expression in the status line.
 
 ### Web Interface
 When viewing an item details page (`/views/<type>/<id>`), any actions whose `filter` expression evaluates to true for the item will display as action buttons on the top right. Clicking an action button executes the update on disk.

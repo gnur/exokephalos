@@ -80,6 +80,9 @@ var (
 			Foreground(mutedColor).
 			Italic(true)
 
+	disabledActionStyle = lipgloss.NewStyle().
+				Foreground(mutedColor)
+
 	yearDividerStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#9CA3AF")).
 				Bold(true)

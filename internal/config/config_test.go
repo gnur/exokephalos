@@ -117,8 +117,6 @@ path_template = "notes/{{.ID}}.md"
 	}
 }
 
-
-
 func TestLoad_DuplicateKeys(t *testing.T) {
 	dir := t.TempDir()
 	writeConfig(t, dir, `
@@ -170,6 +168,58 @@ func TestLoad_DefaultsApplied(t *testing.T) {
 	}
 	if v.Subviews[0].Filter != "true" {
 		t.Errorf("default subview filter = %q, want %q", v.Subviews[0].Filter, "true")
+	}
+}
+
+func TestLoad_AddsBuiltInAllView(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, validConfig)
+
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	v, ok := cfg.Views["all"]
+	if !ok {
+		t.Fatal("expected built-in all view")
+	}
+	if v.Name != "All" {
+		t.Errorf("name = %q", v.Name)
+	}
+	if v.Key != "0" {
+		t.Errorf("key = %q", v.Key)
+	}
+	if v.Filter != "true" {
+		t.Errorf("filter = %q", v.Filter)
+	}
+	if !v.ShowTags {
+		t.Error("expected all view to show tags")
+	}
+	if v.SubtitleField != "type" {
+		t.Errorf("subtitle_field = %q", v.SubtitleField)
+	}
+}
+
+func TestLoad_BuiltInAllViewOverridesConfiguredAll(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, validConfig+`
+[views.all]
+name = "Custom All"
+key = "x"
+filter = 'type == "note"'
+template = "---\ntype: note\n---\n"
+`)
+
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Views["all"].Key != "0" {
+		t.Errorf("expected built-in all key, got %q", cfg.Views["all"].Key)
+	}
+	if cfg.Views["all"].Filter != "true" {
+		t.Errorf("expected built-in all filter, got %q", cfg.Views["all"].Filter)
 	}
 }
 
@@ -241,11 +291,11 @@ template = "---\ntype: archive\n---\n"
 	}
 
 	views := cfg.OrderedViews()
-	if len(views) != 3 {
-		t.Fatalf("expected 3 views, got %d", len(views))
+	if len(views) != 4 {
+		t.Fatalf("expected 4 views, got %d", len(views))
 	}
 
-	expectedKeys := []string{"a", "b", "n"}
+	expectedKeys := []string{"0", "a", "b", "n"}
 	for i, v := range views {
 		if v.Config.Key != expectedKeys[i] {
 			t.Errorf("views[%d].Key = %q, want %q", i, v.Config.Key, expectedKeys[i])
@@ -330,13 +380,20 @@ description = "Mark as finished reading"
 func TestLoad_ActionMissingFilter(t *testing.T) {
 	dir := t.TempDir()
 	writeConfig(t, dir, validConfig+`
-[actions.bad-action]
+[actions.always-action]
 expr = '.foo = "bar"'
-description = "Bad action"
+description = "Always action"
 `)
-	_, err := Load(dir)
-	if err == nil {
-		t.Fatal("expected validation error for action missing filter")
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	a, ok := cfg.Actions["always-action"]
+	if !ok {
+		t.Fatal("expected action to load")
+	}
+	if a.Filter != "" {
+		t.Errorf("filter = %q", a.Filter)
 	}
 }
 

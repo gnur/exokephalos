@@ -142,6 +142,8 @@ func Load(dir string) (*Config, error) {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 
+	combined.addBuiltInViews()
+
 	// Apply defaults
 	for id, v := range combined.Views {
 		if v.TitleField == "" {
@@ -160,6 +162,21 @@ func Load(dir string) (*Config, error) {
 	}
 
 	return &combined, nil
+}
+
+func (c *Config) addBuiltInViews() {
+	c.Views["all"] = ViewConfig{
+		Name:          "All",
+		Key:           "0",
+		Filter:        "true",
+		ShowTags:      true,
+		TitleField:    "title",
+		SubtitleField: "type",
+		SortField:     "created",
+		SortOrder:     "desc",
+		Template:      "---\ntype: note\ntags: []\ntitle: \"{{.Title}}\"\n---\n\n",
+		Subviews:      []SubviewConfig{{Name: "All", Filter: "true"}},
+	}
 }
 
 func (c *Config) validate() error {
@@ -207,9 +224,6 @@ func (c *Config) validate() error {
 	}
 
 	for name, a := range c.Actions {
-		if a.Filter == "" {
-			return fmt.Errorf("action %q: filter is required", name)
-		}
 		if a.Expr == "" {
 			return fmt.Errorf("action %q: expr is required", name)
 		}

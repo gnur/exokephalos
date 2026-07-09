@@ -23,8 +23,11 @@ func (m Model) View() string {
 	if m.mode == modeViewMenu {
 		return m.renderViewMenuOverlay()
 	}
-	if m.mode == modeActionMenu {
-		return m.renderActionMenuOverlay()
+	if m.mode == modeActionPicker {
+		return m.renderActionPickerOverlay()
+	}
+	if m.mode == modeHardcoverResults {
+		return m.renderHardcoverResultsOverlay()
 	}
 
 	header := m.renderHeader()
@@ -36,33 +39,83 @@ func (m Model) View() string {
 
 func (m Model) renderViewMenuOverlay() string {
 	entries := make([]popupEntry, 0, len(m.views))
-	for _, v := range m.views {
+	for _, shortcut := range m.viewShortcuts() {
 		entries = append(entries, popupEntry{
-			Key:   v.cfg.Key,
-			Label: v.cfg.Name,
+			Key:   shortcut.Key,
+			Label: shortcut.Label,
 		})
 	}
-	return renderPopup("Go to view", entries, m.width, m.height)
+	title := "Go to view"
+	if m.viewMenuInput != "" {
+		title += ": " + m.viewMenuInput
+	}
+	return renderPopup(title, entries, m.width, m.height)
 }
 
-func (m Model) renderActionMenuOverlay() string {
-	entries := make([]popupEntry, 0, len(m.actionItems)+1)
-
-	for _, name := range m.actionItems {
-		act := m.actions[name]
-		key := string(name[0])
-		entries = append(entries, popupEntry{
-			Key:   key,
-			Label: fmt.Sprintf("%s — %s", name, act.Description),
-		})
+func (m Model) renderActionPickerOverlay() string {
+	entries := m.filteredActionEntries()
+	lines := []string{
+		popupTitleStyle.Render("Actions"),
+		searchPromptStyle.Render(m.actionInput.View()),
+		"",
 	}
 
-	entries = append(entries, popupEntry{
-		Key:   "i",
-		Label: "Import from Goodreads",
-	})
+	if len(entries) == 0 {
+		lines = append(lines, popupHintStyle.Render("  no matching actions"))
+	} else {
+		for i, entry := range entries {
+			label := fmt.Sprintf("%s — %s", entry.Name, entry.Description)
+			if !entry.Enabled && entry.Filter != "" {
+				label += "  requires: " + entry.Filter
+			}
+			prefix := "  "
+			if i == m.actionCursor {
+				prefix = "> "
+			}
+			style := popupLabelStyle
+			if !entry.Enabled {
+				style = disabledActionStyle
+			} else if i == m.actionCursor {
+				style = selectedItemStyle
+			}
+			lines = append(lines, style.Render(prefix+label))
+		}
+	}
 
-	return renderPopup("Actions", entries, m.width, m.height)
+	lines = append(lines, "", popupHintStyle.Render("  enter to run  esc to cancel"))
+	return renderFloating(strings.Join(lines, "\n"), m.width, m.height, actionPickerWidth(entries))
+}
+
+func actionPickerWidth(entries []actionEntry) int {
+	width := 44
+	for _, entry := range entries {
+		labelWidth := len(entry.Name) + len(entry.Description) + 5
+		if !entry.Enabled && entry.Filter != "" {
+			labelWidth += len(entry.Filter) + len("  requires: ")
+		}
+		if labelWidth > width {
+			width = labelWidth
+		}
+	}
+	return width
+}
+
+func (m Model) renderHardcoverResultsOverlay() string {
+	entries := make([]popupEntry, 0, len(m.hardcoverResults))
+	for i, book := range m.hardcoverResults {
+		label := book.Title
+		if len(book.Authors) > 0 {
+			label += " — " + strings.Join(book.Authors, ", ")
+		}
+		if book.Year != "" {
+			label += " (" + book.Year + ")"
+		}
+		entries = append(entries, popupEntry{
+			Key:   fmt.Sprintf("%d", i+1),
+			Label: label,
+		})
+	}
+	return renderPopup("Hardcover results", entries, m.width, m.height)
 }
 
 func (m Model) renderHeader() string {
@@ -254,6 +307,12 @@ func (m Model) renderFooter() string {
 	if m.mode == modeImportURL {
 		return searchPromptStyle.Render(m.importInput.View())
 	}
+	if m.mode == modeHardcoverQuery {
+		return searchPromptStyle.Render(m.hardcoverInput.View())
+	}
+	if m.mode == modeActionPicker {
+		return searchPromptStyle.Render(m.actionInput.View())
+	}
 	if m.mode == modeSearchTags {
 		return searchPromptStyle.Render(m.tagFilterInput.View())
 	}
@@ -263,9 +322,9 @@ func (m Model) renderFooter() string {
 
 	var hint string
 	if m.currentViewShowsTags() {
-		hint = " /:filter  space:tag  h/l:pane  tab:subview  g:views  a:actions  n:new  e:edit  d:del  q:quit"
+		hint = " /:filter  ::actions  space:tag  h/l:pane  tab:subview  g:views  n:new  e:edit  d:del  q:quit"
 	} else {
-		hint = " /:filter  tab:subview  g:views  a:actions  n:new  e:edit  d:del  q:quit"
+		hint = " /:filter  ::actions  tab:subview  g:views  n:new  e:edit  d:del  q:quit"
 	}
 
 	// Show selected tags

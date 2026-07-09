@@ -43,6 +43,10 @@ func renderPopup(title string, entries []popupEntry, width, height int) string {
 		popupW = len(title) + 4
 	}
 
+	return renderFloating(content, width, height, popupW)
+}
+
+func renderFloating(content string, width, height, popupW int) string {
 	popup := popupStyle.Width(popupW).Render(content)
 
 	// Center the popup on screen

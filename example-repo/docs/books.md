@@ -1,13 +1,25 @@
-# Books & Goodreads Integration
+# Books & Metadata Integrations
 
-exokephalos provides support for tracking books, importing book metadata from Goodreads, and visualizing reading statistics.
+exokephalos provides support for tracking books, importing book metadata from Goodreads or Hardcover, and visualizing reading statistics.
+
+## Hardcover Search
+
+Set `HARDCOVER_TOKEN` in the environment before launching the TUI.
+
+To add a book from Hardcover:
+1. Open the terminal user interface by running `exo`.
+2. Press `:` to open the action picker and select `hardcover-search`.
+3. Enter a search query and press `Enter`.
+4. Pick one of the top five results by pressing `1` through `5`.
+
+The selected result is converted into a new `type: book` item using the configured books view template.
 
 ## Goodreads Import
 
 To import book details from Goodreads:
 1. Open the terminal user interface by running `exo`.
-2. Select any view (like Books) and highlight an item or press `a` (or `Space`) to open the action menu.
-3. In the action menu, press `i` to activate the **Import URL** prompt.
+2. Press `:` to open the action picker.
+3. Select `goodreads-import` to activate the **Import URL** prompt.
 4. Enter or paste the Goodreads book URL (e.g., `https://www.goodreads.com/book/show/12345`) and press `Enter`.
 
 The TUI will fetch the metadata from Goodreads and automatically create a new book file in your repository with all the metadata fields populated:

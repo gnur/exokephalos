@@ -6,11 +6,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/gnur/exokephalos/internal/action"
 	"github.com/gnur/exokephalos/internal/cache"
 	"github.com/gnur/exokephalos/internal/config"
 	"github.com/gnur/exokephalos/internal/filter"
 	"github.com/gnur/exokephalos/internal/importer"
 	"github.com/gnur/exokephalos/internal/markdown"
+	"github.com/gnur/exokephalos/internal/scanner"
 )
 
 func setupTestRepo(t *testing.T) string {
@@ -232,4 +236,233 @@ func TestModelCreation(t *testing.T) {
 			t.Errorf("View %d (%s): expected %d subfilters, got %d", i, vs.cfg.Name, len(vs.cfg.Subviews), len(vs.subFilters))
 		}
 	}
+}
+
+func TestActionPickerFiltersByNameAndDescription(t *testing.T) {
+	startBook := mustCompileAction(t, "start-book", config.ActionConfig{
+		Filter:      `"to-read" in tags`,
+		Expr:        `.tags -= ["to-read"] | .tags += ["reading"]`,
+		Description: "Start reading this book",
+	})
+	archive := mustCompileAction(t, "archive-note", config.ActionConfig{
+		Expr:        `.tags += ["archived"]`,
+		Description: "Archive this note",
+	})
+	model := Model{
+		actions: map[string]*action.Action{
+			"start-book":   startBook,
+			"archive-note": archive,
+		},
+		actionInput: textinput.New(),
+	}
+	model.actionInput.SetValue("start")
+
+	entries := model.filteredActionEntries()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d: %#v", len(entries), entries)
+	}
+	if entries[0].Name != "start-book" {
+		t.Fatalf("expected start-book, got %q", entries[0].Name)
+	}
+}
+
+func TestActionPickerShowsDisabledActionAndReportsFilter(t *testing.T) {
+	finish := mustCompileAction(t, "finish-book", config.ActionConfig{
+		Filter:      `"reading" in tags`,
+		Expr:        `.tags -= ["reading"] | .tags += ["read"]`,
+		Description: "Finish book",
+	})
+	model := Model{
+		actions: map[string]*action.Action{"finish-book": finish},
+		views: []viewState{{
+			items: []scanner.Item{{
+				Frontmatter: map[string]interface{}{
+					"type": "book",
+					"tags": []interface{}{"to-read"},
+				},
+			}},
+			filteredItems: []scanner.Item{{
+				Frontmatter: map[string]interface{}{
+					"type": "book",
+					"tags": []interface{}{"to-read"},
+				},
+			}},
+		}},
+		actionInput: textinput.New(),
+	}
+
+	entries := model.actionEntries()
+	var finishEntry actionEntry
+	for _, entry := range entries {
+		if entry.Name == "finish-book" {
+			finishEntry = entry
+			break
+		}
+	}
+	if finishEntry.Name == "" {
+		t.Fatal("finish-book entry not found")
+	}
+	if finishEntry.Enabled {
+		t.Fatal("expected finish-book to be disabled")
+	}
+
+	updated, _ := model.executeActionEntry(finishEntry)
+	result := updated.(Model)
+	if result.status != `Requires: "reading" in tags` {
+		t.Fatalf("status = %q", result.status)
+	}
+}
+
+func TestActionPickerSortsEnabledActionsFirst(t *testing.T) {
+	disabled := mustCompileAction(t, "aaa-disabled", config.ActionConfig{
+		Filter:      `"reading" in tags`,
+		Expr:        `.tags += ["read"]`,
+		Description: "Disabled action",
+	})
+	enabled := mustCompileAction(t, "zzz-enabled", config.ActionConfig{
+		Expr:        `.tags += ["done"]`,
+		Description: "Enabled action",
+	})
+	model := Model{
+		actions: map[string]*action.Action{
+			"aaa-disabled": disabled,
+			"zzz-enabled":  enabled,
+		},
+		views: []viewState{{
+			filteredItems: []scanner.Item{{
+				Frontmatter: map[string]interface{}{
+					"type": "book",
+					"tags": []interface{}{"to-read"},
+				},
+			}},
+		}},
+		actionInput: textinput.New(),
+	}
+
+	entries := model.actionEntries()
+	var seenDisabled bool
+	for _, entry := range entries {
+		if !entry.Enabled {
+			seenDisabled = true
+			continue
+		}
+		if seenDisabled {
+			t.Fatalf("enabled action %q appeared after a disabled action: %#v", entry.Name, entries)
+		}
+	}
+}
+
+func TestActionPickerHardcoverAlwaysEnabled(t *testing.T) {
+	model := Model{actionInput: textinput.New()}
+	entries := model.actionEntries()
+	var hardcover actionEntry
+	for _, entry := range entries {
+		if entry.Name == "hardcover-search" {
+			hardcover = entry
+			break
+		}
+	}
+	if hardcover.Name == "" {
+		t.Fatal("hardcover-search entry not found")
+	}
+	if !hardcover.Enabled {
+		t.Fatal("expected hardcover-search to be enabled")
+	}
+	if hardcover.Filter != "" {
+		t.Fatalf("expected no hardcover filter requirement, got %q", hardcover.Filter)
+	}
+}
+
+func TestActionPickerColonOpensPicker(t *testing.T) {
+	model := Model{actionInput: textinput.New()}
+	updated, _ := model.handleNormalKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
+	result := updated.(Model)
+	if result.mode != modeActionPicker {
+		t.Fatalf("mode = %v", result.mode)
+	}
+}
+
+func TestViewShortcutsUseSingleLetterWhenUnique(t *testing.T) {
+	model := Model{
+		views: []viewState{
+			{cfg: config.ViewConfig{Name: "Notes"}},
+			{cfg: config.ViewConfig{Name: "Books"}},
+		},
+	}
+
+	shortcuts := model.viewShortcuts()
+	if shortcuts[0].Key != "n" {
+		t.Fatalf("notes shortcut = %q, want n", shortcuts[0].Key)
+	}
+	if shortcuts[1].Key != "b" {
+		t.Fatalf("books shortcut = %q, want b", shortcuts[1].Key)
+	}
+}
+
+func TestViewShortcutsExpandOnFirstLetterConflict(t *testing.T) {
+	model := Model{
+		views: []viewState{
+			{cfg: config.ViewConfig{Name: "All"}},
+			{cfg: config.ViewConfig{Name: "Articles"}},
+			{cfg: config.ViewConfig{Name: "Books"}},
+		},
+	}
+
+	shortcuts := model.viewShortcuts()
+	keys := map[string]bool{}
+	for _, shortcut := range shortcuts {
+		if keys[shortcut.Key] {
+			t.Fatalf("duplicate shortcut %q in %#v", shortcut.Key, shortcuts)
+		}
+		keys[shortcut.Key] = true
+	}
+	if shortcuts[0].Key != "al" {
+		t.Fatalf("all shortcut = %q, want al", shortcuts[0].Key)
+	}
+	if shortcuts[1].Key != "ar" {
+		t.Fatalf("articles shortcut = %q, want ar", shortcuts[1].Key)
+	}
+	if shortcuts[2].Key != "b" {
+		t.Fatalf("books shortcut = %q, want b", shortcuts[2].Key)
+	}
+}
+
+func TestViewMenuAcceptsMultiLetterShortcut(t *testing.T) {
+	model := Model{
+		mode: modeViewMenu,
+		views: []viewState{
+			{cfg: config.ViewConfig{Name: "All"}},
+			{cfg: config.ViewConfig{Name: "Articles"}},
+		},
+	}
+
+	updated, _ := model.handleViewMenuKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	result := updated.(Model)
+	if result.mode != modeViewMenu {
+		t.Fatalf("mode after ambiguous prefix = %v, want modeViewMenu", result.mode)
+	}
+	if result.viewMenuInput != "a" {
+		t.Fatalf("viewMenuInput = %q, want a", result.viewMenuInput)
+	}
+
+	updated, _ = result.handleViewMenuKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	result = updated.(Model)
+	if result.activeView != 1 {
+		t.Fatalf("activeView = %d, want 1", result.activeView)
+	}
+	if result.mode != modeNormal {
+		t.Fatalf("mode = %v, want modeNormal", result.mode)
+	}
+	if result.viewMenuInput != "" {
+		t.Fatalf("viewMenuInput = %q, want empty", result.viewMenuInput)
+	}
+}
+
+func mustCompileAction(t *testing.T, name string, cfg config.ActionConfig) *action.Action {
+	t.Helper()
+	act, err := action.Compile(name, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return act
 }

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"text/template"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -19,6 +20,7 @@ import (
 	"github.com/gnur/exokephalos/internal/config"
 	"github.com/gnur/exokephalos/internal/filter"
 	"github.com/gnur/exokephalos/internal/goodreads"
+	"github.com/gnur/exokephalos/internal/hardcover"
 	"github.com/gnur/exokephalos/internal/markdown"
 	"github.com/gnur/exokephalos/internal/scanner"
 	"gopkg.in/yaml.v3"
@@ -29,12 +31,14 @@ type mode int
 const (
 	modeNormal mode = iota
 	modeViewMenu
-	modeActionMenu
+	modeActionPicker
 	modeSearchTags
 	modeSearchItems
 	modeConfirmDelete
 	modeCreatePrompt
 	modeImportURL
+	modeHardcoverQuery
+	modeHardcoverResults
 )
 
 // Pane focus for views with tags enabled
@@ -92,6 +96,9 @@ type Model struct {
 	textFilterInput textinput.Model
 	promptInput     textinput.Model
 	importInput     textinput.Model
+	hardcoverInput  textinput.Model
+	actionInput     textinput.Model
+	viewMenuInput   string
 
 	// Create flow
 	createVars       map[string]string
@@ -104,9 +111,12 @@ type Model struct {
 	// Mode
 	mode mode
 
-	// Action menu state
-	actions     map[string]*action.Action
-	actionItems []string // action names applicable to current item
+	// Action picker state
+	actions      map[string]*action.Action
+	actionCursor int
+
+	// Hardcover search flow
+	hardcoverResults []hardcover.Book
 
 	// Status message
 	status string
@@ -116,6 +126,33 @@ type refreshMsg struct{}
 
 type dataLoadedMsg struct {
 	allItems []scanner.Item
+}
+
+type hardcoverSearchMsg struct {
+	results []hardcover.Book
+	err     error
+}
+
+type actionEntryKind int
+
+const (
+	actionEntryConfigured actionEntryKind = iota
+	actionEntryGoodreads
+	actionEntryHardcover
+)
+
+type actionEntry struct {
+	Kind        actionEntryKind
+	Name        string
+	Description string
+	Filter      string
+	Enabled     bool
+}
+
+type viewShortcut struct {
+	Key   string
+	Label string
+	Index int
 }
 
 func New(cfg *config.Config, baseDir string, c *cache.Cache) Model {
@@ -133,6 +170,14 @@ func New(cfg *config.Config, baseDir string, c *cache.Cache) Model {
 	importTi := textinput.New()
 	importTi.Prompt = "Goodreads URL: "
 	importTi.CharLimit = 512
+
+	hardcoverTi := textinput.New()
+	hardcoverTi.Prompt = "Hardcover query: "
+	hardcoverTi.CharLimit = 512
+
+	actionTi := textinput.New()
+	actionTi.Prompt = ":"
+	actionTi.CharLimit = 256
 
 	// Initialize view states from config
 	orderedViews := cfg.OrderedViews()
@@ -197,6 +242,8 @@ func New(cfg *config.Config, baseDir string, c *cache.Cache) Model {
 		textFilterInput: textFilter,
 		promptInput:     promptTi,
 		importInput:     importTi,
+		hardcoverInput:  hardcoverTi,
+		actionInput:     actionTi,
 		actions:         actions,
 		mode:            modeNormal,
 	}
@@ -237,6 +284,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updatePreview()
 		return m, nil
 
+	case hardcoverSearchMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Hardcover error: %v", msg.err)
+			m.mode = modeNormal
+			return m, nil
+		}
+		m.hardcoverResults = msg.results
+		m.mode = modeHardcoverResults
+		m.status = ""
+		return m, nil
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -253,14 +311,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.mode {
 	case modeViewMenu:
 		return m.handleViewMenuKey(msg)
-	case modeActionMenu:
-		return m.handleActionMenuKey(msg)
+	case modeActionPicker:
+		return m.handleActionPickerKey(msg)
 	case modeConfirmDelete:
 		return m.handleConfirmDeleteKey(msg)
 	case modeCreatePrompt:
 		return m.handleCreatePromptKey(msg)
 	case modeImportURL:
 		return m.handleImportKey(msg)
+	case modeHardcoverQuery:
+		return m.handleHardcoverQueryKey(msg)
+	case modeHardcoverResults:
+		return m.handleHardcoverResultsKey(msg)
 	case modeSearchTags:
 		return m.handleSearchTagsKey(msg)
 	case modeSearchItems:
@@ -273,57 +335,323 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleViewMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "esc" {
+	switch msg.String() {
+	case "esc":
 		m.mode = modeNormal
+		m.viewMenuInput = ""
+		return m, nil
+	case "backspace", "ctrl+h":
+		if m.viewMenuInput != "" {
+			runes := []rune(m.viewMenuInput)
+			m.viewMenuInput = string(runes[:len(runes)-1])
+		}
 		return m, nil
 	}
 
-	// Match key to a view
 	key := msg.String()
-	for i, v := range m.views {
-		if v.cfg.Key == key {
-			m.switchView(i)
+	if len([]rune(key)) != 1 {
+		return m, nil
+	}
+	r := []rune(key)[0]
+	if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+		return m, nil
+	}
+	m.viewMenuInput += strings.ToLower(string(r))
+
+	shortcuts := m.viewShortcuts()
+	hasPrefix := false
+	for _, shortcut := range shortcuts {
+		if shortcut.Key == m.viewMenuInput {
+			m.switchView(shortcut.Index)
 			return m, nil
 		}
+		if strings.HasPrefix(shortcut.Key, m.viewMenuInput) {
+			hasPrefix = true
+		}
+	}
+	if !hasPrefix {
+		m.viewMenuInput = ""
 	}
 
 	return m, nil
 }
 
-func (m Model) handleActionMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) viewShortcuts() []viewShortcut {
+	sources := make([]string, len(m.views))
+	for i, v := range m.views {
+		source := normalizeViewShortcutSource(v.cfg.Name)
+		if source == "" {
+			source = normalizeViewShortcutSource(v.id)
+		}
+		if source == "" {
+			source = normalizeViewShortcutSource(v.cfg.Key)
+		}
+		sources[i] = source
+	}
+
+	used := make(map[string]bool, len(m.views))
+	shortcuts := make([]viewShortcut, 0, len(m.views))
+	for i, v := range m.views {
+		key := uniqueViewShortcut(sources, i)
+		if key == "" {
+			key = "v"
+		}
+		if used[key] {
+			base := key
+			for suffix := 2; used[key]; suffix++ {
+				key = fmt.Sprintf("%s%d", base, suffix)
+			}
+		}
+		used[key] = true
+		shortcuts = append(shortcuts, viewShortcut{
+			Key:   key,
+			Label: v.cfg.Name,
+			Index: i,
+		})
+	}
+	return shortcuts
+}
+
+func normalizeViewShortcutSource(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func uniqueViewShortcut(sources []string, idx int) string {
+	source := sources[idx]
+	if source == "" {
+		return ""
+	}
+	for length := 1; length <= len([]rune(source)); length++ {
+		prefix := string([]rune(source)[:length])
+		unique := true
+		for j, other := range sources {
+			if j == idx || other == "" {
+				continue
+			}
+			if strings.HasPrefix(other, prefix) {
+				unique = false
+				break
+			}
+		}
+		if unique {
+			return prefix
+		}
+	}
+	return source
+}
+
+func (m Model) handleActionPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		m.mode = modeNormal
+		m.actionInput.Blur()
+		m.actionInput.SetValue("")
+		m.actionCursor = 0
 		return m, nil
-	case "i":
+	case "up", "k":
+		entries := m.filteredActionEntries()
+		if len(entries) > 0 && m.actionCursor > 0 {
+			m.actionCursor--
+		}
+		return m, nil
+	case "down", "j":
+		entries := m.filteredActionEntries()
+		if len(entries) > 0 && m.actionCursor < len(entries)-1 {
+			m.actionCursor++
+		}
+		return m, nil
+	case "enter":
+		entries := m.filteredActionEntries()
+		if len(entries) == 0 {
+			return m, nil
+		}
+		if m.actionCursor >= len(entries) {
+			m.actionCursor = len(entries) - 1
+		}
+		entry := entries[m.actionCursor]
+		m.mode = modeNormal
+		m.actionInput.Blur()
+		m.actionInput.SetValue("")
+		m.actionCursor = 0
+		return m.executeActionEntry(entry)
+	default:
+		var cmd tea.Cmd
+		m.actionInput, cmd = m.actionInput.Update(msg)
+		m.actionCursor = 0
+		return m, cmd
+	}
+}
+
+func (m Model) handleHardcoverQueryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		query := strings.TrimSpace(m.hardcoverInput.Value())
+		if query == "" {
+			m.mode = modeNormal
+			m.hardcoverInput.Blur()
+			return m, nil
+		}
+		m.mode = modeNormal
+		m.hardcoverInput.Blur()
+		m.status = "Searching Hardcover..."
+		return m, searchHardcoverCmd(query)
+	case "esc":
+		m.mode = modeNormal
+		m.hardcoverInput.Blur()
+		m.hardcoverInput.SetValue("")
+		return m, nil
+	default:
+		var cmd tea.Cmd
+		m.hardcoverInput, cmd = m.hardcoverInput.Update(msg)
+		return m, cmd
+	}
+}
+
+func (m Model) handleHardcoverResultsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = modeNormal
+		m.hardcoverResults = nil
+		m.status = "Hardcover search cancelled"
+		return m, nil
+	default:
+		key := msg.String()
+		if len(key) != 1 || key[0] < '1' || key[0] > '5' {
+			return m, nil
+		}
+		idx := int(key[0] - '1')
+		if idx < 0 || idx >= len(m.hardcoverResults) {
+			return m, nil
+		}
+		book := m.hardcoverResults[idx]
+		m.mode = modeNormal
+		m.hardcoverResults = nil
+		return m.createHardcoverBook(book)
+	}
+}
+
+func (m Model) actionEntries() []actionEntry {
+	names := make([]string, 0, len(m.actions))
+	for name := range m.actions {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	item, hasItem := m.selectedItem()
+	entries := make([]actionEntry, 0, len(names)+2)
+	for _, name := range names {
+		act := m.actions[name]
+		enabled := false
+		if strings.TrimSpace(act.Filter) == "" {
+			enabled = true
+		} else if hasItem {
+			enabled = act.Match(item.Frontmatter)
+		}
+		entries = append(entries, actionEntry{
+			Kind:        actionEntryConfigured,
+			Name:        name,
+			Description: act.Description,
+			Filter:      act.Filter,
+			Enabled:     enabled,
+		})
+	}
+
+	entries = append(entries, actionEntry{
+		Kind:        actionEntryGoodreads,
+		Name:        "goodreads-import",
+		Description: "Import from Goodreads",
+		Enabled:     true,
+	})
+	entries = append(entries, actionEntry{
+		Kind:        actionEntryHardcover,
+		Name:        "hardcover-search",
+		Description: "Search Hardcover",
+		Enabled:     true,
+	})
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].Enabled != entries[j].Enabled {
+			return entries[i].Enabled
+		}
+		return entries[i].Name < entries[j].Name
+	})
+	return entries
+}
+
+func (m Model) filteredActionEntries() []actionEntry {
+	query := strings.TrimSpace(m.actionInput.Value())
+	entries := m.actionEntries()
+	if query == "" {
+		return entries
+	}
+
+	filtered := make([]actionEntry, 0, len(entries))
+	for _, entry := range entries {
+		haystack := entry.Name + " " + entry.Description
+		if fuzzyMatch(query, haystack) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
+
+func (m Model) executeActionEntry(entry actionEntry) (tea.Model, tea.Cmd) {
+	if !entry.Enabled {
+		if entry.Filter != "" {
+			m.status = "Requires: " + entry.Filter
+		} else {
+			m.status = "Action is not available"
+		}
+		return m, nil
+	}
+
+	switch entry.Kind {
+	case actionEntryConfigured:
+		return m.applyAction(entry.Name)
+	case actionEntryGoodreads:
 		m.mode = modeImportURL
 		m.importInput.SetValue("")
 		m.importInput.Focus()
 		return m, textinput.Blink
+	case actionEntryHardcover:
+		m.mode = modeHardcoverQuery
+		m.hardcoverInput.SetValue("")
+		m.hardcoverInput.Focus()
+		return m, textinput.Blink
 	default:
-		key := msg.String()
-		for _, name := range m.actionItems {
-			if len(name) > 0 && string(name[0]) == key {
-				return m.applyAction(name)
-			}
-		}
+		m.status = "Action not found"
+		return m, nil
 	}
-	return m, nil
 }
 
-func (m *Model) populateActionItems() {
-	m.actionItems = nil
+func (m Model) selectedItem() (scanner.Item, bool) {
 	items := m.currentItems()
 	vs := m.currentView()
 	if vs == nil || len(items) == 0 || vs.cursor >= len(items) {
-		return
+		return scanner.Item{}, false
 	}
-	item := items[vs.cursor]
-	for name, act := range m.actions {
-		if act.Match(item.Frontmatter) {
-			m.actionItems = append(m.actionItems, name)
-		}
+	return items[vs.cursor], true
+}
+
+func (m Model) canSearchHardcover() bool {
+	vs := m.currentView()
+	if vs == nil {
+		return false
 	}
+	if isBookView(vs) {
+		return true
+	}
+	items := m.currentItems()
+	if len(items) == 0 || vs.cursor >= len(items) {
+		return false
+	}
+	typ, _ := items[vs.cursor].Frontmatter["type"].(string)
+	return typ == "book"
 }
 
 func (m Model) applyAction(actionName string) (tea.Model, tea.Cmd) {
@@ -508,12 +836,15 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "g":
 		m.mode = modeViewMenu
+		m.viewMenuInput = ""
 		return m, nil
 
-	case "a":
-		m.populateActionItems()
-		m.mode = modeActionMenu
-		return m, nil
+	case ":":
+		m.mode = modeActionPicker
+		m.actionInput.SetValue("")
+		m.actionInput.Focus()
+		m.actionCursor = 0
+		return m, textinput.Blink
 
 	// Tab/shift-tab cycles subviews
 	case "tab":
@@ -617,6 +948,7 @@ func (m *Model) switchView(idx int) {
 	m.invalidateTagCounts()
 	m.pane = paneList
 	m.mode = modeNormal
+	m.viewMenuInput = ""
 	m.status = ""
 	m.textFilterInput.SetValue("")
 	m.tagFilterInput.SetValue("")
@@ -1036,7 +1368,7 @@ func (m Model) importBook(url string) (tea.Model, tea.Cmd) {
 
 	// Find the books view to get its template and path
 	for _, vs := range m.views {
-		if strings.Contains(strings.ToLower(vs.cfg.Name), "book") {
+		if isBookView(&vs) {
 			content, path, err := renderCreateTemplate(vs.cfg.Template, vs.id, m.baseDir, vars)
 			if err != nil {
 				m.status = fmt.Sprintf("Template error: %v", err)
@@ -1053,6 +1385,69 @@ func (m Model) importBook(url string) (tea.Model, tea.Cmd) {
 
 	m.status = "No books view configured"
 	return m, nil
+}
+
+func searchHardcoverCmd(query string) tea.Cmd {
+	return func() tea.Msg {
+		client := hardcover.NewClient(os.Getenv("HARDCOVER_TOKEN"))
+		results, err := client.Search(query, 5)
+		return hardcoverSearchMsg{results: results, err: err}
+	}
+}
+
+func (m Model) createHardcoverBook(book hardcover.Book) (tea.Model, tea.Cmd) {
+	vars := newAutoFillVars()
+	vars["Title"] = book.Title
+	vars["Author"] = formatYAMLStringList(book.Authors)
+	vars["URL"] = book.URL
+	vars["Pages"] = fmt.Sprintf("%d", book.Pages)
+	vars["Cover"] = book.Cover
+
+	for _, vs := range m.views {
+		if isBookView(&vs) {
+			content, path, err := renderCreateTemplate(vs.cfg.Template, vs.id, m.baseDir, vars)
+			if err != nil {
+				m.status = fmt.Sprintf("Template error: %v", err)
+				return m, nil
+			}
+			if err := writeNewFile(path, content); err != nil {
+				m.status = fmt.Sprintf("Write error: %v", err)
+				return m, nil
+			}
+			m.status = fmt.Sprintf("Added book: %s", book.Title)
+			return m, m.loadData()
+		}
+	}
+
+	m.status = "No books view configured"
+	return m, nil
+}
+
+func isBookView(vs *viewState) bool {
+	if vs == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSuffix(vs.id, "s"), "book") ||
+		strings.Contains(strings.ToLower(vs.cfg.Name), "book")
+}
+
+func fuzzyMatch(query, value string) bool {
+	query = strings.ToLower(strings.TrimSpace(query))
+	value = strings.ToLower(value)
+	if query == "" {
+		return true
+	}
+	if strings.Contains(value, query) {
+		return true
+	}
+
+	j := 0
+	for i := 0; i < len(value) && j < len(query); i++ {
+		if value[i] == query[j] {
+			j++
+		}
+	}
+	return j == len(query)
 }
 
 func (m *Model) deleteSelected() {
@@ -1226,6 +1621,12 @@ func (m Model) contentHeight() int {
 func (m Model) loadData() tea.Cmd {
 	c := m.cache
 	return func() tea.Msg {
+		if c == nil {
+			return dataLoadedMsg{allItems: nil}
+		}
+		if err := c.Sync(); err != nil {
+			return dataLoadedMsg{allItems: nil}
+		}
 		items, err := c.All()
 		if err != nil {
 			return dataLoadedMsg{allItems: nil}
@@ -1235,7 +1636,6 @@ func (m Model) loadData() tea.Cmd {
 }
 
 // --- Utility ---
-
 
 type tagCountEntry struct {
 	tag   string

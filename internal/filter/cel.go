@@ -48,6 +48,9 @@ func Compile(expr string) (*Program, error) {
 	if issues.Err() != nil {
 		return nil, fmt.Errorf("compiling expression %q: %w", expr, issues.Err())
 	}
+	if ast.OutputType() != cel.BoolType {
+		return nil, fmt.Errorf("expression %q must return a boolean, got %s", expr, ast.OutputType())
+	}
 
 	prg, err := env.Program(ast)
 	if err != nil {
@@ -91,7 +94,6 @@ func (p *Program) Eval(frontmatter map[string]interface{}) (bool, error) {
 
 	return result, nil
 }
-
 
 // Match is a convenience function that compiles and evaluates in one step.
 // Use Compile + Eval for repeated evaluations of the same expression.

@@ -270,8 +270,59 @@ Routes:
 | `/views/{viewId}/edit/{itemId}` | Edit raw markdown |
 | `/views/{viewId}/delete/{itemId}` | Delete item (POST) |
 | `POST /views/{viewId}/items/{itemId}/actions/{name}` | Execute an action on an item |
+| `GET /api/items/{id}` | Return an item as JSON with `frontmatter` and `body` |
+| `PATCH /api/items/{id}` | Replace an item's `frontmatter` and/or `body` |
+| `POST /api/query/ids` | Return sorted item IDs matching a CEL expression |
 | `POST /webhook/{source}` | Receive webhook |
 | `/books/import` | Import book from Goodreads URL |
+
+API endpoints return JSON. Error responses use `{"error":"..."}`.
+
+`GET /api/items/{id}` returns:
+
+```json
+{
+  "frontmatter": {
+    "id": "apibook",
+    "type": "book",
+    "title": "API Book"
+  },
+  "body": "Book body\n"
+}
+```
+
+`PATCH /api/items/{id}` accepts `frontmatter`, `body`, or both. Provided fields replace the complete stored value; omitted fields are preserved.
+
+```bash
+curl -s -X PATCH http://localhost:8293/api/items/apibook \
+  -H 'Content-Type: application/json' \
+  -d '{"frontmatter":{"id":"apibook","type":"book","title":"API Book"},"body":"Book body\n"}'
+```
+
+The response is the updated item:
+
+```json
+{
+  "frontmatter": {
+    "id": "apibook",
+    "type": "book",
+    "title": "API Book"
+  },
+  "body": "Book body\n"
+}
+```
+
+`POST /api/query/ids` accepts a plain CEL expression in the request body using the same environment as views: `type`, `tags`, and `fm`.
+
+```bash
+curl -s http://localhost:8293/api/query/ids \
+  -H 'Content-Type: text/plain' \
+  --data-binary 'type == "book" && "reading" in tags'
+```
+
+```json
+{"ids":["apibook"]}
+```
 
 ### LSP Server
 

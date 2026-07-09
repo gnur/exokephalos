@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -32,6 +34,7 @@ func setupTestServer(t *testing.T) (*httptest.Server, string) {
 		os.RemoveAll(tmpDir)
 		t.Fatalf("Failed to copy example-repo: %v", err)
 	}
+	writeTypedTestItems(t, tmpDir)
 
 	cfg, err := config.Load(tmpDir)
 	if err != nil {
@@ -57,7 +60,9 @@ func setupTestServer(t *testing.T) (*httptest.Server, string) {
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 
 	// API endpoints
-	mux.HandleFunc("GET /api/get/{id}", h.GetItemByID)
+	mux.HandleFunc("GET /api/items/{id}", h.GetItemByID)
+	mux.HandleFunc("PATCH /api/items/{id}", h.UpdateItemByID)
+	mux.HandleFunc("POST /api/query/ids", h.QueryIDsByCEL)
 
 	// Generic view routes
 	mux.HandleFunc("GET /views/{viewId}/stats", h.ViewStats)
@@ -90,6 +95,34 @@ func setupTestServer(t *testing.T) (*httptest.Server, string) {
 	})
 
 	return httptest.NewServer(h.TimingMiddleware(h.CSRFMiddleware(mux))), tmpDir
+}
+
+func writeTypedTestItems(t *testing.T, dir string) {
+	t.Helper()
+
+	fixtureDir := filepath.Join(dir, "note", "2026", "07")
+	if err := os.MkdirAll(fixtureDir, 0755); err != nil {
+		t.Fatalf("Failed to create typed fixture dir: %v", err)
+	}
+
+	items := map[string]string{
+		"api-alpha.md": "---\nid: apialpha\ntype: note\ntags: [api-test, todo]\ncreated: 2026-07-01T00:00:00Z\ntitle: API Alpha\n---\n\nAlpha body\n",
+		"api-beta.md":  "---\nid: apibeta\ntype: note\ntags: [api-test, done]\ncreated: 2026-07-02T00:00:00Z\ntitle: API Beta\n---\n\nBeta body\n",
+	}
+	for name, content := range items {
+		if err := os.WriteFile(filepath.Join(fixtureDir, name), []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to write typed fixture %s: %v", name, err)
+		}
+	}
+
+	bookDir := filepath.Join(dir, "book", "2026", "07")
+	if err := os.MkdirAll(bookDir, 0755); err != nil {
+		t.Fatalf("Failed to create typed book fixture dir: %v", err)
+	}
+	book := "---\nid: apibook\ntype: book\ntags: [reading]\ncreated: 2026-07-03T00:00:00Z\ntitle: API Book\naudiobookshelf_item_id: li_testbook\nprogress:\n  - timestamp: 2026-07-03T10:00:00Z\n    progress: 0.25\n---\n\nBook body\n"
+	if err := os.WriteFile(filepath.Join(bookDir, "api-book.md"), []byte(book), 0644); err != nil {
+		t.Fatalf("Failed to write typed book fixture: %v", err)
+	}
 }
 
 func TestRootRedirects(t *testing.T) {
@@ -477,7 +510,7 @@ func TestAPIGetItem(t *testing.T) {
 	}
 
 	// Call the new API endpoint
-	resp, err = http.Get(srv.URL + "/api/get/" + itemID)
+	resp, err = http.Get(srv.URL + "/api/items/" + itemID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -511,7 +544,7 @@ func TestAPIGetItem_NotFound(t *testing.T) {
 	defer srv.Close()
 	defer os.RemoveAll(tmpDir)
 
-	resp, err := http.Get(srv.URL + "/api/get/nonexistent-id-12345")
+	resp, err := http.Get(srv.URL + "/api/items/nonexistent-id-12345")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -529,6 +562,270 @@ func TestAPIGetItem_NotFound(t *testing.T) {
 	}
 }
 
+func TestAPIQueryIDsByCEL(t *testing.T) {
+	srv, tmpDir := setupTestServer(t)
+	defer srv.Close()
+	defer os.RemoveAll(tmpDir)
+
+	result := postQueryIDs(t, srv.URL, `type == "note" && "api-test" in tags`)
+
+	expected := []string{"apialpha", "apibeta"}
+	if !equalStrings(result.IDs, expected) {
+		t.Fatalf("expected ids %v, got %v", expected, result.IDs)
+	}
+	if !sort.StringsAreSorted(result.IDs) {
+		t.Fatalf("expected sorted ids, got %v", result.IDs)
+	}
+}
+
+func TestAPIQueryIDsByCEL_FrontmatterField(t *testing.T) {
+	srv, tmpDir := setupTestServer(t)
+	defer srv.Close()
+	defer os.RemoveAll(tmpDir)
+
+	result := postQueryIDs(t, srv.URL, `fm["title"] == "API Alpha"`)
+
+	expected := []string{"apialpha"}
+	if !equalStrings(result.IDs, expected) {
+		t.Fatalf("expected ids %v, got %v", expected, result.IDs)
+	}
+}
+
+func TestAPIQueryIDsByCEL_EmptyResult(t *testing.T) {
+	srv, tmpDir := setupTestServer(t)
+	defer srv.Close()
+	defer os.RemoveAll(tmpDir)
+
+	result := postQueryIDs(t, srv.URL, `type == "missing"`)
+
+	if len(result.IDs) != 0 {
+		t.Fatalf("expected no ids, got %v", result.IDs)
+	}
+}
+
+func TestAPIQueryIDsByCEL_BadRequests(t *testing.T) {
+	srv, tmpDir := setupTestServer(t)
+	defer srv.Close()
+	defer os.RemoveAll(tmpDir)
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "missing expr", body: ``},
+		{name: "empty expr", body: `   `},
+		{name: "invalid CEL", body: `not valid!!!`},
+		{name: "non-boolean CEL", body: `1 + 1`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := http.Post(srv.URL+"/api/query/ids", "text/plain", bytes.NewBufferString(tt.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusBadRequest {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("expected 400, got %d. Body: %s", resp.StatusCode, string(body))
+			}
+
+			var result map[string]string
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				t.Fatalf("invalid JSON response: %v", err)
+			}
+			if result["error"] == "" {
+				t.Fatal("expected error message")
+			}
+		})
+	}
+}
+
+func TestAPIUpdateItem_Frontmatter(t *testing.T) {
+	srv, tmpDir := setupTestServer(t)
+	defer srv.Close()
+	defer os.RemoveAll(tmpDir)
+
+	before := getAPIItem(t, srv.URL, "apibook")
+	beforeFM := before["frontmatter"].(map[string]interface{})
+	updatedFM := copyJSONMap(beforeFM)
+	progress := appendProgressEntry(updatedFM["progress"], "2026-07-06T12:34:56Z", 0.5)
+	updatedFM["progress"] = progress
+
+	updateItem(t, srv.URL, "apibook", map[string]interface{}{"frontmatter": updatedFM}, http.StatusOK)
+
+	item := getAPIItem(t, srv.URL, "apibook")
+	fm := item["frontmatter"].(map[string]interface{})
+	storedProgress := fm["progress"].([]interface{})
+	if len(storedProgress) != 2 {
+		t.Fatalf("expected 2 progress entries, got %d: %#v", len(storedProgress), storedProgress)
+	}
+
+	last := storedProgress[1].(map[string]interface{})
+	if last["timestamp"] != "2026-07-06T12:34:56Z" {
+		t.Fatalf("expected appended timestamp, got %#v", last["timestamp"])
+	}
+	if last["progress"] != 0.5 {
+		t.Fatalf("expected appended progress 0.5, got %#v", last["progress"])
+	}
+	if item["body"] != before["body"] {
+		t.Fatalf("expected body to be preserved, got %#v want %#v", item["body"], before["body"])
+	}
+}
+
+func TestAPIUpdateItem_Body(t *testing.T) {
+	srv, tmpDir := setupTestServer(t)
+	defer srv.Close()
+	defer os.RemoveAll(tmpDir)
+
+	before := getAPIItem(t, srv.URL, "apialpha")
+	updateItem(t, srv.URL, "apialpha", map[string]interface{}{"body": "Updated body\n"}, http.StatusOK)
+
+	item := getAPIItem(t, srv.URL, "apialpha")
+	if item["body"] != "Updated body\n" {
+		t.Fatalf("expected updated body, got %#v", item["body"])
+	}
+	if !mapsEqual(item["frontmatter"].(map[string]interface{}), before["frontmatter"].(map[string]interface{})) {
+		t.Fatal("expected frontmatter to be preserved")
+	}
+}
+
+func TestAPIUpdateItem_BadRequests(t *testing.T) {
+	srv, tmpDir := setupTestServer(t)
+	defer srv.Close()
+	defer os.RemoveAll(tmpDir)
+
+	tests := []struct {
+		name       string
+		id         string
+		body       string
+		wantStatus int
+	}{
+		{name: "malformed JSON", id: "apibook", body: `{"frontmatter":`, wantStatus: http.StatusBadRequest},
+		{name: "missing fields", id: "apibook", body: `{}`, wantStatus: http.StatusBadRequest},
+		{name: "unknown item", id: "missing", body: `{"body":"updated"}`, wantStatus: http.StatusNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			updateItemRaw(t, srv.URL, tt.id, tt.body, tt.wantStatus)
+		})
+	}
+}
+
+func postQueryIDs(t *testing.T, serverURL, expr string) handlers.QueryIDsResponse {
+	t.Helper()
+
+	resp, err := http.Post(serverURL+"/api/query/ids", "text/plain", strings.NewReader(expr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(body))
+	}
+
+	var result handlers.QueryIDsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("invalid JSON response: %v", err)
+	}
+	if result.IDs == nil {
+		t.Fatal("expected ids to be an array")
+	}
+	return result
+}
+
+func updateItem(t *testing.T, serverURL, id string, payload map[string]interface{}, wantStatus int) {
+	t.Helper()
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updateItemRaw(t, serverURL, id, string(body), wantStatus)
+}
+
+func updateItemRaw(t *testing.T, serverURL, id, body string, wantStatus int) {
+	t.Helper()
+
+	req, err := http.NewRequest(http.MethodPatch, serverURL+"/api/items/"+id, bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != wantStatus {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected %d, got %d. Body: %s", wantStatus, resp.StatusCode, string(body))
+	}
+}
+
+func getAPIItem(t *testing.T, serverURL, id string) map[string]interface{} {
+	t.Helper()
+
+	resp, err := http.Get(serverURL + "/api/items/" + id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(body))
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("invalid JSON response: %v", err)
+	}
+	return result
+}
+
+func copyJSONMap(in map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func appendProgressEntry(existing interface{}, timestamp string, progress float64) []interface{} {
+	entries, _ := existing.([]interface{})
+	out := append([]interface{}{}, entries...)
+	return append(out, map[string]interface{}{"timestamp": timestamp, "progress": progress})
+}
+
+func mapsEqual(a, b map[string]interface{}) bool {
+	aj, err := json.Marshal(a)
+	if err != nil {
+		return false
+	}
+	bj, err := json.Marshal(b)
+	if err != nil {
+		return false
+	}
+	return string(aj) == string(bj)
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestImportCLI(t *testing.T) {
 	// Create source files to import
 	sourceDir := t.TempDir()
@@ -543,7 +840,7 @@ func TestImportCLI(t *testing.T) {
 	// Run the CLI
 	cmd := exec.Command("go", "run", ".", "import", sourceDir, "note")
 	cmd.Env = append(os.Environ(), "EXO_DIR="+exoDir)
-	
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("command failed: %v\nOutput:\n%s", err, string(output))
@@ -663,7 +960,6 @@ This is a link to [[itema]] and a broken link to [[nonexistent]].`
 	// Assert broken link remains unrendered / kept as [[nonexistent]]
 	assertContains(t, html, `[[nonexistent]]`)
 }
-
 
 func assertContains(t *testing.T, body, substr string) {
 	t.Helper()

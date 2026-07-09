@@ -20,3 +20,25 @@ By default, the server listens locally at:
 - **Creation & Modification**: Edit items in markdown or trigger custom actions.
 - **Metadata Cards**: The full YAML frontmatter of any item is rendered under the details page.
 - **Reading Stats**: View stats graphs built with Chart.js.
+
+## API Routes
+
+The web server also exposes JSON API routes:
+
+| Route | Description |
+|-------|-------------|
+| `GET /api/items/{id}` | Return an item as JSON with `frontmatter` and `body` |
+| `PATCH /api/items/{id}` | Replace an item's `frontmatter` and/or `body` |
+| `POST /api/query/ids` | Return sorted item IDs matching a CEL expression |
+
+`PATCH /api/items/{id}` accepts `frontmatter`, `body`, or both. Provided fields replace the complete stored value; omitted fields are preserved.
+
+```json
+{"frontmatter":{"id":"apibook","type":"book","title":"API Book"}}
+```
+
+`POST /api/query/ids` accepts a plain CEL expression in the request body. The expression uses the same CEL environment as views: `type`, `tags`, and `fm`.
+
+```cel
+type == "book" && "reading" in tags
+```

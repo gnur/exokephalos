@@ -96,7 +96,9 @@ func runServer(cfg *config.Config, dir string, r *repo.Repo, c *cache.Cache) {
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
 
 	// --- API endpoints ---
-	mux.HandleFunc("GET /api/get/{id}", h.GetItemByID)
+	mux.HandleFunc("GET /api/items/{id}", h.GetItemByID)
+	mux.HandleFunc("PATCH /api/items/{id}", h.UpdateItemByID)
+	mux.HandleFunc("POST /api/query/ids", h.QueryIDsByCEL)
 
 	// --- Generic view routes ---
 	mux.HandleFunc("GET /views/{viewId}/stats", h.ViewStats)

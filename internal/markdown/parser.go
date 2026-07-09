@@ -53,7 +53,7 @@ func WriteFrontmatter(path string, fm map[string]interface{}, body string) error
 	if err := enc.Encode(fm); err != nil {
 		return err
 	}
-	buf.WriteString("---\n\n")
+	buf.WriteString("---\n")
 	buf.WriteString(body)
 	return os.WriteFile(path, buf.Bytes(), 0644)
 }

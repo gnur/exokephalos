@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -22,7 +23,9 @@ import (
 	"github.com/gnur/exokephalos/internal/goodreads"
 	"github.com/gnur/exokephalos/internal/hardcover"
 	"github.com/gnur/exokephalos/internal/markdown"
+	"github.com/gnur/exokephalos/internal/repo"
 	"github.com/gnur/exokephalos/internal/scanner"
+	"github.com/gnur/exokephalos/internal/urlimport"
 	"gopkg.in/yaml.v3"
 )
 
@@ -39,6 +42,7 @@ const (
 	modeImportURL
 	modeHardcoverQuery
 	modeHardcoverResults
+	modeURLImport
 )
 
 // Pane focus for views with tags enabled
@@ -97,6 +101,7 @@ type Model struct {
 	promptInput     textinput.Model
 	importInput     textinput.Model
 	hardcoverInput  textinput.Model
+	urlInput        textinput.Model
 	actionInput     textinput.Model
 	viewMenuInput   string
 
@@ -139,6 +144,7 @@ const (
 	actionEntryConfigured actionEntryKind = iota
 	actionEntryGoodreads
 	actionEntryHardcover
+	actionEntryURL
 )
 
 type actionEntry struct {
@@ -153,6 +159,11 @@ type viewShortcut struct {
 	Key   string
 	Label string
 	Index int
+}
+
+type urlImportMsg struct {
+	result urlimport.Result
+	err    error
 }
 
 func New(cfg *config.Config, baseDir string, c *cache.Cache) Model {
@@ -174,6 +185,10 @@ func New(cfg *config.Config, baseDir string, c *cache.Cache) Model {
 	hardcoverTi := textinput.New()
 	hardcoverTi.Prompt = "Hardcover query: "
 	hardcoverTi.CharLimit = 512
+
+	urlTi := textinput.New()
+	urlTi.Prompt = "URL: "
+	urlTi.CharLimit = 2048
 
 	actionTi := textinput.New()
 	actionTi.Prompt = ":"
@@ -243,6 +258,7 @@ func New(cfg *config.Config, baseDir string, c *cache.Cache) Model {
 		promptInput:     promptTi,
 		importInput:     importTi,
 		hardcoverInput:  hardcoverTi,
+		urlInput:        urlTi,
 		actionInput:     actionTi,
 		actions:         actions,
 		mode:            modeNormal,
@@ -295,6 +311,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = ""
 		return m, nil
 
+	case urlImportMsg:
+		m.mode = modeNormal
+		m.urlInput.Blur()
+		if msg.err != nil {
+			m.status = fmt.Sprintf("URL import error: %v", msg.err)
+			return m, nil
+		}
+		m.status = fmt.Sprintf("Imported URL: %s", msg.result.Frontmatter["title"])
+		return m, m.loadData()
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -323,6 +349,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleHardcoverQueryKey(msg)
 	case modeHardcoverResults:
 		return m.handleHardcoverResultsKey(msg)
+	case modeURLImport:
+		return m.handleURLImportKey(msg)
 	case modeSearchTags:
 		return m.handleSearchTagsKey(msg)
 	case modeSearchItems:
@@ -574,6 +602,12 @@ func (m Model) actionEntries() []actionEntry {
 		Description: "Search Hardcover",
 		Enabled:     true,
 	})
+	entries = append(entries, actionEntry{
+		Kind:        actionEntryURL,
+		Name:        "url-to-note",
+		Description: "Import URL as note",
+		Enabled:     true,
+	})
 	sort.SliceStable(entries, func(i, j int) bool {
 		if entries[i].Enabled != entries[j].Enabled {
 			return entries[i].Enabled
@@ -622,6 +656,11 @@ func (m Model) executeActionEntry(entry actionEntry) (tea.Model, tea.Cmd) {
 		m.mode = modeHardcoverQuery
 		m.hardcoverInput.SetValue("")
 		m.hardcoverInput.Focus()
+		return m, textinput.Blink
+	case actionEntryURL:
+		m.mode = modeURLImport
+		m.urlInput.SetValue("")
+		m.urlInput.Focus()
 		return m, textinput.Blink
 	default:
 		m.status = "Action not found"
@@ -751,6 +790,31 @@ func (m Model) handleImportKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		var cmd tea.Cmd
 		m.importInput, cmd = m.importInput.Update(msg)
+		return m, cmd
+	}
+}
+
+func (m Model) handleURLImportKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		rawURL := strings.TrimSpace(m.urlInput.Value())
+		if rawURL == "" {
+			m.mode = modeNormal
+			m.urlInput.Blur()
+			return m, nil
+		}
+		m.mode = modeNormal
+		m.urlInput.Blur()
+		m.status = "Importing URL..."
+		return m, importURLCmd(m.baseDir, m.cache, rawURL)
+	case "esc":
+		m.mode = modeNormal
+		m.urlInput.Blur()
+		m.urlInput.SetValue("")
+		return m, nil
+	default:
+		var cmd tea.Cmd
+		m.urlInput, cmd = m.urlInput.Update(msg)
 		return m, cmd
 	}
 }
@@ -1392,6 +1456,14 @@ func searchHardcoverCmd(query string) tea.Cmd {
 		client := hardcover.NewClient(os.Getenv("HARDCOVER_TOKEN"))
 		results, err := client.Search(query, 5)
 		return hardcoverSearchMsg{results: results, err: err}
+	}
+}
+
+func importURLCmd(baseDir string, c *cache.Cache, rawURL string) tea.Cmd {
+	return func() tea.Msg {
+		r := repo.New(baseDir, c)
+		result, err := urlimport.Import(context.Background(), r, baseDir, rawURL)
+		return urlImportMsg{result: result, err: err}
 	}
 }
 

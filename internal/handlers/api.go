@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gnur/exokephalos/internal/filter"
+	"github.com/gnur/exokephalos/internal/urlimport"
 )
 
 // APIItem is the JSON representation of an item.
@@ -19,6 +20,10 @@ type APIItem struct {
 type UpdateItemRequest struct {
 	Frontmatter *map[string]interface{} `json:"frontmatter"`
 	Body        *string                 `json:"body"`
+}
+
+type CreateItemRequest struct {
+	URL string `json:"url"`
 }
 
 type QueryIDsResponse struct {
@@ -49,6 +54,40 @@ func (h *Handlers) GetItemByID(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(targetItem); err != nil {
+		http.Error(w, `{"error": "encoding error"}`, http.StatusInternalServerError)
+	}
+}
+
+// CreateItem creates a new item from a supported source.
+// POST /api/items
+func (h *Handlers) CreateItem(w http.ResponseWriter, r *http.Request) {
+	var req CreateItemRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.URL) == "" {
+		writeAPIError(w, "missing url", http.StatusBadRequest)
+		return
+	}
+
+	result, err := urlimport.Import(r.Context(), h.Repo, h.BaseDir, req.URL)
+	if err != nil {
+		writeAPIError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	if err := json.NewEncoder(w).Encode(struct {
+		ID          string                 `json:"id"`
+		Frontmatter map[string]interface{} `json:"frontmatter"`
+		Body        string                 `json:"body"`
+	}{
+		ID:          result.ID,
+		Frontmatter: result.Frontmatter,
+		Body:        result.Body,
+	}); err != nil {
 		http.Error(w, `{"error": "encoding error"}`, http.StatusInternalServerError)
 	}
 }

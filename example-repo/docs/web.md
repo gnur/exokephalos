@@ -17,7 +17,7 @@ By default, the server listens locally at:
 
 - **Dynamic Navigation**: Tabbed views and responsive layout loaded natively.
 - **boosted page loads**: Powered by htmx for snappy navigation.
-- **Creation & Modification**: Edit items in markdown or trigger custom actions.
+- **Creation & Modification**: Edit items in markdown, import URLs as notes, or trigger custom actions.
 - **Metadata Cards**: The full YAML frontmatter of any item is rendered under the details page.
 - **Reading Stats**: View stats graphs built with Chart.js.
 
@@ -27,9 +27,16 @@ The web server also exposes JSON API routes:
 
 | Route | Description |
 |-------|-------------|
+| `POST /api/items` | Create a note from a URL |
 | `GET /api/items/{id}` | Return an item as JSON with `frontmatter` and `body` |
 | `PATCH /api/items/{id}` | Replace an item's `frontmatter` and/or `body` |
 | `POST /api/query/ids` | Return sorted item IDs matching a CEL expression |
+
+`POST /api/items` accepts a JSON object with a `url` field. The server fetches the page, extracts readable article HTML, converts it to markdown, and stores it as a `type: note` item.
+
+```json
+{"url":"https://example.com/article"}
+```
 
 `PATCH /api/items/{id}` accepts `frontmatter`, `body`, or both. Provided fields replace the complete stored value; omitted fields are preserved.
 

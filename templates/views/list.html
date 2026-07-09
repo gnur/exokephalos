@@ -38,7 +38,10 @@
                 </div>
                 {{end}}
             </div>
-            <a href="/views/{{.ViewID}}/new" class="bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded text-sm font-medium">+ New</a>
+            <div class="flex gap-2">
+                <a href="/import-url" class="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded text-sm font-medium">Import URL</a>
+                <a href="/views/{{.ViewID}}/new" class="bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded text-sm font-medium">+ New</a>
+            </div>
         </div>
 
         {{if .ActiveTags}}

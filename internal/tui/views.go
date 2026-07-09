@@ -310,6 +310,9 @@ func (m Model) renderFooter() string {
 	if m.mode == modeHardcoverQuery {
 		return searchPromptStyle.Render(m.hardcoverInput.View())
 	}
+	if m.mode == modeURLImport {
+		return searchPromptStyle.Render(m.urlInput.View())
+	}
 	if m.mode == modeActionPicker {
 		return searchPromptStyle.Render(m.actionInput.View())
 	}

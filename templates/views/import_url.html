@@ -1,0 +1,24 @@
+{{define "content"}}
+<div class="max-w-2xl mx-auto">
+    <a href="/views/all" class="text-blue-400 hover:underline text-sm">&larr; Back to all</a>
+    <h1 class="text-2xl font-bold mt-4 mb-6">Import URL</h1>
+
+    {{if .Error}}
+    <div class="bg-red-900/40 border border-red-700 text-red-200 rounded px-3 py-2 text-sm mb-4">{{.Error}}</div>
+    {{end}}
+
+    <form method="POST" action="/import-url" class="space-y-4">
+        <div>
+            <label for="url" class="block text-sm font-medium text-gray-300 mb-1">URL</label>
+            <input type="url" id="url" name="url" value="{{.URL}}" required
+                   class="w-full border border-gray-600 bg-gray-800 text-gray-100 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                   placeholder="https://example.com/article">
+        </div>
+
+        <div class="flex gap-2 pt-2">
+            <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded font-medium">Import</button>
+            <a href="/views/all" class="bg-gray-700 hover:bg-gray-600 text-gray-200 px-4 py-2 rounded font-medium">Cancel</a>
+        </div>
+    </form>
+</div>
+{{end}}

@@ -61,10 +61,13 @@ func setupTestServer(t *testing.T) (*httptest.Server, string) {
 
 	// API endpoints
 	mux.HandleFunc("GET /api/items/{id}", h.GetItemByID)
+	mux.HandleFunc("POST /api/items", h.CreateItem)
 	mux.HandleFunc("PATCH /api/items/{id}", h.UpdateItemByID)
 	mux.HandleFunc("POST /api/query/ids", h.QueryIDsByCEL)
 
 	// Generic view routes
+	mux.HandleFunc("GET /import-url", h.ImportURL)
+	mux.HandleFunc("POST /import-url", h.ImportURL)
 	mux.HandleFunc("GET /views/{viewId}/stats", h.ViewStats)
 	mux.HandleFunc("GET /views/{viewId}/new", h.ViewNew)
 	mux.HandleFunc("POST /views/{viewId}/new", h.ViewNew)
@@ -559,6 +562,44 @@ func TestAPIGetItem_NotFound(t *testing.T) {
 	}
 	if result["error"] != "item not found" {
 		t.Errorf("expected error message 'item not found', got %s", result["error"])
+	}
+}
+
+func TestAPICreateItem_BadRequests(t *testing.T) {
+	srv, tmpDir := setupTestServer(t)
+	defer srv.Close()
+	defer os.RemoveAll(tmpDir)
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "malformed JSON", body: `{"url":`},
+		{name: "missing URL", body: `{}`},
+		{name: "unsupported scheme", body: `{"url":"file:///etc/passwd"}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := http.Post(srv.URL+"/api/items", "application/json", strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusBadRequest {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("expected 400, got %d. Body: %s", resp.StatusCode, string(body))
+			}
+
+			var result map[string]string
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				t.Fatalf("invalid JSON response: %v", err)
+			}
+			if result["error"] == "" {
+				t.Fatal("expected error message")
+			}
+		})
 	}
 }
 

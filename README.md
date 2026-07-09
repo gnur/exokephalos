@@ -255,7 +255,7 @@ Run `exo` to launch the terminal UI. Keybindings:
 | `:` | Open fuzzy action picker |
 | `q` | Quit |
 
-The action picker includes configured actions plus built-ins like Goodreads import and Hardcover search. Actions whose CEL filter does not match are grayed out; selecting one shows the required CEL expression.
+The action picker includes configured actions plus built-ins like Goodreads import, Hardcover search, and URL-to-note import. Actions whose CEL filter does not match are grayed out; selecting one shows the required CEL expression.
 
 An `All` view is always available with key `0`; it shows every item regardless of type.
 
@@ -274,13 +274,22 @@ Routes:
 | `/views/{viewId}/edit/{itemId}` | Edit raw markdown |
 | `/views/{viewId}/delete/{itemId}` | Delete item (POST) |
 | `POST /views/{viewId}/items/{itemId}/actions/{name}` | Execute an action on an item |
+| `/import-url` | Import a web page as a note |
+| `POST /api/items` | Create a note from a URL |
 | `GET /api/items/{id}` | Return an item as JSON with `frontmatter` and `body` |
 | `PATCH /api/items/{id}` | Replace an item's `frontmatter` and/or `body` |
 | `POST /api/query/ids` | Return sorted item IDs matching a CEL expression |
 | `POST /webhook/{source}` | Receive webhook |
-| `/books/import` | Import book from Goodreads URL |
 
 API endpoints return JSON. Error responses use `{"error":"..."}`.
+
+`POST /api/items` creates a note from a URL:
+
+```bash
+curl -s -X POST http://localhost:8293/api/items \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.com/article"}'
+```
 
 `GET /api/items/{id}` returns:
 

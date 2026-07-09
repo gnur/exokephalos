@@ -97,10 +97,13 @@ func runServer(cfg *config.Config, dir string, r *repo.Repo, c *cache.Cache) {
 
 	// --- API endpoints ---
 	mux.HandleFunc("GET /api/items/{id}", h.GetItemByID)
+	mux.HandleFunc("POST /api/items", h.CreateItem)
 	mux.HandleFunc("PATCH /api/items/{id}", h.UpdateItemByID)
 	mux.HandleFunc("POST /api/query/ids", h.QueryIDsByCEL)
 
 	// --- Generic view routes ---
+	mux.HandleFunc("GET /import-url", h.ImportURL)
+	mux.HandleFunc("POST /import-url", h.ImportURL)
 	mux.HandleFunc("GET /views/{viewId}/stats", h.ViewStats)
 	mux.HandleFunc("GET /views/{viewId}/new", h.ViewNew)
 	mux.HandleFunc("POST /views/{viewId}/new", h.ViewNew)

@@ -28,6 +28,6 @@ The TUI uses intuitive, single-key commands:
 | `Esc` | Clear search or close modals |
 | `q` / `Ctrl + C` | Exit the TUI |
 
-The action picker includes configured actions plus built-ins like Goodreads import and Hardcover search. Actions whose CEL filter does not match are grayed out; selecting one shows the required CEL expression.
+The action picker includes configured actions plus built-ins like Goodreads import, Hardcover search, and URL-to-note import. Select `url-to-note`, paste a web page URL, and exo will extract the readable HTML, convert it to markdown, and create a `type: note` item. Actions whose CEL filter does not match are grayed out; selecting one shows the required CEL expression.
 
 An `All` view is always available with key `0`; it shows every item regardless of type.

@@ -22,7 +22,6 @@ import (
 	"github.com/gnur/exokephalos/internal/filter"
 	"github.com/gnur/exokephalos/internal/goodreads"
 	"github.com/gnur/exokephalos/internal/hardcover"
-	"github.com/gnur/exokephalos/internal/markdown"
 	"github.com/gnur/exokephalos/internal/repo"
 	"github.com/gnur/exokephalos/internal/scanner"
 	"github.com/gnur/exokephalos/internal/urlimport"
@@ -1280,13 +1279,26 @@ func (m *Model) sortViewItems(vs *viewState) {
 	desc := vs.cfg.SortOrder == "desc"
 
 	sort.SliceStable(vs.items, func(i, j int) bool {
-		vi := markdown.FMString(vs.items[i].Frontmatter, sortField)
-		vj := markdown.FMString(vs.items[j].Frontmatter, sortField)
-		if desc {
-			return vi > vj
-		}
-		return vi < vj
+		return itemLess(vs.items[i], vs.items[j], sortField, desc)
 	})
+}
+
+func itemLess(a, b scanner.Item, field string, desc bool) bool {
+	av := a.SortValue(field)
+	bv := b.SortValue(field)
+	if av != bv {
+		if desc {
+			return av > bv
+		}
+		return av < bv
+	}
+
+	aid := a.SortID()
+	bid := b.SortID()
+	if aid != bid {
+		return aid < bid
+	}
+	return a.Path < b.Path
 }
 
 func (m *Model) applySubviewFilter(vs *viewState) {

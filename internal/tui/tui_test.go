@@ -458,6 +458,31 @@ func TestViewMenuAcceptsMultiLetterShortcut(t *testing.T) {
 	}
 }
 
+func TestSortViewItemsUsesIDAsDateTieBreaker(t *testing.T) {
+	model := Model{}
+	vs := viewState{
+		cfg: config.ViewConfig{
+			SortField: "created",
+			SortOrder: "desc",
+		},
+		items: []scanner.Item{
+			{Path: "z.md", Frontmatter: map[string]interface{}{"created": "2026-07-08", "id": "zeta"}},
+			{Path: "b.md", Frontmatter: map[string]interface{}{"created": "2026-07-09", "id": "beta"}},
+			{Path: "a.md", Frontmatter: map[string]interface{}{"created": "2026-07-09", "id": "alpha"}},
+		},
+	}
+
+	model.sortViewItems(&vs)
+
+	got := []string{vs.items[0].SortID(), vs.items[1].SortID(), vs.items[2].SortID()}
+	want := []string{"alpha", "beta", "zeta"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("order = %v, want %v", got, want)
+		}
+	}
+}
+
 func mustCompileAction(t *testing.T, name string, cfg config.ActionConfig) *action.Action {
 	t.Helper()
 	act, err := action.Compile(name, cfg)

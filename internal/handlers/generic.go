@@ -391,16 +391,29 @@ func itemHasAllTags(item scanner.Item, tags []string) bool {
 }
 
 func sortItems(items []scanner.Item, field, order string) {
-	sort.Slice(items, func(i, j int) bool {
-		vi := markdown.FMString(items[i].Frontmatter, field)
-		vj := markdown.FMString(items[j].Frontmatter, field)
-		if order == "asc" {
-			return vi < vj
-		}
-		return vi > vj // desc
+	desc := order == "desc"
+	sort.SliceStable(items, func(i, j int) bool {
+		return itemLess(items[i], items[j], field, desc)
 	})
 }
 
+func itemLess(a, b scanner.Item, field string, desc bool) bool {
+	av := a.SortValue(field)
+	bv := b.SortValue(field)
+	if av != bv {
+		if desc {
+			return av > bv
+		}
+		return av < bv
+	}
+
+	aid := a.SortID()
+	bid := b.SortID()
+	if aid != bid {
+		return aid < bid
+	}
+	return a.Path < b.Path
+}
 
 type TagCount struct {
 	Tag   string
@@ -567,7 +580,6 @@ func renderWebTemplate(name, tmplStr string, vars map[string]string) (string, er
 	}
 	return buf.String(), nil
 }
-
 
 // OrderedView re-export for templates.
 type OrderedView = config.OrderedView

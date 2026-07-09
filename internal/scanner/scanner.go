@@ -12,10 +12,10 @@ import (
 // Item represents a single markdown file with parsed frontmatter.
 type Item struct {
 	Path        string
-	Type        string                 // extracted from frontmatter "type"
-	Tags        []string               // extracted from frontmatter "tags"
-	ID          string                 // extracted from frontmatter "id"
-	Created     time.Time              // normalized from frontmatter "created"
+	Type        string    // extracted from frontmatter "type"
+	Tags        []string  // extracted from frontmatter "tags"
+	ID          string    // extracted from frontmatter "id"
+	Created     time.Time // normalized from frontmatter "created"
 	Frontmatter map[string]interface{}
 	Body        string
 	ModTime     time.Time
@@ -189,4 +189,20 @@ func (item *Item) Year(field string) string {
 	default:
 		return ""
 	}
+}
+
+// SortValue returns a frontmatter field as a string suitable for ordering.
+func (item *Item) SortValue(field string) string {
+	return markdown.FMString(item.Frontmatter, field)
+}
+
+// SortID returns a stable item identifier for tie-breaking.
+func (item *Item) SortID() string {
+	if item.ID != "" {
+		return item.ID
+	}
+	if id := markdown.FMString(item.Frontmatter, "id"); id != "" {
+		return id
+	}
+	return strings.TrimSuffix(filepath.Base(item.Path), ".md")
 }

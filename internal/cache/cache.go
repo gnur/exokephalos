@@ -1,6 +1,10 @@
 package cache
 
 import (
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log"
@@ -10,201 +14,123 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/gnur/exokephalos/internal/id"
 	"github.com/gnur/exokephalos/internal/markdown"
 	"github.com/gnur/exokephalos/internal/scanner"
+	_ "modernc.org/sqlite"
 )
 
-
-// Cache provides an in-memory cache of all markdown files with fsnotify-based live updates.
-// Files without a "type" field in frontmatter are ignored.
-// Missing id, created, or tags fields are auto-populated and written back to disk.
-type Cache struct {
-	mu      sync.RWMutex
-	items   map[string]*scanner.Item // key = relative path
-	byType  map[string][]string      // type value → []relPath
-	byTag   map[string][]string      // tag value → []relPath
-	byID    map[string]string        // id (lowercase) → relPath
-	baseDir string
-	watcher *fsnotify.Watcher
-	done    chan struct{}
+// OutboxEntry is a local sync history row. Entries are retained after a
+// successful push so the TUI can show both pending work and recent history.
+type OutboxEntry struct {
+	ID            int64
+	Op            string
+	TargetKind    string
+	TargetID      string
+	Path          string
+	Status        string
+	Attempts      int
+	LastError     string
+	CreatedAt     time.Time
+	LastAttemptAt time.Time
+	Payload       string
 }
 
-// New creates a new in-memory Cache. It scans all .md files in baseDir,
-// auto-populates missing frontmatter fields, builds indexes, and starts
-// a background fsnotify watcher for live updates.
+// Cache is a SQLite-backed cache of local markdown files and sync state.
+type Cache struct {
+	mu      sync.Mutex
+	db      *sql.DB
+	baseDir string
+}
+
+// New creates a SQLite-backed cache in baseDir/.exo/cache.sqlite and scans the
+// local filesystem into it. Files without a "type" field are ignored.
 func New(baseDir string) (*Cache, error) {
-	// Ensure baseDir/.exo/cache exists
-	cacheDir := filepath.Join(baseDir, ".exo", "cache")
+	cacheDir := filepath.Join(baseDir, ".exo")
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		return nil, fmt.Errorf("creating cache directory: %w", err)
+		return nil, fmt.Errorf("creating .exo directory: %w", err)
 	}
 
-	watcher, err := fsnotify.NewWatcher()
+	db, err := sql.Open("sqlite", filepath.Join(cacheDir, "cache.sqlite"))
 	if err != nil {
-		return nil, fmt.Errorf("creating watcher: %w", err)
+		return nil, fmt.Errorf("opening cache sqlite: %w", err)
 	}
-
-	c := &Cache{
-		items:   make(map[string]*scanner.Item),
-		byType:  make(map[string][]string),
-		byTag:   make(map[string][]string),
-		byID:    make(map[string]string),
-		baseDir: baseDir,
-		watcher: watcher,
-		done:    make(chan struct{}),
+	c := &Cache{db: db, baseDir: baseDir}
+	if err := c.migrate(); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
-
-	if err := c.scan(); err != nil {
-		_ = watcher.Close()
-		return nil, fmt.Errorf("initial scan: %w", err)
+	if err := c.Sync(); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
-
-	go c.watchLoop()
-
 	return c, nil
 }
 
-// Close stops the watcher.
 func (c *Cache) Close() error {
-	close(c.done)
-	return c.watcher.Close()
-}
-
-// Sync performs a full re-scan from disk and rebuilds all indexes.
-func (c *Cache) Sync() error {
-	return c.scan()
-}
-
-// All returns a snapshot of all cached items (with body).
-func (c *Cache) All() ([]scanner.Item, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	items := make([]scanner.Item, 0, len(c.items))
-	for _, item := range c.items {
-		items = append(items, *item)
-	}
-	return items, nil
-}
-
-// GetByPrefix returns all items whose relative path starts with prefix.
-func (c *Cache) GetByPrefix(prefix string) ([]scanner.Item, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	var items []scanner.Item
-	for relPath, item := range c.items {
-		if strings.HasPrefix(relPath, prefix) {
-			items = append(items, *item)
-		}
-	}
-	return items, nil
-}
-
-// Get returns a single item by its relative path.
-func (c *Cache) Get(relPath string) (*scanner.Item, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	item, ok := c.items[relPath]
-	if !ok {
-		return nil, fmt.Errorf("not found: %s", relPath)
-	}
-	cp := *item
-	return &cp, nil
-}
-
-// GetByID searches the cache for an item by its ID (case-insensitive).
-func (c *Cache) GetByID(id string) (*scanner.Item, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	relPath, ok := c.byID[id]
-	if !ok {
-		return nil, fmt.Errorf("id not found: %s", id)
-	}
-	item, ok := c.items[relPath]
-	if !ok {
-		return nil, fmt.Errorf("id not found: %s", id)
-	}
-	cp := *item
-	return &cp, nil
-}
-
-// GetByType returns all items matching any of the given type values.
-func (c *Cache) GetByType(types ...string) ([]scanner.Item, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	var items []scanner.Item
-	for _, t := range types {
-		for _, relPath := range c.byType[t] {
-			if item, ok := c.items[relPath]; ok {
-				items = append(items, *item)
-			}
-		}
-	}
-	return items, nil
-}
-
-// GetByTag returns all items that have the given tag.
-func (c *Cache) GetByTag(tag string) ([]scanner.Item, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	var items []scanner.Item
-	for _, relPath := range c.byTag[tag] {
-		if item, ok := c.items[relPath]; ok {
-			items = append(items, *item)
-		}
-	}
-	return items, nil
-}
-
-// NotifyWrite re-reads a file from disk and updates the cache.
-func (c *Cache) NotifyWrite(absPath string) error {
-	if filepath.Ext(absPath) != ".md" {
+	if c == nil || c.db == nil {
 		return nil
 	}
-	relPath, err := filepath.Rel(c.baseDir, absPath)
-	if err != nil {
-		return err
-	}
-	return c.indexFile(absPath, relPath)
+	return c.db.Close()
 }
 
-// NotifyDelete removes a file from the cache.
-func (c *Cache) NotifyDelete(absPath string) error {
-	if filepath.Ext(absPath) != ".md" {
-		return nil
-	}
-	relPath, err := filepath.Rel(c.baseDir, absPath)
-	if err != nil {
-		return err
-	}
+func (c *Cache) DB() *sql.DB {
+	return c.db
+}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.removeFromIndexes(relPath)
-	delete(c.items, relPath)
+func (c *Cache) migrate() error {
+	stmts := []string{
+		`PRAGMA journal_mode = WAL`,
+		`CREATE TABLE IF NOT EXISTS items (
+			id TEXT PRIMARY KEY,
+			path TEXT NOT NULL UNIQUE,
+			frontmatter TEXT NOT NULL,
+			body TEXT NOT NULL,
+			type TEXT NOT NULL,
+			tags TEXT NOT NULL,
+			created TEXT NOT NULL,
+			mod_time INTEGER NOT NULL,
+			content_hash TEXT NOT NULL,
+			deleted_at TEXT NOT NULL DEFAULT '',
+			server_revision INTEGER NOT NULL DEFAULT 0,
+			sync_state TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_items_path ON items(path)`,
+		`CREATE INDEX IF NOT EXISTS idx_items_type ON items(type)`,
+		`CREATE TABLE IF NOT EXISTS outbox (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			op TEXT NOT NULL,
+			target_kind TEXT NOT NULL,
+			target_id TEXT NOT NULL,
+			path TEXT NOT NULL,
+			payload TEXT NOT NULL,
+			status TEXT NOT NULL,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			last_attempt_at TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status, id)`,
+		`CREATE TABLE IF NOT EXISTS meta (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := c.db.Exec(stmt); err != nil {
+			return fmt.Errorf("cache migration: %w", err)
+		}
+	}
 	return nil
 }
 
-// --- Internal ---
-
-// scan walks the filesystem, indexes all .md files, and rebuilds the cache.
-func (c *Cache) scan() error {
+// Sync scans markdown files, updates SQLite, and tombstones rows whose files
+// disappeared. It also performs the existing legacy ID migration.
+func (c *Cache) Sync() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	newItems := make(map[string]*scanner.Item)
-	newByType := make(map[string][]string)
-	newByTag := make(map[string][]string)
-	newByID := make(map[string]string)
-
+	seen := make(map[string]bool)
 	type legacyItem struct {
 		absPath string
 		relPath string
@@ -216,188 +142,379 @@ func (c *Cache) scan() error {
 		if err != nil {
 			return nil
 		}
-
 		if d.IsDir() {
 			name := d.Name()
 			if strings.HasPrefix(name, ".") || scanner.SkipDirs[name] {
 				return filepath.SkipDir
 			}
-			if watchErr := c.watcher.Add(path); watchErr != nil {
-				log.Printf("cache: failed to watch %s: %v", path, watchErr)
-			}
 			return nil
 		}
-
 		if filepath.Ext(path) != ".md" {
 			return nil
 		}
-
 		relPath, err := filepath.Rel(c.baseDir, path)
 		if err != nil {
 			return nil
 		}
-
-		item, err := c.readAndPopulate(path, relPath)
+		item, contentHash, err := c.readAndPopulate(path, relPath)
 		if err != nil || item == nil {
-			return nil // skip files without type or with errors
+			return nil
 		}
-
-		// Check if ID is in legacy 9-character format
 		if item.ID != "" && len(item.ID) == 9 {
-			legacyItems = append(legacyItems, legacyItem{
-				absPath: path,
-				relPath: relPath,
-				item:    item,
-			})
-		} else {
-			newItems[relPath] = item
+			legacyItems = append(legacyItems, legacyItem{absPath: path, relPath: relPath, item: item})
+			return nil
 		}
-
+		seen[relPath] = true
+		if c.isSyncStartedLocked() && c.itemChangedLocked(item.ID, contentHash) {
+			_ = c.enqueueItemLocked("upsert_item", item, relPath)
+		}
+		_ = c.upsertItem(item, contentHash, "")
 		return nil
 	})
-
 	if err != nil {
 		return err
 	}
 
-	// Migrate and move legacy items
 	for _, li := range legacyItems {
-		item := li.item
-		oldAbsPath := li.absPath
-
-		// 1. Generate new 7-char lowercase base32 ID based on the creation timestamp
-		newID := id.GenerateIDFromTime(item.Created)
-		item.ID = newID
-		item.Frontmatter["id"] = newID
-
-		// 2. Resolve title for slugified filename
-		titleVal := markdown.FMString(item.Frontmatter, "title")
-		if titleVal == "" {
-			oldFilename := filepath.Base(oldAbsPath)
-			oldBase := strings.TrimSuffix(oldFilename, ".md")
-			if len(oldBase) > 10 && oldBase[9] == '-' {
-				titleVal = oldBase[10:]
-			}
-		}
-
-		slug := ""
-		if titleVal != "" {
-			slug = markdown.Slugify(titleVal)
-		}
-
-		var newFilename string
-		if slug != "" {
-			newFilename = newID + "-" + slug + ".md"
-		} else {
-			newFilename = newID + ".md"
-		}
-
-		newDestDir := filepath.Join(c.baseDir, newID[:3])
-		newAbsPath := filepath.Clean(filepath.Join(newDestDir, newFilename))
-
-		// 3. Create destination directory if needed
-		if err := os.MkdirAll(newDestDir, 0755); err != nil {
-			log.Printf("cache: failed to create directory %s: %v", newDestDir, err)
-			// fallback: rewrite on old path with new ID
-			if err := markdown.WriteFrontmatter(oldAbsPath, item.Frontmatter, item.Body); err != nil {
-				log.Printf("cache: failed to rewrite %s with new ID: %v", oldAbsPath, err)
-			}
-			newItems[li.relPath] = item
-			continue
-		}
-
-		// 4. Write to new path
-		if err := markdown.WriteFrontmatter(newAbsPath, item.Frontmatter, item.Body); err != nil {
-			log.Printf("cache: failed to write migrated file to %s: %v", newAbsPath, err)
-			// fallback: rewrite on old path with new ID
-			if err := markdown.WriteFrontmatter(oldAbsPath, item.Frontmatter, item.Body); err != nil {
-				log.Printf("cache: failed to rewrite %s with new ID: %v", oldAbsPath, err)
-			}
-			newItems[li.relPath] = item
-			continue
-		}
-
-		// 5. Delete old file
-		if err := os.Remove(oldAbsPath); err != nil {
-			log.Printf("cache: failed to remove old file %s: %v", oldAbsPath, err)
-		}
-
-		// 6. Update item path metadata
-		item.Path = newAbsPath
-		newRelPath, err := filepath.Rel(c.baseDir, newAbsPath)
+		item, newPath, err := c.migrateLegacyItem(li.absPath, li.item)
 		if err != nil {
-			newRelPath = filepath.Join(newID[:3], newFilename)
+			log.Printf("cache: legacy migration failed for %s: %v", li.relPath, err)
+			continue
 		}
-
-		newItems[newRelPath] = item
-		log.Printf("cache: migrated legacy item %s -> %s (new ID: %s)", li.relPath, newRelPath, newID)
+		relPath, err := filepath.Rel(c.baseDir, newPath)
+		if err != nil {
+			continue
+		}
+		seen[relPath] = true
+		contentHash := hashItem(item.Frontmatter, item.Body)
+		_ = c.upsertItem(item, contentHash, "")
 	}
 
-	// Rebuild indexes
-	for relPath, item := range newItems {
-		newByType[item.Type] = append(newByType[item.Type], relPath)
-		for _, tag := range item.Tags {
-			newByTag[tag] = append(newByTag[tag], relPath)
+	rows, err := c.db.Query(`SELECT path FROM items WHERE deleted_at = ''`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var relPath string
+		if err := rows.Scan(&relPath); err != nil {
+			return err
 		}
-		if item.ID != "" {
-			newByID[item.ID] = relPath
+		if !seen[relPath] {
+			if c.isSyncStartedLocked() {
+				var idVal string
+				_ = c.db.QueryRow(`SELECT id FROM items WHERE path = ?`, relPath).Scan(&idVal)
+				payload := fmt.Sprintf(`{"op":"delete_item","target_kind":"item","id":%q,"path":%q}`, idVal, relPath)
+				_ = c.EnqueueOutbox("delete_item", "item", idVal, relPath, payload)
+			}
+			if _, err := c.db.Exec(`UPDATE items SET deleted_at = ? WHERE path = ?`, time.Now().UTC().Format(time.RFC3339Nano), relPath); err != nil {
+				return err
+			}
 		}
 	}
-
-	c.items = newItems
-	c.byType = newByType
-	c.byTag = newByTag
-	c.byID = newByID
-
-	return nil
+	return rows.Err()
 }
 
-// indexFile reads a single file and updates the cache + indexes.
-func (c *Cache) indexFile(absPath, relPath string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (c *Cache) All() ([]scanner.Item, error) {
+	_ = c.Sync()
+	return c.queryItems(`SELECT id, path, frontmatter, body, type, tags, created, mod_time FROM items WHERE deleted_at = ''`, nil)
+}
 
-	item, err := c.readAndPopulate(absPath, relPath)
+func (c *Cache) GetByPrefix(prefix string) ([]scanner.Item, error) {
+	_ = c.Sync()
+	return c.queryItems(`SELECT id, path, frontmatter, body, type, tags, created, mod_time FROM items WHERE deleted_at = '' AND path LIKE ?`, []interface{}{prefix + "%"})
+}
+
+func (c *Cache) Get(relPath string) (*scanner.Item, error) {
+	_ = c.Sync()
+	items, err := c.queryItems(`SELECT id, path, frontmatter, body, type, tags, created, mod_time FROM items WHERE deleted_at = '' AND path = ?`, []interface{}{relPath})
 	if err != nil {
-		return err
+		return nil, err
 	}
+	if len(items) == 0 {
+		return nil, fmt.Errorf("not found: %s", relPath)
+	}
+	return &items[0], nil
+}
 
-	if item == nil {
-		// No type field: remove from cache if it was there before.
-		c.removeFromIndexes(relPath)
-		delete(c.items, relPath)
+func (c *Cache) GetByID(id string) (*scanner.Item, error) {
+	_ = c.Sync()
+	items, err := c.queryItems(`SELECT id, path, frontmatter, body, type, tags, created, mod_time FROM items WHERE deleted_at = '' AND lower(id) = lower(?)`, []interface{}{id})
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, fmt.Errorf("id not found: %s", id)
+	}
+	return &items[0], nil
+}
+
+func (c *Cache) GetByType(types ...string) ([]scanner.Item, error) {
+	_ = c.Sync()
+	if len(types) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(types)), ",")
+	args := make([]interface{}, 0, len(types))
+	for _, typ := range types {
+		args = append(args, typ)
+	}
+	return c.queryItems(`SELECT id, path, frontmatter, body, type, tags, created, mod_time FROM items WHERE deleted_at = '' AND type IN (`+placeholders+`)`, args)
+}
+
+func (c *Cache) GetByTag(tag string) ([]scanner.Item, error) {
+	_ = c.Sync()
+	items, err := c.All()
+	if err != nil {
+		return nil, err
+	}
+	var result []scanner.Item
+	for _, item := range items {
+		for _, itemTag := range item.Tags {
+			if itemTag == tag {
+				result = append(result, item)
+				break
+			}
+		}
+	}
+	return result, nil
+}
+
+func (c *Cache) NotifyWrite(absPath string) error {
+	if filepath.Ext(absPath) != ".md" {
 		return nil
 	}
-
-	// Remove old index entries.
-	c.removeFromIndexes(relPath)
-
-	// Add new item and index entries.
-	c.items[relPath] = item
-	c.byType[item.Type] = append(c.byType[item.Type], relPath)
-	for _, tag := range item.Tags {
-		c.byTag[tag] = append(c.byTag[tag], relPath)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	relPath, err := filepath.Rel(c.baseDir, absPath)
+	if err != nil {
+		return err
 	}
-	if item.ID != "" {
-		c.byID[item.ID] = relPath
+	item, contentHash, err := c.readAndPopulate(absPath, relPath)
+	if err != nil {
+		return err
 	}
-
-	return nil
+	if item == nil {
+		_, err = c.db.Exec(`UPDATE items SET deleted_at = ? WHERE path = ?`, time.Now().UTC().Format(time.RFC3339Nano), relPath)
+		return err
+	}
+	return c.upsertItem(item, contentHash, "")
 }
 
-// readAndPopulate reads a file, parses frontmatter, auto-populates missing fields,
-// and returns a fully populated Item. Returns nil if the file has no "type" field.
-func (c *Cache) readAndPopulate(absPath, relPath string) (*scanner.Item, error) {
+func (c *Cache) NotifyDelete(absPath string) error {
+	if filepath.Ext(absPath) != ".md" {
+		return nil
+	}
+	relPath, err := filepath.Rel(c.baseDir, absPath)
+	if err != nil {
+		return err
+	}
+	_, err = c.db.Exec(`UPDATE items SET deleted_at = ? WHERE path = ?`, time.Now().UTC().Format(time.RFC3339Nano), relPath)
+	return err
+}
+
+func (c *Cache) IsSyncStarted() bool {
+	v, _ := c.Meta("sync_started")
+	return v == "true"
+}
+
+func (c *Cache) isSyncStartedLocked() bool {
+	var value string
+	_ = c.db.QueryRow(`SELECT value FROM meta WHERE key = 'sync_started'`).Scan(&value)
+	return value == "true"
+}
+
+func (c *Cache) SetSyncStarted(started bool) error {
+	val := "false"
+	if started {
+		val = "true"
+	}
+	return c.SetMeta("sync_started", val)
+}
+
+func (c *Cache) Meta(key string) (string, error) {
+	var value string
+	err := c.db.QueryRow(`SELECT value FROM meta WHERE key = ?`, key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return value, err
+}
+
+func (c *Cache) SetMeta(key, value string) error {
+	_, err := c.db.Exec(`INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
+	return err
+}
+
+func (c *Cache) EnqueueOutbox(op, targetKind, targetID, path, payload string) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := c.db.Exec(`INSERT INTO outbox(op, target_kind, target_id, path, payload, status, created_at) VALUES(?, ?, ?, ?, ?, 'pending', ?)`, op, targetKind, targetID, path, payload, now)
+	return err
+}
+
+func (c *Cache) itemChangedLocked(idVal, contentHash string) bool {
+	var oldHash string
+	err := c.db.QueryRow(`SELECT content_hash FROM items WHERE id = ? AND deleted_at = ''`, idVal).Scan(&oldHash)
+	return err == sql.ErrNoRows || oldHash != contentHash
+}
+
+func (c *Cache) enqueueItemLocked(op string, item *scanner.Item, relPath string) error {
+	payloadMap := map[string]interface{}{
+		"op":          op,
+		"target_kind": "item",
+		"id":          item.ID,
+		"path":        relPath,
+		"frontmatter": item.Frontmatter,
+		"body":        item.Body,
+	}
+	payload, _ := json.Marshal(payloadMap)
+	return c.EnqueueOutbox(op, "item", item.ID, relPath, string(payload))
+}
+
+func (c *Cache) OutboxEntries(limit int) ([]OutboxEntry, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := c.db.Query(`SELECT id, op, target_kind, target_id, path, payload, status, attempts, last_error, created_at, last_attempt_at FROM outbox ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var entries []OutboxEntry
+	for rows.Next() {
+		var e OutboxEntry
+		var created, attempted string
+		if err := rows.Scan(&e.ID, &e.Op, &e.TargetKind, &e.TargetID, &e.Path, &e.Payload, &e.Status, &e.Attempts, &e.LastError, &created, &attempted); err != nil {
+			return nil, err
+		}
+		e.CreatedAt = parseTime(created)
+		e.LastAttemptAt = parseTime(attempted)
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
+}
+
+func (c *Cache) PendingOutbox(limit int) ([]OutboxEntry, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := c.db.Query(`SELECT id, op, target_kind, target_id, path, payload, status, attempts, last_error, created_at, last_attempt_at FROM outbox WHERE status IN ('pending', 'failed') ORDER BY id ASC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var entries []OutboxEntry
+	for rows.Next() {
+		var e OutboxEntry
+		var created, attempted string
+		if err := rows.Scan(&e.ID, &e.Op, &e.TargetKind, &e.TargetID, &e.Path, &e.Payload, &e.Status, &e.Attempts, &e.LastError, &created, &attempted); err != nil {
+			return nil, err
+		}
+		e.CreatedAt = parseTime(created)
+		e.LastAttemptAt = parseTime(attempted)
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
+}
+
+func (c *Cache) MarkOutboxSynced(id int64) error {
+	_, err := c.db.Exec(`UPDATE outbox SET status = 'synced', last_error = '', last_attempt_at = ? WHERE id = ?`, time.Now().UTC().Format(time.RFC3339Nano), id)
+	return err
+}
+
+func (c *Cache) MarkOutboxFailed(id int64, msg string) error {
+	_, err := c.db.Exec(`UPDATE outbox SET status = 'failed', attempts = attempts + 1, last_error = ?, last_attempt_at = ? WHERE id = ?`, msg, time.Now().UTC().Format(time.RFC3339Nano), id)
+	return err
+}
+
+func (c *Cache) queryItems(query string, args []interface{}) ([]scanner.Item, error) {
+	rows, err := c.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []scanner.Item
+	for rows.Next() {
+		item, err := c.scanItemRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (c *Cache) scanItemRow(rows *sql.Rows) (scanner.Item, error) {
+	var idVal, relPath, fmJSON, body, typ, tagsJSON, createdStr string
+	var modUnix int64
+	if err := rows.Scan(&idVal, &relPath, &fmJSON, &body, &typ, &tagsJSON, &createdStr, &modUnix); err != nil {
+		return scanner.Item{}, err
+	}
+	var fm map[string]interface{}
+	if err := json.Unmarshal([]byte(fmJSON), &fm); err != nil {
+		return scanner.Item{}, err
+	}
+	var tags []string
+	if err := json.Unmarshal([]byte(tagsJSON), &tags); err != nil {
+		return scanner.Item{}, err
+	}
+	return scanner.Item{
+		Path:        filepath.Join(c.baseDir, relPath),
+		Type:        typ,
+		Tags:        tags,
+		ID:          idVal,
+		Created:     parseTime(createdStr),
+		Frontmatter: fm,
+		Body:        body,
+		ModTime:     time.Unix(0, modUnix),
+	}, nil
+}
+
+func (c *Cache) upsertItem(item *scanner.Item, contentHash, syncState string) error {
+	relPath, err := filepath.Rel(c.baseDir, item.Path)
+	if err != nil {
+		relPath = item.Path
+	}
+	fmJSON, err := json.Marshal(item.Frontmatter)
+	if err != nil {
+		return err
+	}
+	tagsJSON, err := json.Marshal(item.Tags)
+	if err != nil {
+		return err
+	}
+	if syncState == "" {
+		var existing string
+		_ = c.db.QueryRow(`SELECT sync_state FROM items WHERE id = ?`, item.ID).Scan(&existing)
+		syncState = existing
+	}
+	_, err = c.db.Exec(`
+		INSERT INTO items(id, path, frontmatter, body, type, tags, created, mod_time, content_hash, deleted_at, sync_state)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?)
+		ON CONFLICT(id) DO UPDATE SET
+			path = excluded.path,
+			frontmatter = excluded.frontmatter,
+			body = excluded.body,
+			type = excluded.type,
+			tags = excluded.tags,
+			created = excluded.created,
+			mod_time = excluded.mod_time,
+			content_hash = excluded.content_hash,
+			deleted_at = '',
+			sync_state = excluded.sync_state
+	`, item.ID, relPath, string(fmJSON), item.Body, item.Type, string(tagsJSON), item.Created.Format(time.RFC3339Nano), item.ModTime.UnixNano(), contentHash, syncState)
+	return err
+}
+
+func (c *Cache) readAndPopulate(absPath, relPath string) (*scanner.Item, string, error) {
 	info, err := os.Stat(absPath)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-
 	content, err := os.ReadFile(absPath)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-
 	fm, body, err := markdown.ParseFrontmatterBytes(content)
 	if err != nil {
 		log.Printf("cache: failed to parse frontmatter in %s: %v", relPath, err)
@@ -406,45 +523,36 @@ func (c *Cache) readAndPopulate(absPath, relPath string) (*scanner.Item, error) 
 	if fm == nil {
 		fm = make(map[string]interface{})
 	}
-
-	// Type is required — skip files without it.
 	typeVal := markdown.FMString(fm, "type")
 	if typeVal == "" {
-		return nil, nil
+		return nil, "", nil
 	}
 
-	// Auto-populate missing fields and track if we need to rewrite.
 	needsRewrite := false
-
-	// ID
 	idVal := markdown.FMString(fm, "id")
 	if idVal == "" {
 		idVal = id.GenerateID()
 		fm["id"] = idVal
 		needsRewrite = true
 	}
-
-	// Created
 	createdVal := fmTime(fm, "created")
 	if createdVal.IsZero() {
 		createdVal = info.ModTime()
 		fm["created"] = createdVal.Format(time.RFC3339)
 		needsRewrite = true
 	}
-
-	// Tags
 	tags := markdown.ExtractTags(fm)
 	if _, hasTags := fm["tags"]; !hasTags {
 		fm["tags"] = []interface{}{}
 		tags = []string{}
 		needsRewrite = true
 	}
-
-	// Rewrite the file if we auto-populated any fields.
 	if needsRewrite {
 		if err := markdown.WriteFrontmatter(absPath, fm, body); err != nil {
 			log.Printf("cache: failed to rewrite %s: %v", relPath, err)
 		}
+		content, _ = os.ReadFile(absPath)
+		info, _ = os.Stat(absPath)
 	}
 
 	return &scanner.Item{
@@ -456,137 +564,56 @@ func (c *Cache) readAndPopulate(absPath, relPath string) (*scanner.Item, error) 
 		Frontmatter: fm,
 		Body:        body,
 		ModTime:     info.ModTime(),
-	}, nil
+	}, sha(content), nil
 }
 
-// removeFromIndexes removes a relPath from the type and tag indexes.
-func (c *Cache) removeFromIndexes(relPath string) {
-	old, ok := c.items[relPath]
-	if !ok {
-		return
-	}
+func (c *Cache) migrateLegacyItem(oldAbsPath string, item *scanner.Item) (*scanner.Item, string, error) {
+	newID := id.GenerateIDFromTime(item.Created)
+	item.ID = newID
+	item.Frontmatter["id"] = newID
 
-	// Remove from type index.
-	c.byType[old.Type] = removeFromSlice(c.byType[old.Type], relPath)
-	if len(c.byType[old.Type]) == 0 {
-		delete(c.byType, old.Type)
-	}
-
-	// Remove from tag indexes.
-	for _, tag := range old.Tags {
-		c.byTag[tag] = removeFromSlice(c.byTag[tag], relPath)
-		if len(c.byTag[tag]) == 0 {
-			delete(c.byTag, tag)
+	titleVal := markdown.FMString(item.Frontmatter, "title")
+	if titleVal == "" {
+		oldFilename := filepath.Base(oldAbsPath)
+		oldBase := strings.TrimSuffix(oldFilename, ".md")
+		if len(oldBase) > 10 && oldBase[9] == '-' {
+			titleVal = oldBase[10:]
 		}
 	}
-
-	// Remove from ID index.
-	if old.ID != "" {
-		delete(c.byID, old.ID)
+	slug := markdown.Slugify(titleVal)
+	newFilename := newID + ".md"
+	if slug != "" {
+		newFilename = newID + "-" + slug + ".md"
 	}
+	newDestDir := filepath.Join(c.baseDir, newID[:3])
+	newAbsPath := filepath.Join(newDestDir, newFilename)
+	if err := os.MkdirAll(newDestDir, 0755); err != nil {
+		return nil, "", err
+	}
+	if err := markdown.WriteFrontmatter(newAbsPath, item.Frontmatter, item.Body); err != nil {
+		return nil, "", err
+	}
+	if err := os.Remove(oldAbsPath); err != nil {
+		log.Printf("cache: failed to remove old file %s: %v", oldAbsPath, err)
+	}
+	info, err := os.Stat(newAbsPath)
+	if err == nil {
+		item.ModTime = info.ModTime()
+	}
+	item.Path = newAbsPath
+	return item, newAbsPath, nil
 }
 
-// --- Watcher ---
-
-func (c *Cache) watchLoop() {
-	for {
-		select {
-		case <-c.done:
-			return
-		case event, ok := <-c.watcher.Events:
-			if !ok {
-				return
-			}
-			c.handleEvent(event)
-		case err, ok := <-c.watcher.Errors:
-			if !ok {
-				return
-			}
-			log.Printf("cache: watcher error: %v", err)
-		}
-	}
+func hashItem(fm map[string]interface{}, body string) string {
+	b, _ := json.Marshal(fm)
+	sum := sha256.Sum256(append(b, []byte(body)...))
+	return hex.EncodeToString(sum[:])
 }
 
-func (c *Cache) handleEvent(event fsnotify.Event) {
-	path := event.Name
-
-	relPath, err := filepath.Rel(c.baseDir, path)
-	if err != nil {
-		return
-	}
-
-	// Skip hidden directories and known skip dirs.
-	parts := strings.Split(relPath, string(filepath.Separator))
-	for _, part := range parts {
-		if strings.HasPrefix(part, ".") || scanner.SkipDirs[part] {
-			return
-		}
-	}
-
-	switch {
-	case event.Has(fsnotify.Create):
-		info, err := os.Stat(path)
-		if err != nil {
-			return
-		}
-		if info.IsDir() {
-			if watchErr := c.watcher.Add(path); watchErr != nil {
-				log.Printf("cache: failed to watch new directory %s: %v", path, watchErr)
-			}
-			c.scanNewDir(path)
-			return
-		}
-		if filepath.Ext(path) == ".md" {
-			_ = c.indexFile(path, relPath)
-		}
-
-	case event.Has(fsnotify.Write):
-		if filepath.Ext(path) == ".md" {
-			_ = c.indexFile(path, relPath)
-		}
-
-	case event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename):
-		if filepath.Ext(path) == ".md" {
-			c.mu.Lock()
-			c.removeFromIndexes(relPath)
-			delete(c.items, relPath)
-			c.mu.Unlock()
-		}
-	}
+func sha(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
-
-func (c *Cache) scanNewDir(dir string) {
-	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			name := d.Name()
-			if path != dir && (strings.HasPrefix(name, ".") || scanner.SkipDirs[name]) {
-				return filepath.SkipDir
-			}
-			if watchErr := c.watcher.Add(path); watchErr != nil {
-				log.Printf("cache: failed to watch subdirectory %s: %v", path, watchErr)
-			}
-			return nil
-		}
-		if filepath.Ext(path) != ".md" {
-			return nil
-		}
-		relPath, err := filepath.Rel(c.baseDir, path)
-		if err != nil {
-			return nil
-		}
-		_ = c.indexFile(path, relPath)
-		return nil
-	})
-	if err != nil {
-		log.Printf("cache: failed to walk new directory %s: %v", dir, err)
-	}
-}
-
-// --- Helpers ---
-
 
 func fmTime(fm map[string]interface{}, key string) time.Time {
 	v, ok := fm[key]
@@ -597,12 +624,7 @@ func fmTime(fm map[string]interface{}, key string) time.Time {
 	case time.Time:
 		return val
 	case string:
-		// Try common date formats
-		for _, layout := range []string{
-			"2006-01-02T15:04:05",
-			"2006-01-02",
-			time.RFC3339,
-		} {
+		for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"} {
 			if t, err := time.Parse(layout, val); err == nil {
 				return t
 			}
@@ -611,12 +633,14 @@ func fmTime(fm map[string]interface{}, key string) time.Time {
 	return time.Time{}
 }
 
-
-func removeFromSlice(s []string, val string) []string {
-	for i, v := range s {
-		if v == val {
-			return append(s[:i], s[i+1:]...)
+func parseTime(value string) time.Time {
+	if value == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"} {
+		if t, err := time.Parse(layout, value); err == nil {
+			return t
 		}
 	}
-	return s
+	return time.Time{}
 }

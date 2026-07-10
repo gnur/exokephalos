@@ -16,6 +16,7 @@ import (
 	"github.com/gnur/exokephalos/internal/importer"
 	"github.com/gnur/exokephalos/internal/lsp"
 	"github.com/gnur/exokephalos/internal/repo"
+	"github.com/gnur/exokephalos/internal/syncsvc"
 	"github.com/gnur/exokephalos/internal/tui"
 	"github.com/gnur/exokephalos/internal/version"
 	"strings"
@@ -53,7 +54,22 @@ func main() {
 		return
 	}
 
-	// Load configuration (required for both TUI and web)
+	appMode := "tui"
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		appMode = "serve"
+	}
+	appCfg, err := config.LoadApp(dir, appMode)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading app configuration from %s: %v\n", dir, err)
+		os.Exit(1)
+	}
+
+	if len(os.Args) > 1 && os.Args[1] == "serve" && appCfg.Server.Enabled {
+		runSyncServer(appCfg)
+		return
+	}
+
+	// Load configuration (required for local TUI and filesystem web)
 	cfg, err := config.Load(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading configuration from %s: %v\n", dir, err)
@@ -77,10 +93,22 @@ func main() {
 	} else if len(os.Args) > 1 && os.Args[1] == "lsp" {
 		runLSP(c)
 	} else {
-		if err := tui.Run(cfg, dir, c); err != nil {
+		if err := tui.Run(cfg, dir, c, appCfg); err != nil {
 			log.Fatalf("TUI error: %v", err)
 		}
 	}
+}
+
+func runSyncServer(appCfg *config.AppConfig) {
+	s, err := syncsvc.NewServer(appCfg.Server.DBPath)
+	if err != nil {
+		log.Fatalf("Failed to initialize sync server: %v", err)
+	}
+	defer s.Close()
+	mux := http.NewServeMux()
+	s.Register(mux)
+	fmt.Printf("exokephalos sync server listening on %s\n", appCfg.Server.Listen)
+	log.Fatal(http.ListenAndServe(appCfg.Server.Listen, mux))
 }
 
 func runServer(cfg *config.Config, dir string, r *repo.Repo, c *cache.Cache) {

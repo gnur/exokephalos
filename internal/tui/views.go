@@ -29,6 +29,9 @@ func (m Model) View() string {
 	if m.mode == modeHardcoverResults {
 		return m.renderHardcoverResultsOverlay()
 	}
+	if m.mode == modeSyncOutbox {
+		return m.renderSyncOutboxView()
+	}
 
 	header := m.renderHeader()
 	body := m.renderBody()
@@ -340,7 +343,53 @@ func (m Model) renderFooter() string {
 	if m.status != "" {
 		hint = m.status + "  " + hint
 	}
+	if m.syncStatus != "" {
+		indicator := lipgloss.NewStyle().Foreground(successColor).Render("sync: " + m.syncStatus)
+		leftWidth := m.width - lipgloss.Width(indicator) - 1
+		if leftWidth < 0 {
+			leftWidth = 0
+		}
+		hint = truncate(hint, leftWidth)
+		return footerStyle.Width(m.width).Render(lipgloss.JoinHorizontal(lipgloss.Top,
+			lipgloss.NewStyle().Width(leftWidth).Render(hint),
+			indicator,
+		))
+	}
 	return footerStyle.Width(m.width).Render(hint)
+}
+
+func (m Model) renderSyncOutboxView() string {
+	header := headerStyle.Width(m.width).Render("Sync Outbox")
+	entries, err := m.cache.OutboxEntries(200)
+	bodyHeight := m.height - 2
+	lines := []string{}
+	if err != nil {
+		lines = append(lines, "error: "+err.Error())
+	} else if len(entries) == 0 {
+		lines = append(lines, "No sync outbox entries.")
+	} else {
+		lines = append(lines, truncate("ID  Status    Attempts  Operation       Target", m.width))
+		for _, entry := range entries {
+			target := entry.TargetID
+			if target == "" {
+				target = entry.Path
+			}
+			line := fmt.Sprintf("%-3d %-9s %-9d %-15s %s", entry.ID, entry.Status, entry.Attempts, entry.Op, target)
+			if entry.LastError != "" {
+				line += "  " + entry.LastError
+			}
+			lines = append(lines, truncate(line, m.width))
+			if len(lines) >= bodyHeight {
+				break
+			}
+		}
+	}
+	for len(lines) < bodyHeight {
+		lines = append(lines, "")
+	}
+	body := lipgloss.NewStyle().Width(m.width).Height(bodyHeight).Render(strings.Join(lines, "\n"))
+	footer := footerStyle.Width(m.width).Render(" esc/q:back")
+	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }
 
 func truncate(s string, max int) string {

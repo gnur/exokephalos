@@ -16,6 +16,25 @@ type Config struct {
 	Actions     map[string]ActionConfig `toml:"actions"`
 }
 
+type AppConfig struct {
+	Sync   SyncConfig       `toml:"sync"`
+	Server SyncServerConfig `toml:"server"`
+}
+
+type SyncConfig struct {
+	ServerURL string           `toml:"server_url"`
+	ClientID  string           `toml:"client_id"`
+	KeyPath   string           `toml:"key_path"`
+	Enabled   bool             `toml:"enabled"`
+	Server    SyncServerConfig `toml:"server"`
+}
+
+type SyncServerConfig struct {
+	Enabled bool   `toml:"enabled"`
+	DBPath  string `toml:"db_path"`
+	Listen  string `toml:"listen"`
+}
+
 // ViewConfig defines a single view (e.g., notes, books).
 type ViewConfig struct {
 	Name            string          `toml:"name"`
@@ -83,13 +102,23 @@ func (c *Config) DefaultViewIndex() int {
 func Load(dir string) (*Config, error) {
 	var files []string
 
+	// Preferred synced workspace config: root-level TOML files. Local app
+	// config/state lives under .exo and is intentionally not included here.
+	entries, _ := os.ReadDir(dir)
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".toml" || entry.Name() == ".exo.toml" {
+			continue
+		}
+		files = append(files, filepath.Join(dir, entry.Name()))
+	}
+
 	exoDir := filepath.Join(dir, ".exo")
-	// If .exo directory exists, find all .toml files in it.
+	// Backward-compatible fallback: legacy view/action config in .exo/.
 	if info, err := os.Stat(exoDir); err == nil && info.IsDir() {
 		entries, err := os.ReadDir(exoDir)
-		if err == nil {
+		if err == nil && len(files) == 0 {
 			for _, entry := range entries {
-				if !entry.IsDir() && filepath.Ext(entry.Name()) == ".toml" {
+				if !entry.IsDir() && filepath.Ext(entry.Name()) == ".toml" && entry.Name() != "tui.toml" && entry.Name() != "serve.toml" {
 					files = append(files, filepath.Join(exoDir, entry.Name()))
 				}
 			}
@@ -162,6 +191,41 @@ func Load(dir string) (*Config, error) {
 	}
 
 	return &combined, nil
+}
+
+func LoadApp(dir, mode string) (*AppConfig, error) {
+	path := filepath.Join(dir, ".exo", mode+".toml")
+	cfg := &AppConfig{}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			applyAppDefaults(dir, cfg)
+			return cfg, nil
+		}
+		return nil, err
+	}
+	if err := toml.Unmarshal(data, cfg); err != nil {
+		return nil, err
+	}
+	applyAppDefaults(dir, cfg)
+	return cfg, nil
+}
+
+func applyAppDefaults(dir string, cfg *AppConfig) {
+	if cfg.Sync.Server.Enabled || cfg.Sync.Server.DBPath != "" || cfg.Sync.Server.Listen != "" {
+		cfg.Server = cfg.Sync.Server
+	}
+	if cfg.Sync.KeyPath == "" {
+		cfg.Sync.KeyPath = filepath.Join(dir, ".exo", "keys", "client_ed25519")
+	}
+	if cfg.Server.DBPath == "" {
+		cfg.Server.DBPath = filepath.Join(dir, ".exo", "server.sqlite")
+	} else if !filepath.IsAbs(cfg.Server.DBPath) {
+		cfg.Server.DBPath = filepath.Join(dir, cfg.Server.DBPath)
+	}
+	if cfg.Server.Listen == "" {
+		cfg.Server.Listen = ":8293"
+	}
 }
 
 func (c *Config) addBuiltInViews() {

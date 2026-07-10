@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"text/template"
+	"time"
 	"unicode"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -42,6 +43,7 @@ const (
 	modeHardcoverQuery
 	modeHardcoverResults
 	modeURLImport
+	modeSyncOutbox
 )
 
 // Pane focus for views with tags enabled
@@ -83,6 +85,7 @@ type Model struct {
 	cfg     *config.Config
 	baseDir string
 	cache   *cache.Cache
+	appCfg  *config.AppConfig
 	width   int
 	height  int
 	ready   bool
@@ -124,6 +127,8 @@ type Model struct {
 
 	// Status message
 	status string
+
+	syncStatus string
 }
 
 type refreshMsg struct{}
@@ -144,6 +149,8 @@ const (
 	actionEntryGoodreads
 	actionEntryHardcover
 	actionEntryURL
+	actionEntryStartSync
+	actionEntrySyncOutbox
 )
 
 type actionEntry struct {
@@ -165,7 +172,14 @@ type urlImportMsg struct {
 	err    error
 }
 
-func New(cfg *config.Config, baseDir string, c *cache.Cache) Model {
+type syncMsg struct {
+	status      string
+	err         error
+	startListen bool
+	retryListen bool
+}
+
+func New(cfg *config.Config, baseDir string, c *cache.Cache, appCfg ...*config.AppConfig) Model {
 	tagFilter := textinput.New()
 	tagFilter.Prompt = "filter tags: "
 	tagFilter.CharLimit = 256
@@ -245,10 +259,22 @@ func New(cfg *config.Config, baseDir string, c *cache.Cache) Model {
 		actions[name] = act
 	}
 
+	var ac *config.AppConfig
+	if len(appCfg) > 0 {
+		ac = appCfg[0]
+	}
+	syncStatus := ""
+	if ac != nil && ac.Sync.ServerURL != "" {
+		syncStatus = "not started"
+		if c != nil && c.IsSyncStarted() {
+			syncStatus = "offline"
+		}
+	}
 	return Model{
 		cfg:             cfg,
 		baseDir:         baseDir,
 		cache:           c,
+		appCfg:          ac,
 		views:           views,
 		activeView:      cfg.DefaultViewIndex(),
 		pane:            paneList,
@@ -261,16 +287,20 @@ func New(cfg *config.Config, baseDir string, c *cache.Cache) Model {
 		actionInput:     actionTi,
 		actions:         actions,
 		mode:            modeNormal,
+		syncStatus:      syncStatus,
 	}
 }
 
-func Run(cfg *config.Config, baseDir string, c *cache.Cache) error {
-	p := tea.NewProgram(New(cfg, baseDir, c), tea.WithAltScreen())
+func Run(cfg *config.Config, baseDir string, c *cache.Cache, appCfg *config.AppConfig) error {
+	p := tea.NewProgram(New(cfg, baseDir, c, appCfg), tea.WithAltScreen())
 	_, err := p.Run()
 	return err
 }
 
 func (m Model) Init() tea.Cmd {
+	if m.appCfg != nil && m.appCfg.Sync.ServerURL != "" && m.cache != nil && m.cache.IsSyncStarted() {
+		return tea.Batch(m.loadData(), syncStartupCmd(m.baseDir, m.cache, m.appCfg))
+	}
 	return m.loadData()
 }
 
@@ -320,6 +350,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = fmt.Sprintf("Imported URL: %s", msg.result.Frontmatter["title"])
 		return m, m.loadData()
 
+	case syncMsg:
+		if msg.status != "" {
+			m.syncStatus = msg.status
+		}
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Sync error: %v", msg.err)
+			if m.syncStatus == "" {
+				m.syncStatus = "error"
+			}
+		} else if msg.status != "" {
+			m.status = "Sync: " + msg.status
+		}
+		var cmds []tea.Cmd
+		cmds = append(cmds, m.loadData())
+		if msg.startListen {
+			cmds = append(cmds, syncListenCmd(m.baseDir, m.cache, m.appCfg))
+		}
+		if msg.retryListen {
+			cmds = append(cmds, tea.Tick(5*time.Second, func(time.Time) tea.Msg {
+				return syncMsg{startListen: true}
+			}))
+		}
+		return m, tea.Batch(cmds...)
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -350,6 +404,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleHardcoverResultsKey(msg)
 	case modeURLImport:
 		return m.handleURLImportKey(msg)
+	case modeSyncOutbox:
+		if msg.String() == "esc" || msg.String() == "q" {
+			m.mode = modeNormal
+		}
+		return m, nil
 	case modeSearchTags:
 		return m.handleSearchTagsKey(msg)
 	case modeSearchItems:
@@ -571,7 +630,7 @@ func (m Model) actionEntries() []actionEntry {
 	sort.Strings(names)
 
 	item, hasItem := m.selectedItem()
-	entries := make([]actionEntry, 0, len(names)+2)
+	entries := make([]actionEntry, 0, len(names)+5)
 	for _, name := range names {
 		act := m.actions[name]
 		enabled := false
@@ -607,6 +666,20 @@ func (m Model) actionEntries() []actionEntry {
 		Description: "Import URL as note",
 		Enabled:     true,
 	})
+	if m.appCfg != nil && m.appCfg.Sync.ServerURL != "" {
+		entries = append(entries, actionEntry{
+			Kind:        actionEntryStartSync,
+			Name:        "start-sync",
+			Description: "Start or retry sync with the configured server",
+			Enabled:     true,
+		})
+		entries = append(entries, actionEntry{
+			Kind:        actionEntrySyncOutbox,
+			Name:        "sync-outbox",
+			Description: "View local sync outbox and history",
+			Enabled:     true,
+		})
+	}
 	sort.SliceStable(entries, func(i, j int) bool {
 		if entries[i].Enabled != entries[j].Enabled {
 			return entries[i].Enabled
@@ -661,6 +734,13 @@ func (m Model) executeActionEntry(entry actionEntry) (tea.Model, tea.Cmd) {
 		m.urlInput.SetValue("")
 		m.urlInput.Focus()
 		return m, textinput.Blink
+	case actionEntryStartSync:
+		m.syncStatus = "syncing"
+		m.status = "Starting sync..."
+		return m, startSyncCmd(m.baseDir, m.cache, m.appCfg)
+	case actionEntrySyncOutbox:
+		m.mode = modeSyncOutbox
+		return m, nil
 	default:
 		m.status = "Action not found"
 		return m, nil

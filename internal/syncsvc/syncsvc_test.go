@@ -1,0 +1,112 @@
+package syncsvc
+
+import (
+	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"testing"
+)
+
+func TestSignedSyncFlow(t *testing.T) {
+	server, err := NewServer(filepath.Join(t.TempDir(), "server.sqlite"))
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	defer server.Close()
+
+	mux := http.NewServeMux()
+	server.Register(mux)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+
+	enrollBody, _ := json.Marshal(map[string]string{
+		"client_id":  "client-a",
+		"label":      "client a",
+		"public_key": base64.StdEncoding.EncodeToString(pub),
+	})
+	resp, err := http.Post(ts.URL+"/api/sync/enroll", "application/json", bytes.NewReader(enrollBody))
+	if err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("enroll status = %s", resp.Status)
+	}
+	_ = resp.Body.Close()
+
+	changeBody, _ := json.Marshal(map[string]interface{}{
+		"changes": []Change{{
+			Op:         "upsert_item",
+			TargetKind: "item",
+			ID:         "abc1234",
+			Path:       "abc/abc1234-note.md",
+			Frontmatter: map[string]interface{}{
+				"id":      "abc1234",
+				"type":    "note",
+				"title":   "Test",
+				"created": "2026-01-01",
+				"tags":    []interface{}{"sync"},
+			},
+			Body: "Body\n",
+		}},
+	})
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/sync/changes", bytes.NewReader(changeBody))
+	req.Header.Set("Content-Type", "application/json")
+	SignRequest(req, changeBody, "client-a", priv)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("pending change request: %v", err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("pending client status = %s, want 401", resp.Status)
+	}
+	_ = resp.Body.Close()
+
+	resp, err = http.Post(ts.URL+"/admin/sync/clients/client-a/approve", "application/x-www-form-urlencoded", nil)
+	if err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/api/sync/changes", bytes.NewReader(changeBody))
+	req.Header.Set("Content-Type", "application/json")
+	SignRequest(req, changeBody, "client-a", priv)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("approved change request: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("approved change status = %s", resp.Status)
+	}
+	_ = resp.Body.Close()
+
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+"/api/sync/snapshot", nil)
+	SignRequest(req, nil, "client-a", priv)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("snapshot status = %s", resp.Status)
+	}
+	defer resp.Body.Close()
+
+	var snapshot struct {
+		Items []Change `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	if len(snapshot.Items) != 1 || snapshot.Items[0].ID != "abc1234" {
+		t.Fatalf("snapshot items = %+v", snapshot.Items)
+	}
+}

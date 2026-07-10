@@ -9,3 +9,4 @@ notebook.db
 tmp-run
 .task/
 __pycache__/
+plugin-scripts/

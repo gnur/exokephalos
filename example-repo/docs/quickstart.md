@@ -8,7 +8,29 @@ title: "Quickstart"
 
 # Quickstart
 
-This assumes you already have the `exo` binary available. exo stores all markdown files and configuration in one data directory.
+Install `exo` first, then create a data directory. exo stores all markdown files and configuration in one data directory.
+
+## Install
+
+Download prebuilt binaries from the [GitHub releases page](https://github.com/gnur/exokephalos/releases). CI builds binaries for Linux, macOS, and Windows on both `amd64` and `arm64`.
+
+On Linux or macOS:
+
+```bash
+chmod +x exo-*
+sudo mv exo-* /usr/local/bin/exo
+```
+
+You can also run the web interface with Docker:
+
+```bash
+docker run --rm \
+  -p 8293:8293 \
+  -v "$HOME/notes:/data" \
+  ghcr.io/gnur/exokephalos:latest
+```
+
+The container runs `exo serve` and uses `/data` as `EXO_DIR`.
 
 ## 1. Create a data directory
 

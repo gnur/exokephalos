@@ -15,6 +15,25 @@ By default, the server listens locally at:
 
 `EXO_DIR` must point at the data directory containing `.exo/*.toml` or `.exo.toml`. If it is not set, exo uses `./example-repo`.
 
+## Running With Docker
+
+The web interface container image is published to GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/gnur/exokephalos:latest
+```
+
+Mount your exo data directory at `/data` and publish port `8293`:
+
+```bash
+docker run --rm \
+  -p 8293:8293 \
+  -v "/path/to/your/notes:/data" \
+  ghcr.io/gnur/exokephalos:latest
+```
+
+The image runs `exo serve` by default. Prebuilt binaries for TUI, web, and LSP usage are available from the [GitHub releases page](https://github.com/gnur/exokephalos/releases).
+
 ## Features
 
 - **Dynamic Navigation**: Tabbed views and responsive layout loaded natively.

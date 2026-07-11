@@ -17,7 +17,33 @@ A self-hosted, file-based personal knowledge management and life-tracking applic
 
 ## Quickstart
 
-This assumes you already have the `exo` binary available. exo stores all data in a directory you choose and reads configuration from that directory.
+Install `exo` first, then create a data directory. exo stores all data in a directory you choose and reads configuration from that directory.
+
+### Install
+
+Download prebuilt binaries from the [GitHub releases page](https://github.com/gnur/exokephalos/releases). CI builds artifacts for:
+
+- `linux/amd64` and `linux/arm64`
+- `darwin/amd64` and `darwin/arm64`
+- `windows/amd64` and `windows/arm64`
+
+On Linux or macOS, make the downloaded binary executable and put it on your `PATH`:
+
+```bash
+chmod +x exo-*
+sudo mv exo-* /usr/local/bin/exo
+```
+
+You can also run the web interface as a container:
+
+```bash
+docker run --rm \
+  -p 8293:8293 \
+  -v "$HOME/notes:/data" \
+  ghcr.io/gnur/exokephalos:latest
+```
+
+The container runs `exo serve`, exposes port `8293`, and uses `/data` as `EXO_DIR`.
 
 ### 1. Create a data directory
 
@@ -482,6 +508,32 @@ EXO_DIR=/path/to/your/notes ./exo
 
 # Run web server
 EXO_DIR=/path/to/your/notes ./exo serve
+```
+
+### Run With Docker
+
+The published container image is available from GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/gnur/exokephalos:latest
+```
+
+Run the web UI with your exo data directory mounted at `/data`:
+
+```bash
+docker run --rm \
+  -p 8293:8293 \
+  -v "/path/to/your/notes:/data" \
+  ghcr.io/gnur/exokephalos:latest
+```
+
+The image runs `exo serve` by default. To run another subcommand, override the command:
+
+```bash
+docker run --rm \
+  -v "/path/to/your/notes:/data" \
+  ghcr.io/gnur/exokephalos:latest \
+  version
 ```
 
 ### CLI Subcommands

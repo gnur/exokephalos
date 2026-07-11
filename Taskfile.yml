@@ -14,6 +14,22 @@ tasks:
     cmds:
       - go build -ldflags="{{.LDFLAGS}}" -o exo .
 
+  container:push:
+    desc: Build and push linux/amd64 and linux/arm64 container image
+    cmds:
+      - |
+        image="${IMAGE:-ghcr.io/gnur/exokephalos}"
+        version="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+        build_time="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+        docker buildx build \
+          --platform linux/amd64,linux/arm64 \
+          --build-arg VERSION="$version" \
+          --build-arg BUILD_TIME="$build_time" \
+          --tag "$image:latest" \
+          --tag "$image:$version" \
+          --push \
+          .
+
   css:
     desc: Build Tailwind CSS
     cmds:

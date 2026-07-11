@@ -41,9 +41,9 @@ export EXO_DIR=~/notes
 
 `EXO_DIR` is the only required environment variable. It points at your exo data directory. If it is not set, exo uses `./example-repo`.
 
-## 2. Add a minimal config file
+## 2. Add a minimal workspace config file
 
-Create `~/notes/.exo/notes.toml`:
+Create `~/notes/notes.toml`:
 
 ```toml
 default_view = "notes"
@@ -69,7 +69,7 @@ title: "{{.Title}}"
 """
 ```
 
-Configuration can live in `.exo/*.toml` files or in a single `.exo.toml` file at the root of `EXO_DIR`. The `.exo/` directory style is recommended because it lets you split views and actions into separate files.
+Workspace config lives in root-level `*.toml` files in `EXO_DIR`, such as `notes.toml` and `actions.toml`. The `.exo/` directory is local-only and stores app state such as cache databases, sync keys, `.exo/tui.toml`, and `.exo/serve.toml`. Legacy `.exo/*.toml` and `.exo.toml` workspace configs are still loaded only when no root-level `*.toml` files exist.
 
 Each view requires:
 

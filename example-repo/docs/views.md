@@ -10,7 +10,11 @@ title: "View Configurations"
 
 Views are custom collections that define how markdown files are queried, displayed, and filtered.
 
-exo reads configuration from `.exo/*.toml` files inside `EXO_DIR`, or from a single `.exo.toml` file at the root of `EXO_DIR` when no `.exo/*.toml` files exist. The `.exo/` directory style is recommended for splitting view and action configuration into separate files.
+exo reads workspace configuration from root-level `*.toml` files inside `EXO_DIR`, such as `notes.toml`, `books.toml`, and `actions.toml`. These files are workspace data and are synced in client/server mode.
+
+The `.exo/` directory is local-only. It is used for `.exo/tui.toml`, `.exo/serve.toml`, cache databases, sync keys, and other machine-local state.
+
+For compatibility, exo falls back to legacy `.exo/*.toml` view/action files when no root-level `*.toml` files exist, and then to `.exo.toml` when neither root-level nor legacy `.exo/*.toml` files exist.
 
 exo also adds a built-in `All` view with key `0`. This view uses the filter `true`, so it shows every item regardless of type in both the TUI and web interface at `/views/all`.
 

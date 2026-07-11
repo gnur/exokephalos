@@ -1,13 +1,13 @@
 # Introduction to exokephalos
 
-exokephalos is a lightweight, database-free personal knowledge management system that reads and writes flat-file markdown documents with YAML frontmatter.
+exokephalos is a lightweight, local-first personal knowledge management system. In local mode it reads and writes flat-file markdown documents with YAML frontmatter. Optional sync mode adds a central SQLite-backed server while TUI clients keep local markdown files.
 
 It offers three distinct interfaces:
 1. **TUI**: A terminal UI built with Bubble Tea for fast, keyboard-driven navigation (`exo`).
 2. **Web UI**: A modern, responsive web server powered by HTMX (`exo serve`).
 3. **LSP Server**: A Language Server Protocol server that provides auto-completions, hover previews, and wiki-link go-to-definition in text editors (`exo lsp`).
 
-Start with the Quickstart doc to create a data directory, set `EXO_DIR`, and add the first `.exo/` configuration file.
+Start with the Quickstart doc to create a data directory, set `EXO_DIR`, and add the first root-level workspace configuration file.
 
 ---
 
@@ -32,7 +32,7 @@ Because there is no fixed database schema, you can introduce any arbitrary type 
 
 ## Common Expression Language (CEL) Views
 
-Views define the collections displayed in both the TUI and Web interfaces. Views are configured via `.toml` files in your `.exo/` configuration directory, or in a single `.exo.toml` file at the root of `EXO_DIR`.
+Views define the collections displayed in both the TUI and Web interfaces. Views are configured via root-level `.toml` files in `EXO_DIR`, such as `notes.toml` or `books.toml`. The `.exo/` directory is reserved for local app state and machine-local config.
 
 Each view compiles a [Google CEL (Common Expression Language)](https://github.com/google/cel-go) filter expression to select matching markdown files from the repository.
 

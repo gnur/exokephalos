@@ -13,7 +13,7 @@ EXO_DIR=/path/to/your/notes exo serve
 By default, the server listens locally at:
 `http://localhost:8293`
 
-`EXO_DIR` must point at the data directory containing `.exo/*.toml` or `.exo.toml`. If it is not set, exo uses `./example-repo`.
+`EXO_DIR` must point at the data directory containing root-level workspace `*.toml` config files. If it is not set, exo uses `./example-repo`.
 
 ## Running With Docker
 
@@ -33,6 +33,31 @@ docker run --rm \
 ```
 
 The image runs `exo serve` by default. Prebuilt binaries for TUI, web, and LSP usage are available from the [GitHub releases page](https://github.com/gnur/exokephalos/releases).
+
+## Sync Server Mode
+
+By default, `exo serve` uses local markdown files from `EXO_DIR`. To run it as a central sync server, create `.exo/serve.toml`:
+
+```toml
+[sync.server]
+enabled = true
+db_path = ".exo/server.sqlite"
+listen = ":8293"
+```
+
+Then start the server:
+
+```bash
+EXO_DIR=/path/to/server-data exo serve
+```
+
+In sync-server mode, the server stores notes and synced root-level workspace config in SQLite. It does not scan or write markdown files. TUI clients keep markdown files locally and sync through signed HTTP requests and SSE updates.
+
+New clients appear in the approval page:
+
+```text
+http://localhost:8293/admin/sync/clients
+```
 
 ## Features
 

@@ -1,6 +1,6 @@
 # Exokephalos
 
-A self-hosted, file-based personal knowledge management and life-tracking application. All data is stored as plain markdown files with YAML frontmatter — no database required. Views are fully configurable via a `.exo/` directory containing TOML files (or a single `.exo.toml` file) using CEL filter expressions.
+A self-hosted, file-based personal knowledge management and life-tracking application. In local mode, data is stored as plain markdown files with YAML frontmatter. Views are fully configurable via root-level TOML files in `EXO_DIR` using CEL filter expressions. Optional sync mode adds a central SQLite-backed server while TUI clients keep local markdown files.
 
 ## Features
 
@@ -14,6 +14,7 @@ A self-hosted, file-based personal knowledge management and life-tracking applic
 - **Stats pages** — Per-view stats with embedded templates
 - **Dual interface** — Full-featured TUI (default) and web interface (`exo serve`)
 - **LSP server** — Language Server Protocol support for editors (`exo lsp`)
+- **Optional sync server** — Central SQLite-backed server with signed TUI clients, approval flow, and local outbox retry
 
 ## Quickstart
 
@@ -56,7 +57,7 @@ export EXO_DIR=~/notes
 
 ### 2. Add a minimal config file
 
-Create `~/notes/.exo/notes.toml`:
+Create `~/notes/notes.toml`:
 
 ```toml
 default_view = "notes"
@@ -82,7 +83,7 @@ title: "{{.Title}}"
 """
 ```
 
-The config can live in either `.exo/*.toml` files or a single `.exo.toml` file at the root of `EXO_DIR`. The `.exo/` directory style is recommended because it lets you split views and actions into separate files.
+Workspace config lives in root-level `*.toml` files in `EXO_DIR`, such as `notes.toml` and `actions.toml`. The `.exo/` directory is reserved for local application config, cache databases, sync keys, and other machine-local state. Legacy `.exo/*.toml` and `.exo.toml` workspace configs are still loaded only when no root-level `*.toml` files exist.
 
 Each view needs:
 
@@ -128,7 +129,15 @@ EXO_DIR=~/notes exo lsp    # LSP server on stdio
 
 ## Configuration
 
-All views are defined in `.exo/` configuration files (or a single `.exo.toml` file) at the root of your data directory (`EXO_DIR`). The app scans all `.md` files recursively and filters them by frontmatter using [CEL expressions](https://github.com/google/cel-go).
+Views and actions are defined in root-level `*.toml` files in your data directory (`EXO_DIR`). The app scans all `.md` files recursively and filters them by frontmatter using [CEL expressions](https://github.com/google/cel-go).
+
+The `.exo/` directory is local-only. It is used for files such as `.exo/tui.toml`, `.exo/serve.toml`, `.exo/cache.sqlite`, generated sync keys, and server databases. These files are not workspace config and are not intended to sync between machines.
+
+Config loading order:
+
+1. Load all root-level `*.toml` files, except `.exo.toml`.
+2. If no root-level TOML files exist, fall back to legacy `.exo/*.toml`, excluding `.exo/tui.toml` and `.exo/serve.toml`.
+3. If no legacy `.exo/*.toml` files exist, fall back to legacy `.exo.toml`.
 
 ### Minimal example
 
@@ -363,7 +372,7 @@ Run `exo` to launch the terminal UI. Keybindings:
 | `:` | Open fuzzy action picker |
 | `q` | Quit |
 
-The action picker includes configured actions plus built-ins like Goodreads import, Hardcover search, and URL-to-note import. Actions whose CEL filter does not match are grayed out; selecting one shows the required CEL expression.
+The action picker includes configured actions plus built-ins like Goodreads import, Hardcover search, URL-to-note import, and sync actions when sync is configured. Actions whose CEL filter does not match are grayed out; selecting one shows the required CEL expression.
 
 An `All` view is always available with key `0`; it shows every item regardless of type.
 
@@ -444,6 +453,70 @@ curl -s http://localhost:8293/api/query/ids \
 ```json
 {"ids":["apibook"]}
 ```
+
+## Optional Sync Server
+
+By default, exo is local-first: the TUI, web UI, and LSP read and write markdown files under `EXO_DIR`. Sync mode adds a central server for sharing data between TUI clients.
+
+In sync-server mode:
+
+- `exo serve` stores notes and synced root-level workspace config in SQLite.
+- The server does not read or write markdown files.
+- TUI clients keep local markdown files and a local `.exo/cache.sqlite` cache/outbox.
+- Clients connect with signed requests using a generated ed25519 keypair.
+- New clients must be approved in the web UI before they can sync.
+
+### Start A Sync Server
+
+Create `.exo/serve.toml` in the server data directory:
+
+```toml
+[sync.server]
+enabled = true
+db_path = ".exo/server.sqlite"
+listen = ":8293"
+```
+
+Start the server:
+
+```bash
+EXO_DIR=/path/to/server-data exo serve
+```
+
+With Docker, mount the server data directory at `/data`:
+
+```bash
+docker run --rm \
+  -p 8293:8293 \
+  -v "/path/to/server-data:/data" \
+  ghcr.io/gnur/exokephalos:latest
+```
+
+Approve clients at:
+
+```text
+http://localhost:8293/admin/sync/clients
+```
+
+### Configure A TUI Client
+
+Create `.exo/tui.toml` in the client workspace:
+
+```toml
+[sync]
+server_url = "http://localhost:8293"
+client_id = "laptop"
+```
+
+Then start the TUI:
+
+```bash
+EXO_DIR=/path/to/client-notes exo
+```
+
+Open the action picker with `:` and run `start-sync`. The client generates a local ed25519 keypair, sends its public key to the server, and waits for approval. After approval, run `start-sync` again to upload local markdown files and root-level workspace config. The sync status appears in the TUI footer.
+
+The TUI also provides a `sync-outbox` action to inspect pending, failed, and synced operations. If the server is offline, local edits continue writing to markdown files and are retried from the outbox when the server is reachable again.
 
 ### LSP Server
 
@@ -569,7 +642,7 @@ task dev  # Hot-reload with Air + CSS watch
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `EXO_DIR` | `./example-repo` | Path to the data directory (must contain `.exo/` or `.exo.toml`) |
+| `EXO_DIR` | `./example-repo` | Path to the data directory (normally contains root-level workspace `*.toml` config plus markdown files) |
 | `EDITOR` | `vim` | Editor used by the TUI for editing |
 
 ## Data Structure
@@ -578,17 +651,20 @@ The data directory is flat — all `.md` files are scanned recursively and filte
 
 ```
 data-dir/
-├── .exo/               # Configuration directory
-│   ├── cache/          # Cache database directory
-│   ├── notes.toml      # Configured view files
-│   └── actions.toml
+├── .exo/               # Local-only app state and machine config
+│   ├── cache.sqlite    # TUI cache and sync outbox
+│   ├── tui.toml        # Optional TUI-local sync settings
+│   ├── serve.toml      # Optional server-local settings
+│   └── keys/           # Generated client signing keys
+├── notes.toml          # Synced workspace view config
+├── actions.toml        # Synced workspace actions
 ├── notes/              # Notes (type: note)
 ├── books/              # Books (tagged read/to-read/reading)
 ├── articles/           # Articles (type: article)
 └── webhooks/           # Stored webhooks (type: webhook)
 ```
 
-Each file uses YAML frontmatter for metadata. An `id` field is auto-injected on creation if not present in the template. You can define any directory structure and content type via the configuration files.
+Each markdown file uses YAML frontmatter for metadata. An `id` field is auto-injected on creation if not present in the template. You can define any directory structure and content type via the root-level workspace configuration files.
 
 ## Deploy
 

@@ -4,7 +4,9 @@ Custom actions are reusable modifiers configured in your configuration files tha
 
 ## Configuration
 
-Actions are defined under the `[actions]` section in `.exo.toml` or in configuration files inside `.exo/` (e.g., `actions.toml`).
+Actions are defined under the `[actions]` section in root-level workspace TOML files, usually `actions.toml` in `EXO_DIR`.
+
+Legacy `.exo/*.toml` and `.exo.toml` action configuration is still supported only when no root-level workspace TOML files exist. New workspaces should keep actions at the root so they can sync with the rest of the workspace config.
 
 Each action configuration contains:
 - `description`: The label describing the action.

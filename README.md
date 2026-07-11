@@ -518,6 +518,51 @@ Open the action picker with `:` and run `start-sync`. The client generates a loc
 
 The TUI also provides a `sync-outbox` action to inspect pending, failed, and synced operations. If the server is offline, local edits continue writing to markdown files and are retried from the outbox when the server is reachable again.
 
+### Run The Sync Server On Kubernetes
+
+Plain Kubernetes manifests are available in `deploy/kubernetes/`. They run exo as a single-replica `StatefulSet` with a `ReadWriteOnce` PVC mounted at `/data`. The manifests enable sync-server mode with `.exo/serve.toml`, so the server stores all synced data in SQLite at `/data/.exo/server.sqlite`.
+
+Apply the manifests:
+
+```bash
+kubectl apply -k deploy/kubernetes/
+```
+
+Wait for the StatefulSet to become ready:
+
+```bash
+kubectl rollout status statefulset/exo -n exo
+kubectl get pvc -n exo
+```
+
+The default service is `ClusterIP`. For local access, port-forward it:
+
+```bash
+kubectl port-forward -n exo svc/exo 8293:8293
+```
+
+Then open the client approval page:
+
+```text
+http://localhost:8293/admin/sync/clients
+```
+
+Configure a local TUI client with the forwarded URL:
+
+```toml
+[sync]
+server_url = "http://localhost:8293"
+client_id = "laptop"
+```
+
+Inside the cluster, the service URL is:
+
+```text
+http://exo.exo.svc.cluster.local:8293
+```
+
+The manifest is intentionally single-replica because SQLite should not be written by multiple pods at once. Add your own Ingress, TLS, authentication proxy, and backups according to your cluster conventions.
+
 ### LSP Server
 
 Run `exo lsp` to start the Language Server Protocol server over stdio. This provides IDE-like features for editing notes in any LSP-compatible editor.

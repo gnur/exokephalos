@@ -59,6 +59,31 @@ New clients appear in the approval page:
 http://localhost:8293/admin/sync/clients
 ```
 
+## Running The Sync Server On Kubernetes
+
+Plain Kubernetes manifests are available in `deploy/kubernetes/`. They run exo as a single-replica `StatefulSet` with a `ReadWriteOnce` PVC mounted at `/data`, and they enable sync-server mode with `.exo/serve.toml`.
+
+Apply the manifests:
+
+```bash
+kubectl apply -k deploy/kubernetes/
+```
+
+Wait for the pod and PVC:
+
+```bash
+kubectl rollout status statefulset/exo -n exo
+kubectl get pvc -n exo
+```
+
+The default service is internal-only. Use port-forwarding for local access:
+
+```bash
+kubectl port-forward -n exo svc/exo 8293:8293
+```
+
+Then approve sync clients at `http://localhost:8293/admin/sync/clients`. The in-cluster service URL is `http://exo.exo.svc.cluster.local:8293`.
+
 ## Features
 
 - **Dynamic Navigation**: Tabbed views and responsive layout loaded natively.

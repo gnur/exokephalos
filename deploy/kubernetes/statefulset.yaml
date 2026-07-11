@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: exo
+  namespace: exo
+  labels:
+    app.kubernetes.io/name: exo
+spec:
+  replicas: 1
+  serviceName: exo-headless
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: exo
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: exo
+    spec:
+      securityContext:
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        - name: init-data-dir
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - mkdir -p /data/.exo && chown -R 65532:65532 /data
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        - name: exo
+          image: ghcr.io/gnur/exokephalos:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8293
+          env:
+            - name: EXO_DIR
+              value: /data
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /data/.exo/serve.toml
+              subPath: serve.toml
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: exo-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: exo
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 5Gi

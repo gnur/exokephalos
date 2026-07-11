@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: exo-config
+  namespace: exo
+data:
+  serve.toml: |
+    [sync.server]
+    enabled = true
+    db_path = ".exo/server.sqlite"
+    listen = ":8293"

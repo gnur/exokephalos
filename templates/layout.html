@@ -14,6 +14,24 @@
                 }
             });
         });
+        {{if .SyncServerEnabled}}
+        document.addEventListener('DOMContentLoaded', function() {
+            if (!window.EventSource || window.__exoEventsStarted) {
+                return;
+            }
+            window.__exoEventsStarted = true;
+            var source = new EventSource('/api/events');
+            source.addEventListener('change', function() {
+                var active = document.activeElement;
+                if (active && (active.matches('input, textarea, select') || active.isContentEditable)) {
+                    return;
+                }
+                if (window.htmx) {
+                    window.htmx.ajax('GET', window.location.href, {target: '#main-content', swap: 'innerHTML'});
+                }
+            });
+        });
+        {{end}}
     </script>
 </head>
 <body hx-boost="true" hx-target="#main-content" hx-swap="innerHTML" class="bg-gray-900 text-gray-100 min-h-screen overflow-x-hidden">
@@ -34,6 +52,9 @@
                     {{else}}
                     <a href="/views/{{.ID}}" class="hover:bg-gray-800 px-2 sm:px-3 py-2 rounded text-sm whitespace-nowrap">{{.Config.Name}}</a>
                     {{end}}
+                    {{end}}
+                    {{if .SyncServerEnabled}}
+                    <a href="/admin/sync/clients" class="hover:bg-gray-800 px-2 sm:px-3 py-2 rounded text-sm whitespace-nowrap">sync clients</a>
                     {{end}}
                 </div>
             </div>

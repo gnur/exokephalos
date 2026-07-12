@@ -63,7 +63,7 @@ func (h *Handlers) WebhookReceive(w http.ResponseWriter, r *http.Request) {
 	}
 	body.WriteString("```\n")
 
-	if err := h.Repo.CreateItem(path, fm, body.String()); err != nil {
+	if err := h.Store.CreateItem(path, fm, body.String()); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}

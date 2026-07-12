@@ -63,9 +63,20 @@ func (a *Action) Match(fm map[string]interface{}) bool {
 }
 
 func (a *Action) Apply(path string, fm map[string]interface{}, body string) error {
+	newFm, err := a.Mutate(fm)
+	if err != nil {
+		return err
+	}
+	if err := markdown.WriteFrontmatter(path, newFm, body); err != nil {
+		return fmt.Errorf("writing file: %w", err)
+	}
+	return nil
+}
+
+func (a *Action) Mutate(fm map[string]interface{}) (map[string]interface{}, error) {
 	yamlBytes, err := yaml.Marshal(fm)
 	if err != nil {
-		return fmt.Errorf("marshaling frontmatter: %w", err)
+		return nil, fmt.Errorf("marshaling frontmatter: %w", err)
 	}
 
 	prefs := yqlib.NewDefaultYamlPreferences()
@@ -78,17 +89,13 @@ func (a *Action) Apply(path string, fm map[string]interface{}, body string) erro
 		yqlib.NewYamlDecoder(prefs),
 	)
 	if err != nil {
-		return fmt.Errorf("applying yq expression: %w", err)
+		return nil, fmt.Errorf("applying yq expression: %w", err)
 	}
 
 	var newFm map[string]interface{}
 	if err := yaml.Unmarshal([]byte(result), &newFm); err != nil {
-		return fmt.Errorf("unmarshaling result: %w", err)
+		return nil, fmt.Errorf("unmarshaling result: %w", err)
 	}
 
-	if err := markdown.WriteFrontmatter(path, newFm, body); err != nil {
-		return fmt.Errorf("writing file: %w", err)
-	}
-
-	return nil
+	return newFm, nil
 }

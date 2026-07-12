@@ -20,6 +20,7 @@ import (
 	"github.com/gnur/exokephalos/internal/filter"
 	"github.com/gnur/exokephalos/internal/repo"
 	"github.com/gnur/exokephalos/internal/scanner"
+	"github.com/gnur/exokephalos/internal/syncsvc"
 	"github.com/gnur/exokephalos/internal/version"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/yuin/goldmark"
@@ -37,6 +38,8 @@ type Handlers struct {
 	BaseDir    string
 	Repo       *repo.Repo
 	Cache      *cache.Cache
+	Store      ItemStore
+	SyncServer *syncsvc.Server
 	templateFS fs.FS
 	funcMap    template.FuncMap
 	hostname   string
@@ -57,6 +60,7 @@ func New(cfg *config.Config, baseDir string, r *repo.Repo, c *cache.Cache, templ
 		BaseDir:        baseDir,
 		Repo:           r,
 		Cache:          c,
+		Store:          newFilesystemStore(r, c),
 		templateFS:     templateFS,
 		hostname:       hostname,
 		filters:        make(map[string]*filter.Program),
@@ -75,7 +79,7 @@ func New(cfg *config.Config, baseDir string, r *repo.Repo, c *cache.Cache, templ
 				}
 				return false
 			},
-			"tof": func(i int) float64 { return float64(i) },
+			"tof":  func(i int) float64 { return float64(i) },
 			"mulf": func(a, b float64) float64 { return a * b },
 			"divf": func(a, b float64) float64 {
 				if b == 0 {
@@ -242,7 +246,7 @@ func New(cfg *config.Config, baseDir string, r *repo.Repo, c *cache.Cache, templ
 				return match
 			}
 			idVal := strings.ToLower(submatches[1])
-			item, err := h.Cache.GetByID(idVal)
+			item, err := h.Store.GetByID(idVal)
 			if err != nil {
 				return match
 			}
@@ -310,6 +314,24 @@ func New(cfg *config.Config, baseDir string, r *repo.Repo, c *cache.Cache, templ
 	return h, nil
 }
 
+func NewWithStore(cfg *config.Config, baseDir string, store ItemStore, templateFS fs.FS) (*Handlers, error) {
+	h, err := New(cfg, baseDir, nil, nil, templateFS)
+	if err != nil {
+		return nil, err
+	}
+	h.Store = store
+	return h, nil
+}
+
+func NewSyncServer(cfg *config.Config, baseDir string, s *syncsvc.Server, templateFS fs.FS) (*Handlers, error) {
+	h, err := NewWithStore(cfg, baseDir, s, templateFS)
+	if err != nil {
+		return nil, err
+	}
+	h.SyncServer = s
+	return h, nil
+}
+
 // ApplicableActions returns the names of actions that match the given item's frontmatter.
 func (h *Handlers) ApplicableActions(fm map[string]interface{}) []string {
 	var names []string
@@ -323,7 +345,7 @@ func (h *Handlers) ApplicableActions(fm map[string]interface{}) []string {
 
 // scanAndFilter reads all items from cache and returns those matching the given view.
 func (h *Handlers) scanAndFilter(viewID string) ([]scanner.Item, error) {
-	items, err := h.Cache.All()
+	items, err := h.Store.All()
 	if err != nil {
 		return nil, err
 	}
@@ -430,7 +452,6 @@ func (h *Handlers) validateCSRF(r *http.Request) bool {
 	return true
 }
 
-
 func (h *Handlers) render(w http.ResponseWriter, r *http.Request, name string, data map[string]interface{}) {
 	// Inject timing info
 	requestStart, _ := data["_requestStart"].(time.Time)
@@ -445,6 +466,7 @@ func (h *Handlers) render(w http.ResponseWriter, r *http.Request, name string, d
 	// Inject nav data for layout
 	data["NavViews"] = h.Cfg.OrderedViews()
 	data["Config"] = h.Cfg
+	data["SyncServerEnabled"] = h.SyncServer != nil
 
 	tmpl, ok := h.templates[name]
 	if !ok {

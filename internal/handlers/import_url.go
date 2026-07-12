@@ -29,6 +29,12 @@ func (h *Handlers) ImportURL(w http.ResponseWriter, r *http.Request) {
 		h.render(w, r, "views/import_url.html", data)
 		return
 	}
+	if h.Repo == nil {
+		data["Error"] = "URL import is not available in sync-server mode"
+		data["URL"] = rawURL
+		h.render(w, r, "views/import_url.html", data)
+		return
+	}
 
 	result, err := urlimport.Import(r.Context(), h.Repo, h.BaseDir, rawURL)
 	if err != nil {

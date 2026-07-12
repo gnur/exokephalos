@@ -281,6 +281,14 @@ func (c *Cache) GetByTag(tag string) ([]scanner.Item, error) {
 }
 
 func (c *Cache) NotifyWrite(absPath string) error {
+	return c.notifyWrite(absPath, true)
+}
+
+func (c *Cache) NotifyWriteNoOutbox(absPath string) error {
+	return c.notifyWrite(absPath, false)
+}
+
+func (c *Cache) notifyWrite(absPath string, enqueue bool) error {
 	if filepath.Ext(absPath) != ".md" {
 		return nil
 	}
@@ -298,6 +306,9 @@ func (c *Cache) NotifyWrite(absPath string) error {
 		_, err = c.db.Exec(`UPDATE items SET deleted_at = ? WHERE path = ?`, time.Now().UTC().Format(time.RFC3339Nano), relPath)
 		return err
 	}
+	if enqueue && c.isSyncStartedLocked() && item.ID != "" && c.itemChangedLocked(item.ID, contentHash) {
+		_ = c.enqueueItemLocked("upsert_item", item, relPath)
+	}
 	return c.upsertItem(item, contentHash, "")
 }
 
@@ -308,6 +319,12 @@ func (c *Cache) NotifyDelete(absPath string) error {
 	relPath, err := filepath.Rel(c.baseDir, absPath)
 	if err != nil {
 		return err
+	}
+	if c.IsSyncStarted() {
+		var idVal string
+		_ = c.db.QueryRow(`SELECT id FROM items WHERE path = ?`, relPath).Scan(&idVal)
+		payload := fmt.Sprintf(`{"op":"delete_item","target_kind":"item","id":%q,"path":%q}`, idVal, relPath)
+		_ = c.EnqueueOutbox("delete_item", "item", idVal, relPath, payload)
 	}
 	_, err = c.db.Exec(`UPDATE items SET deleted_at = ? WHERE path = ?`, time.Now().UTC().Format(time.RFC3339Nano), relPath)
 	return err
@@ -372,10 +389,22 @@ func (c *Cache) enqueueItemLocked(op string, item *scanner.Item, relPath string)
 }
 
 func (c *Cache) OutboxEntries(limit int) ([]OutboxEntry, error) {
+	return c.OutboxEntriesByStatus("", limit)
+}
+
+func (c *Cache) OutboxEntriesByStatus(status string, limit int) ([]OutboxEntry, error) {
 	if limit <= 0 {
 		limit = 200
 	}
-	rows, err := c.db.Query(`SELECT id, op, target_kind, target_id, path, payload, status, attempts, last_error, created_at, last_attempt_at FROM outbox ORDER BY id DESC LIMIT ?`, limit)
+	query := `SELECT id, op, target_kind, target_id, path, payload, status, attempts, last_error, created_at, last_attempt_at FROM outbox`
+	var args []interface{}
+	if status != "" && status != "all" {
+		query += ` WHERE status = ?`
+		args = append(args, status)
+	}
+	query += ` ORDER BY id DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := c.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -392,6 +421,19 @@ func (c *Cache) OutboxEntries(limit int) ([]OutboxEntry, error) {
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()
+}
+
+func (c *Cache) RetryOutbox(id int64) error {
+	_, err := c.db.Exec(`UPDATE outbox SET status = 'pending', last_error = '' WHERE id = ?`, id)
+	return err
+}
+
+func (c *Cache) RetryFailedOutbox() (int64, error) {
+	res, err := c.db.Exec(`UPDATE outbox SET status = 'pending', last_error = '' WHERE status = 'failed'`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (c *Cache) PendingOutbox(limit int) ([]OutboxEntry, error) {

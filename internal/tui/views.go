@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gnur/exokephalos/internal/scanner"
@@ -359,17 +360,50 @@ func (m Model) renderFooter() string {
 }
 
 func (m Model) renderSyncOutboxView() string {
-	header := headerStyle.Width(m.width).Render("Sync Outbox")
-	entries, err := m.cache.OutboxEntries(200)
+	filterLabel := m.syncOutboxFilter
+	if filterLabel == "" {
+		filterLabel = "all"
+	}
+	header := headerStyle.Width(m.width).Render(fmt.Sprintf("Sync Outbox [%s]", filterLabel))
+	entries, err := m.cache.OutboxEntriesByStatus(m.syncOutboxFilter, 500)
 	bodyHeight := m.height - 2
 	lines := []string{}
 	if err != nil {
 		lines = append(lines, "error: "+err.Error())
 	} else if len(entries) == 0 {
 		lines = append(lines, "No sync outbox entries.")
+	} else if m.syncOutboxDetail {
+		if m.syncOutboxCursor >= len(entries) {
+			m.syncOutboxCursor = len(entries) - 1
+		}
+		entry := entries[m.syncOutboxCursor]
+		lines = append(lines,
+			fmt.Sprintf("ID: %d", entry.ID),
+			fmt.Sprintf("Status: %s", entry.Status),
+			fmt.Sprintf("Attempts: %d", entry.Attempts),
+			fmt.Sprintf("Operation: %s", entry.Op),
+			fmt.Sprintf("Target kind: %s", entry.TargetKind),
+			fmt.Sprintf("Target: %s", firstNonEmptyString(entry.TargetID, entry.Path)),
+			fmt.Sprintf("Created: %s", formatOutboxTime(entry.CreatedAt)),
+			fmt.Sprintf("Last attempt: %s", formatOutboxTime(entry.LastAttemptAt)),
+			"",
+			"Last error:",
+			firstNonEmptyString(entry.LastError, "-"),
+			"",
+			"Payload:",
+		)
+		for _, line := range strings.Split(entry.Payload, "\n") {
+			lines = append(lines, truncate(line, m.width))
+		}
 	} else {
 		lines = append(lines, truncate("ID  Status    Attempts  Operation       Target", m.width))
-		for _, entry := range entries {
+		m.clampSyncOutboxOffset()
+		end := m.syncOutboxOffset + bodyHeight - 1
+		if end > len(entries) {
+			end = len(entries)
+		}
+		for idx := m.syncOutboxOffset; idx < end; idx++ {
+			entry := entries[idx]
 			target := entry.TargetID
 			if target == "" {
 				target = entry.Path
@@ -378,18 +412,36 @@ func (m Model) renderSyncOutboxView() string {
 			if entry.LastError != "" {
 				line += "  " + entry.LastError
 			}
-			lines = append(lines, truncate(line, m.width))
-			if len(lines) >= bodyHeight {
-				break
+			if idx == m.syncOutboxCursor {
+				line = selectedItemStyle.Render(truncate(line, m.width))
+			} else {
+				line = truncate(line, m.width)
 			}
+			lines = append(lines, line)
 		}
 	}
 	for len(lines) < bodyHeight {
 		lines = append(lines, "")
 	}
 	body := lipgloss.NewStyle().Width(m.width).Height(bodyHeight).Render(strings.Join(lines, "\n"))
-	footer := footerStyle.Width(m.width).Render(" esc/q:back")
+	footer := footerStyle.Width(m.width).Render(" j/k:scroll  f:filter  enter:details  r:retry  R:retry failed  esc/q:back")
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func formatOutboxTime(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return t.Format("2006-01-02 15:04:05")
 }
 
 func truncate(s string, max int) string {

@@ -71,11 +71,9 @@ func TestSignedSyncFlow(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 
-	resp, err = http.Post(ts.URL+"/admin/sync/clients/client-a/approve", "application/x-www-form-urlencoded", nil)
-	if err != nil {
+	if err := server.ApproveClient("client-a"); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
-	_ = resp.Body.Close()
 
 	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/api/sync/changes", bytes.NewReader(changeBody))
 	req.Header.Set("Content-Type", "application/json")

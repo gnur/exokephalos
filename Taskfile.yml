@@ -103,6 +103,65 @@ tasks:
         EXO_DIR="$temp_dir" ./exo import ./example-repo/docs doc
         EXO_DIR="$temp_dir" ./exo serve
 
+  dev:integration-test:
+    desc: Create local sync server/client dirs, seed client notes, and start the sync server
+    deps: [build]
+    cmds:
+      - |
+        mkdir -p ./tmp-run
+        server_dir=$(mktemp -d ./tmp-run/exo-sync-server-XXXXXX)
+        client_dir=$(mktemp -d ./tmp-run/exo-sync-client-XXXXXX)
+        port="${PORT:-8293}"
+
+        mkdir -p "$server_dir/.exo" "$client_dir/.exo"
+
+        cat > "$server_dir/.exo/serve.toml" <<EOF
+        [sync.server]
+        enabled = true
+        db_path = ".exo/server.sqlite"
+        listen = ":$port"
+        EOF
+
+        cat > "$client_dir/.exo/tui.toml" <<EOF
+        [sync]
+        server_url = "http://localhost:$port"
+        client_id = "local-dev-client"
+        EOF
+
+        cp ./example-repo/.exo/*.toml "$client_dir"/
+        EXO_DIR="$client_dir" ./exo import ./example-repo/note note
+        EXO_DIR="$client_dir" ./exo import ./example-repo/docs doc
+
+        cat <<EOF
+
+        Local sync integration environment created.
+
+        Server EXO_DIR:
+          $server_dir
+
+        TUI client EXO_DIR:
+          $client_dir
+
+        Starting sync server on:
+          http://localhost:$port
+
+        In another terminal, start the TUI client:
+          EXO_DIR="$client_dir" ./exo
+
+        Then in the TUI:
+          1. Press ':' to open the action picker.
+          2. Run 'start-sync'.
+          3. Open http://localhost:$port/admin/sync/clients
+          4. Approve 'local-dev-client'.
+          5. Run 'start-sync' again in the TUI.
+          6. Run 'sync-outbox' to inspect queued/synced operations.
+
+        Press Ctrl+C in this terminal to stop the sync server.
+
+        EOF
+
+        EXO_DIR="$server_dir" ./exo serve
+
   run:
     desc: Alias for dev:tui
     cmds:

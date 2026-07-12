@@ -169,18 +169,17 @@ func (h *Handlers) ViewEdit(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		_ = r.ParseForm()
 		content := r.FormValue("content")
-		if err := h.Repo.WriteRaw(item.Path, content); err != nil {
+		if err := h.Store.WriteRaw(item.Path, content); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		_ = h.Cache.NotifyWrite(item.Path)
 		http.Redirect(w, r, fmt.Sprintf("/views/%s/%s", viewID, itemID), http.StatusSeeOther)
 		return
 	}
 
 	data := newData(r)
 	parseStart := time.Now()
-	raw, err := h.Repo.ReadRaw(item.Path)
+	raw, err := h.Store.ReadRaw(item.Path)
 	data["_parseTime"] = time.Since(parseStart)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -216,11 +215,10 @@ func (h *Handlers) ViewDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := os.Remove(item.Path); err != nil && !os.IsNotExist(err) {
+	if err := h.Store.DeleteItem(item.Path); err != nil && !os.IsNotExist(err) {
 		http.Error(w, fmt.Sprintf("failed to delete item: %v", err), http.StatusInternalServerError)
 		return
 	}
-	_ = h.Cache.NotifyDelete(item.Path)
 	http.Redirect(w, r, fmt.Sprintf("/views/%s", viewID), http.StatusSeeOther)
 }
 
@@ -253,11 +251,15 @@ func (h *Handlers) ViewAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := act.Apply(item.Path, item.Frontmatter, item.Body); err != nil {
+	newFm, err := act.Mutate(item.Frontmatter)
+	if err != nil {
 		http.Error(w, fmt.Sprintf("action failed: %v", err), 500)
 		return
 	}
-	_ = h.Cache.NotifyWrite(item.Path)
+	if err := h.Store.UpdateItem(item.Path, newFm, item.Body); err != nil {
+		http.Error(w, fmt.Sprintf("action failed: %v", err), 500)
+		return
+	}
 
 	http.Redirect(w, r, fmt.Sprintf("/views/%s", viewID), http.StatusSeeOther)
 }
@@ -337,17 +339,15 @@ func (h *Handlers) ViewNewPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Write the file
-	dir := fullPath[:strings.LastIndex(fullPath, "/")]
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	fm, body, err := markdown.ParseFrontmatterBytes([]byte(content))
+	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+	if err := h.Store.CreateItem(fullPath, fm, body); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	_ = h.Cache.NotifyWrite(fullPath)
 
 	http.Redirect(w, r, fmt.Sprintf("/views/%s", viewID), http.StatusSeeOther)
 }

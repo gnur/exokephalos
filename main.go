@@ -65,7 +65,7 @@ func main() {
 	}
 
 	if len(os.Args) > 1 && os.Args[1] == "serve" && appCfg.Server.Enabled {
-		runSyncServer(appCfg)
+		runServerWithSync(appCfg, dir)
 		return
 	}
 
@@ -99,16 +99,81 @@ func main() {
 	}
 }
 
-func runSyncServer(appCfg *config.AppConfig) {
+func runServerWithSync(appCfg *config.AppConfig, dir string) {
 	s, err := syncsvc.NewServer(appCfg.Server.DBPath)
 	if err != nil {
 		log.Fatalf("Failed to initialize sync server: %v", err)
 	}
 	defer s.Close()
+	s.SetBaseDir(dir)
+
+	cfg, err := syncsvc.LoadConfigFromServerDB(appCfg.Server.DBPath)
+	if err != nil {
+		log.Fatalf("Failed to load sync server config: %v", err)
+	}
+	if len(cfg.Views) == 0 {
+		if diskCfg, diskErr := config.Load(dir); diskErr == nil {
+			cfg = diskCfg
+		}
+	}
+	h, err := handlers.NewSyncServer(cfg, dir, s, templatesFS)
+	if err != nil {
+		log.Fatalf("Failed to initialize handlers: %v", err)
+	}
+
 	mux := http.NewServeMux()
-	s.Register(mux)
-	fmt.Printf("exokephalos sync server listening on %s\n", appCfg.Server.Listen)
-	log.Fatal(http.ListenAndServe(appCfg.Server.Listen, mux))
+
+	staticSub, _ := fs.Sub(staticFS, "static")
+	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
+
+	s.RegisterAPI(mux)
+	s.RegisterWebEvents(mux)
+
+	mux.HandleFunc("GET /api/items/{id}", h.GetItemByID)
+	mux.HandleFunc("POST /api/items", h.CreateItem)
+	mux.HandleFunc("PATCH /api/items/{id}", h.UpdateItemByID)
+	mux.HandleFunc("POST /api/query/ids", h.QueryIDsByCEL)
+
+	mux.HandleFunc("GET /import-url", h.ImportURL)
+	mux.HandleFunc("POST /import-url", h.ImportURL)
+	mux.HandleFunc("GET /admin/sync/clients", h.SyncClients)
+	mux.HandleFunc("POST /admin/sync/clients/{clientId}/approve", h.SyncClientApprove)
+	mux.HandleFunc("POST /admin/sync/clients/{clientId}/revoke", h.SyncClientRevoke)
+	mux.HandleFunc("GET /views/{viewId}/stats", h.ViewStats)
+	mux.HandleFunc("GET /views/{viewId}/new", h.ViewNew)
+	mux.HandleFunc("POST /views/{viewId}/new", h.ViewNew)
+	mux.HandleFunc("GET /views/{viewId}/edit/{itemId}", h.ViewEdit)
+	mux.HandleFunc("POST /views/{viewId}/edit/{itemId}", h.ViewEdit)
+	mux.HandleFunc("POST /views/{viewId}/delete/{itemId}", h.ViewDelete)
+	mux.HandleFunc("POST /views/{viewId}/items/{itemId}/actions/{actionName}", h.ViewAction)
+	mux.HandleFunc("GET /views/{viewId}/{itemId}", h.ViewDetail)
+	mux.HandleFunc("GET /views/{viewId}", h.ViewList)
+	mux.HandleFunc("POST /webhook/{source}", h.WebhookReceive)
+	mux.HandleFunc("GET /ping", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("pong"))
+	})
+
+	defaultView := cfg.DefaultView
+	if defaultView == "" {
+		views := cfg.OrderedViews()
+		if len(views) > 0 {
+			defaultView = views[0].ID
+		}
+	}
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		if defaultView == "" {
+			http.Redirect(w, r, "/admin/sync/clients", http.StatusSeeOther)
+			return
+		}
+		http.Redirect(w, r, "/views/"+defaultView, http.StatusSeeOther)
+	})
+
+	fmt.Printf("exokephalos listening on %s\n", appCfg.Server.Listen)
+	log.Fatal(http.ListenAndServe(appCfg.Server.Listen, h.TimingMiddleware(h.CSRFMiddleware(mux))))
 }
 
 func runServer(cfg *config.Config, dir string, r *repo.Repo, c *cache.Cache) {

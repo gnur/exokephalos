@@ -40,7 +40,7 @@ func (h *Handlers) GetItemByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	item, err := h.Cache.GetByID(id)
+	item, err := h.Store.GetByID(id)
 	if err != nil {
 		writeAPIError(w, "item not found", http.StatusNotFound)
 		return
@@ -68,6 +68,10 @@ func (h *Handlers) CreateItem(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(req.URL) == "" {
 		writeAPIError(w, "missing url", http.StatusBadRequest)
+		return
+	}
+	if h.Repo == nil {
+		writeAPIError(w, "URL import is not available in sync-server mode", http.StatusBadRequest)
 		return
 	}
 
@@ -111,7 +115,7 @@ func (h *Handlers) UpdateItemByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	item, err := h.Cache.GetByID(id)
+	item, err := h.Store.GetByID(id)
 	if err != nil {
 		writeAPIError(w, "item not found", http.StatusNotFound)
 		return
@@ -126,7 +130,7 @@ func (h *Handlers) UpdateItemByID(w http.ResponseWriter, r *http.Request) {
 		body = *req.Body
 	}
 
-	if err := h.Repo.UpdateItem(item.Path, fm, body); err != nil {
+	if err := h.Store.UpdateItem(item.Path, fm, body); err != nil {
 		writeAPIError(w, "updating item", http.StatusInternalServerError)
 		return
 	}
@@ -159,7 +163,7 @@ func (h *Handlers) QueryIDsByCEL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items, err := h.Cache.All()
+	items, err := h.Store.All()
 	if err != nil {
 		writeAPIError(w, "cache read error", http.StatusInternalServerError)
 		return

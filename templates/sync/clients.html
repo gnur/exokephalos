@@ -1,0 +1,59 @@
+{{define "content"}}
+<div class="flex items-center justify-between mb-4">
+    <div>
+        <h1 class="text-2xl font-bold">sync clients</h1>
+        <p class="text-sm text-gray-400 mt-1">Approve or revoke TUI clients that enrolled with an ed25519 public key.</p>
+    </div>
+</div>
+
+{{template "clients_table" .}}
+{{end}}
+
+{{define "clients_table"}}
+<div id="sync-clients-panel"
+     hx-get="/admin/sync/clients?partial=table"
+     hx-trigger="every 2s"
+     hx-target="#sync-clients-panel"
+     hx-swap="outerHTML"
+     class="overflow-x-auto border border-gray-800 rounded">
+    <table class="w-full text-sm">
+        <thead class="bg-gray-950 text-gray-400">
+            <tr>
+                <th class="text-left px-3 py-2 font-semibold">client</th>
+                <th class="text-left px-3 py-2 font-semibold">label</th>
+                <th class="text-left px-3 py-2 font-semibold">status</th>
+                <th class="text-left px-3 py-2 font-semibold">created</th>
+                <th class="text-left px-3 py-2 font-semibold">approved</th>
+                <th class="text-right px-3 py-2 font-semibold">actions</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-800">
+            {{range .Clients}}
+            <tr class="hover:bg-gray-800/50">
+                <td class="px-3 py-2 font-mono text-xs">{{.ID}}</td>
+                <td class="px-3 py-2">{{.Label}}</td>
+                <td class="px-3 py-2">{{.Status}}</td>
+                <td class="px-3 py-2 text-gray-400">{{.CreatedAt}}</td>
+                <td class="px-3 py-2 text-gray-400">{{.ApprovedAt}}</td>
+                <td class="px-3 py-2">
+                    <div class="flex justify-end gap-2">
+                        {{if ne .Status "approved"}}
+                        <form method="post" action="/admin/sync/clients/{{.ID}}/approve">
+                            <button type="submit" class="bg-blue-600 hover:bg-blue-700 px-2 py-1 rounded text-xs font-medium">approve</button>
+                        </form>
+                        {{end}}
+                        <form method="post" action="/admin/sync/clients/{{.ID}}/revoke">
+                            <button type="submit" class="bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded text-xs font-medium">revoke</button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+            {{else}}
+            <tr>
+                <td colspan="6" class="px-3 py-8 text-center text-gray-500">No clients enrolled yet.</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+</div>
+{{end}}

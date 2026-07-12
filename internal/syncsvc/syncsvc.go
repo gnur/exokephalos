@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"html/template"
 	"io"
 	"net/http"
 	"os"
@@ -23,11 +22,13 @@ import (
 	"github.com/gnur/exokephalos/internal/config"
 	"github.com/gnur/exokephalos/internal/markdown"
 	"github.com/gnur/exokephalos/internal/scanner"
+	"gopkg.in/yaml.v3"
 	_ "modernc.org/sqlite"
 )
 
 type Server struct {
-	db *sql.DB
+	db      *sql.DB
+	baseDir string
 }
 
 type Change struct {
@@ -44,6 +45,14 @@ type ChangeResponse struct {
 	Revision int64 `json:"revision"`
 }
 
+type Client struct {
+	ID         string
+	Label      string
+	Status     string
+	CreatedAt  string
+	ApprovedAt string
+}
+
 func NewServer(dbPath string) (*Server, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		return nil, err
@@ -52,7 +61,7 @@ func NewServer(dbPath string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{db: db}
+	s := &Server{db: db, baseDir: "."}
 	if err := s.migrate(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -62,16 +71,26 @@ func NewServer(dbPath string) (*Server, error) {
 
 func (s *Server) Close() error { return s.db.Close() }
 
+func (s *Server) SetBaseDir(baseDir string) {
+	if baseDir != "" {
+		s.baseDir = baseDir
+	}
+}
+
 func (s *Server) Register(mux *http.ServeMux) {
+	s.RegisterAPI(mux)
+}
+
+func (s *Server) RegisterAPI(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sync/enroll", s.handleEnroll)
 	mux.HandleFunc("GET /api/sync/enroll/status", s.handleEnrollStatus)
 	mux.HandleFunc("POST /api/sync/changes", s.requireSignature(s.handleChanges))
 	mux.HandleFunc("GET /api/sync/snapshot", s.requireSignature(s.handleSnapshot))
 	mux.HandleFunc("GET /api/sync/events", s.requireSignature(s.handleEvents))
-	mux.HandleFunc("GET /admin/sync/clients", s.handleClients)
-	mux.HandleFunc("POST /admin/sync/clients/{clientId}/approve", s.handleApprove)
-	mux.HandleFunc("POST /admin/sync/clients/{clientId}/revoke", s.handleRevoke)
-	mux.HandleFunc("GET /", s.handleIndex)
+}
+
+func (s *Server) RegisterWebEvents(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/events", s.handleWebEvents)
 }
 
 func (s *Server) migrate() error {
@@ -254,6 +273,19 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	since, _ := strconv.ParseInt(r.URL.Query().Get("since_revision"), 10, 64)
+	s.streamEvents(w, r, since)
+}
+
+func (s *Server) handleWebEvents(w http.ResponseWriter, r *http.Request) {
+	since, err := strconv.ParseInt(r.URL.Query().Get("since_revision"), 10, 64)
+	if err != nil || r.URL.Query().Get("since_revision") == "" {
+		since = s.latestRevision()
+	}
+	s.streamEvents(w, r, since)
+}
+
+func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, since int64) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	flusher, ok := w.(http.Flusher)
@@ -261,7 +293,6 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
-	since, _ := strconv.ParseInt(r.URL.Query().Get("since_revision"), 10, 64)
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	fmt.Fprint(w, ": connected\n\n")
@@ -287,6 +318,12 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) latestRevision() int64 {
+	var rev int64
+	_ = s.db.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM revisions`).Scan(&rev)
+	return rev
+}
+
 func (s *Server) writeEventsAfter(w io.Writer, since int64) (int64, error) {
 	rows, err := s.db.Query(`SELECT id, target_kind, target_id, op, created_at FROM revisions WHERE id > ? ORDER BY id ASC`, since)
 	if err != nil {
@@ -307,44 +344,31 @@ func (s *Server) writeEventsAfter(w io.Writer, since int64) (int64, error) {
 	return latest, rows.Err()
 }
 
-func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-	items, _ := s.items()
-	tmpl := template.Must(template.New("index").Parse(`<html><body><h1>exo sync server</h1><p><a href="/admin/sync/clients">sync clients</a></p><h2>Items</h2><ul>{{range .}}<li>{{.ID}} - {{.Path}}</li>{{else}}<li>No items synced yet.</li>{{end}}</ul></body></html>`))
-	_ = tmpl.Execute(w, items)
-}
-
-func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
+func (s *Server) Clients() ([]Client, error) {
 	rows, err := s.db.Query(`SELECT id, label, status, created_at, approved_at FROM clients ORDER BY created_at DESC`)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return nil, err
 	}
 	defer rows.Close()
-	type client struct{ ID, Label, Status, CreatedAt, ApprovedAt string }
-	var clients []client
+	var clients []Client
 	for rows.Next() {
-		var c client
-		_ = rows.Scan(&c.ID, &c.Label, &c.Status, &c.CreatedAt, &c.ApprovedAt)
+		var c Client
+		if err := rows.Scan(&c.ID, &c.Label, &c.Status, &c.CreatedAt, &c.ApprovedAt); err != nil {
+			return nil, err
+		}
 		clients = append(clients, c)
 	}
-	tmpl := template.Must(template.New("clients").Parse(`<html><body><h1>sync clients</h1><table><tr><th>client</th><th>label</th><th>status</th><th>actions</th></tr>{{range .}}<tr><td>{{.ID}}</td><td>{{.Label}}</td><td>{{.Status}}</td><td><form method="post" action="/admin/sync/clients/{{.ID}}/approve" style="display:inline"><button>approve</button></form> <form method="post" action="/admin/sync/clients/{{.ID}}/revoke" style="display:inline"><button>revoke</button></form></td></tr>{{end}}</table></body></html>`))
-	_ = tmpl.Execute(w, clients)
+	return clients, rows.Err()
 }
 
-func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
-	clientID := r.PathValue("clientId")
-	_, _ = s.db.Exec(`UPDATE clients SET status = 'approved', approved_at = ? WHERE id = ?`, time.Now().UTC().Format(time.RFC3339Nano), clientID)
-	http.Redirect(w, r, "/admin/sync/clients", http.StatusSeeOther)
+func (s *Server) ApproveClient(clientID string) error {
+	_, err := s.db.Exec(`UPDATE clients SET status = 'approved', approved_at = ? WHERE id = ?`, time.Now().UTC().Format(time.RFC3339Nano), clientID)
+	return err
 }
 
-func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
-	clientID := r.PathValue("clientId")
-	_, _ = s.db.Exec(`UPDATE clients SET status = 'revoked' WHERE id = ?`, clientID)
-	http.Redirect(w, r, "/admin/sync/clients", http.StatusSeeOther)
+func (s *Server) RevokeClient(clientID string) error {
+	_, err := s.db.Exec(`UPDATE clients SET status = 'revoked' WHERE id = ?`, clientID)
+	return err
 }
 
 func (s *Server) requireSignature(next http.HandlerFunc) http.HandlerFunc {
@@ -417,6 +441,134 @@ func (s *Server) items() ([]Change, error) {
 		changes = append(changes, ch)
 	}
 	return changes, rows.Err()
+}
+
+func (s *Server) All() ([]scanner.Item, error) {
+	changes, err := s.items()
+	if err != nil {
+		return nil, err
+	}
+	items := make([]scanner.Item, 0, len(changes))
+	for _, ch := range changes {
+		items = append(items, scanner.Item{
+			Path:        s.pathForWeb(ch.Path),
+			Frontmatter: ch.Frontmatter,
+			Body:        ch.Body,
+			ID:          ch.ID,
+			Type:        markdown.FMString(ch.Frontmatter, "type"),
+			Tags:        markdown.ExtractTags(ch.Frontmatter),
+		})
+	}
+	return items, nil
+}
+
+func (s *Server) GetByID(id string) (*scanner.Item, error) {
+	var ch Change
+	var fmJSON string
+	err := s.db.QueryRow(`SELECT id, path, frontmatter, body FROM items WHERE lower(id) = lower(?) AND deleted_at = ''`, id).Scan(&ch.ID, &ch.Path, &fmJSON, &ch.Body)
+	if err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal([]byte(fmJSON), &ch.Frontmatter)
+	item := scanner.Item{
+		Path:        s.pathForWeb(ch.Path),
+		Frontmatter: ch.Frontmatter,
+		Body:        ch.Body,
+		ID:          ch.ID,
+		Type:        markdown.FMString(ch.Frontmatter, "type"),
+		Tags:        markdown.ExtractTags(ch.Frontmatter),
+	}
+	return &item, nil
+}
+
+func (s *Server) ReadRaw(path string) (string, error) {
+	rel := s.relPath(path)
+	var fmJSON, body string
+	if err := s.db.QueryRow(`SELECT frontmatter, body FROM items WHERE path = ? AND deleted_at = ''`, rel).Scan(&fmJSON, &body); err != nil {
+		return "", err
+	}
+	var fm map[string]interface{}
+	_ = json.Unmarshal([]byte(fmJSON), &fm)
+	return renderRawMarkdown(fm, body)
+}
+
+func (s *Server) WriteRaw(path, content string) error {
+	fm, body, err := markdown.ParseFrontmatterBytes([]byte(content))
+	if err != nil {
+		return err
+	}
+	if fm == nil {
+		fm = map[string]interface{}{}
+	}
+	return s.upsertFromWeb(path, fm, body)
+}
+
+func (s *Server) CreateItem(path string, fm map[string]interface{}, body string) error {
+	return s.upsertFromWeb(path, fm, body)
+}
+
+func (s *Server) UpdateItem(path string, fm map[string]interface{}, body string) error {
+	return s.upsertFromWeb(path, fm, body)
+}
+
+func (s *Server) DeleteItem(path string) error {
+	rel := s.relPath(path)
+	var id string
+	if err := s.db.QueryRow(`SELECT id FROM items WHERE path = ? AND deleted_at = ''`, rel).Scan(&id); err != nil {
+		return err
+	}
+	_, err := s.applyChange(Change{Op: "delete_item", TargetKind: "item", ID: id, Path: rel})
+	return err
+}
+
+func (s *Server) upsertFromWeb(path string, fm map[string]interface{}, body string) error {
+	rel := s.relPath(path)
+	idVal := markdown.FMString(fm, "id")
+	if idVal == "" {
+		return fmt.Errorf("missing item id")
+	}
+	_, err := s.applyChange(Change{
+		Op:          "upsert_item",
+		TargetKind:  "item",
+		ID:          idVal,
+		Path:        rel,
+		Frontmatter: fm,
+		Body:        body,
+	})
+	return err
+}
+
+func (s *Server) relPath(path string) string {
+	if path == "" {
+		return path
+	}
+	clean := filepath.Clean(path)
+	if filepath.IsAbs(clean) {
+		if rel, err := filepath.Rel(s.baseDir, clean); err == nil && !strings.HasPrefix(rel, "..") {
+			return filepath.ToSlash(rel)
+		}
+	}
+	return filepath.ToSlash(clean)
+}
+
+func (s *Server) pathForWeb(path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(s.baseDir, filepath.FromSlash(path))
+}
+
+func renderRawMarkdown(fm map[string]interface{}, body string) (string, error) {
+	var buf bytes.Buffer
+	buf.WriteString("---\n")
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(fm); err != nil {
+		return "", err
+	}
+	buf.WriteString("---\n")
+	buf.WriteString(body)
+	return buf.String(), nil
 }
 
 func (s *Server) configs() ([]Change, error) {

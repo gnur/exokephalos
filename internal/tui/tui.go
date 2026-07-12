@@ -128,7 +128,13 @@ type Model struct {
 	// Status message
 	status string
 
-	syncStatus string
+	syncStatus         string
+	syncTickScheduled  bool
+	syncStartScheduled bool
+	syncOutboxFilter   string
+	syncOutboxCursor   int
+	syncOutboxOffset   int
+	syncOutboxDetail   bool
 }
 
 type refreshMsg struct{}
@@ -177,7 +183,12 @@ type syncMsg struct {
 	err         error
 	startListen bool
 	retryListen bool
+	retrySync   bool
+	retryStart  bool
 }
+
+type syncTickMsg struct{}
+type syncStartTickMsg struct{}
 
 func New(cfg *config.Config, baseDir string, c *cache.Cache, appCfg ...*config.AppConfig) Model {
 	tagFilter := textinput.New()
@@ -320,7 +331,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case refreshMsg:
-		return m, m.loadData()
+		return m, tea.Batch(m.loadData(), m.reconcileIfStartedCmd())
 
 	case dataLoadedMsg:
 		m.invalidateAllTagCounts()
@@ -348,9 +359,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.status = fmt.Sprintf("Imported URL: %s", msg.result.Frontmatter["title"])
-		return m, m.loadData()
+		return m, tea.Batch(m.loadData(), m.reconcileIfStartedCmd())
 
 	case syncMsg:
+		oldSyncStatus := m.syncStatus
 		if msg.status != "" {
 			m.syncStatus = msg.status
 		}
@@ -359,7 +371,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.syncStatus == "" {
 				m.syncStatus = "error"
 			}
-		} else if msg.status != "" {
+		} else if msg.status != "" && msg.status != oldSyncStatus {
 			m.status = "Sync: " + msg.status
 		}
 		var cmds []tea.Cmd
@@ -372,7 +384,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return syncMsg{startListen: true}
 			}))
 		}
+		if msg.retrySync && m.cache != nil && m.cache.IsSyncStarted() && !m.syncTickScheduled {
+			m.syncTickScheduled = true
+			cmds = append(cmds, syncTickCmd(5*time.Second))
+		}
+		if msg.retryStart && !m.syncStartScheduled {
+			m.syncStartScheduled = true
+			cmds = append(cmds, syncStartTickCmd(5*time.Second))
+		}
 		return m, tea.Batch(cmds...)
+
+	case syncTickMsg:
+		m.syncTickScheduled = false
+		if m.appCfg != nil && m.appCfg.Sync.ServerURL != "" && m.cache != nil && m.cache.IsSyncStarted() {
+			return m, reconcileSyncCmd(m.baseDir, m.cache, m.appCfg)
+		}
+		return m, nil
+
+	case syncStartTickMsg:
+		m.syncStartScheduled = false
+		if m.appCfg != nil && m.appCfg.Sync.ServerURL != "" && m.cache != nil && !m.cache.IsSyncStarted() {
+			return m, startSyncCmd(m.baseDir, m.cache, m.appCfg)
+		}
+		return m, nil
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -405,10 +439,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeURLImport:
 		return m.handleURLImportKey(msg)
 	case modeSyncOutbox:
-		if msg.String() == "esc" || msg.String() == "q" {
-			m.mode = modeNormal
-		}
-		return m, nil
+		return m.handleSyncOutboxKey(msg)
 	case modeSearchTags:
 		return m.handleSearchTagsKey(msg)
 	case modeSearchItems:
@@ -418,6 +449,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m Model) reconcileIfStartedCmd() tea.Cmd {
+	if m.appCfg == nil || m.cache == nil || m.appCfg.Sync.ServerURL == "" || !m.cache.IsSyncStarted() {
+		return nil
+	}
+	return reconcileSyncCmd(m.baseDir, m.cache, m.appCfg)
 }
 
 func (m Model) handleViewMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -622,6 +660,115 @@ func (m Model) handleHardcoverResultsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) handleSyncOutboxKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	entries := m.syncOutboxEntries()
+	switch msg.String() {
+	case "esc", "q":
+		if m.syncOutboxDetail {
+			m.syncOutboxDetail = false
+			return m, nil
+		}
+		m.mode = modeNormal
+		return m, nil
+	case "up", "k":
+		if m.syncOutboxCursor > 0 {
+			m.syncOutboxCursor--
+		}
+	case "down", "j":
+		if m.syncOutboxCursor < len(entries)-1 {
+			m.syncOutboxCursor++
+		}
+	case "pgup", "ctrl+u":
+		m.syncOutboxCursor -= m.syncOutboxPageSize()
+		if m.syncOutboxCursor < 0 {
+			m.syncOutboxCursor = 0
+		}
+	case "pgdown", "ctrl+d":
+		m.syncOutboxCursor += m.syncOutboxPageSize()
+		if m.syncOutboxCursor >= len(entries) {
+			m.syncOutboxCursor = len(entries) - 1
+		}
+	case "g":
+		m.syncOutboxCursor = 0
+	case "G":
+		m.syncOutboxCursor = len(entries) - 1
+	case "f", "tab":
+		m.syncOutboxFilter = nextOutboxFilter(m.syncOutboxFilter)
+		m.syncOutboxCursor = 0
+		m.syncOutboxOffset = 0
+	case "enter":
+		if len(entries) > 0 {
+			m.syncOutboxDetail = !m.syncOutboxDetail
+		}
+	case "r":
+		if len(entries) > 0 && m.cache != nil {
+			_ = m.cache.RetryOutbox(entries[m.syncOutboxCursor].ID)
+			m.status = fmt.Sprintf("Queued retry for outbox #%d", entries[m.syncOutboxCursor].ID)
+			return m, reconcileSyncCmd(m.baseDir, m.cache, m.appCfg)
+		}
+	case "R":
+		if m.cache != nil {
+			n, err := m.cache.RetryFailedOutbox()
+			if err != nil {
+				m.status = "Retry failed: " + err.Error()
+				return m, nil
+			}
+			m.status = fmt.Sprintf("Queued retry for %d failed outbox entries", n)
+			return m, reconcileSyncCmd(m.baseDir, m.cache, m.appCfg)
+		}
+	}
+	if m.syncOutboxCursor < 0 {
+		m.syncOutboxCursor = 0
+	}
+	if m.syncOutboxCursor >= len(entries) {
+		m.syncOutboxCursor = len(entries) - 1
+	}
+	m.clampSyncOutboxOffset()
+	return m, nil
+}
+
+func nextOutboxFilter(current string) string {
+	filters := []string{"", "pending", "failed", "synced"}
+	for i, f := range filters {
+		if current == f {
+			return filters[(i+1)%len(filters)]
+		}
+	}
+	return ""
+}
+
+func (m Model) syncOutboxPageSize() int {
+	n := m.height - 4
+	if n < 1 {
+		return 1
+	}
+	return n
+}
+
+func (m *Model) clampSyncOutboxOffset() {
+	page := m.syncOutboxPageSize()
+	if m.syncOutboxCursor < m.syncOutboxOffset {
+		m.syncOutboxOffset = m.syncOutboxCursor
+	}
+	if m.syncOutboxCursor >= m.syncOutboxOffset+page {
+		m.syncOutboxOffset = m.syncOutboxCursor - page + 1
+	}
+	if m.syncOutboxOffset < 0 {
+		m.syncOutboxOffset = 0
+	}
+}
+
+func (m Model) syncOutboxEntries() []cache.OutboxEntry {
+	if m.cache == nil {
+		return nil
+	}
+	entries, err := m.cache.OutboxEntriesByStatus(m.syncOutboxFilter, 500)
+	if err != nil {
+		return nil
+	}
+	return entries
+}
+
 func (m Model) actionEntries() []actionEntry {
 	names := make([]string, 0, len(m.actions))
 	for name := range m.actions {
@@ -797,7 +944,7 @@ func (m Model) applyAction(actionName string) (tea.Model, tea.Cmd) {
 	}
 
 	m.mode = modeNormal
-	return m, m.loadData()
+	return m, tea.Batch(m.loadData(), m.reconcileIfStartedCmd())
 }
 
 func (m Model) handleConfirmDeleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -805,7 +952,7 @@ func (m Model) handleConfirmDeleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y", "Y":
 		m.deleteSelected()
 		m.mode = modeNormal
-		return m, m.loadData()
+		return m, tea.Batch(m.loadData(), m.reconcileIfStartedCmd())
 	default:
 		m.mode = modeNormal
 		m.status = ""
@@ -1579,7 +1726,7 @@ func (m Model) createHardcoverBook(book hardcover.Book) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.status = fmt.Sprintf("Added book: %s", book.Title)
-			return m, m.loadData()
+			return m, tea.Batch(m.loadData(), m.reconcileIfStartedCmd())
 		}
 	}
 

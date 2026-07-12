@@ -36,10 +36,10 @@ func startSyncCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) tea.
 		}
 		status, err := ensureApproved(appCfg.Sync.ServerURL, clientID, pub, c)
 		if err != nil {
-			return syncMsg{status: "offline", err: err}
+			return syncMsg{status: "offline", err: err, retryStart: true}
 		}
 		if status != "approved" {
-			return syncMsg{status: "pending approval"}
+			return syncMsg{status: "pending approval", retryStart: true}
 		}
 		changes, err := syncsvc.BuildLocalChanges(baseDir, c, true)
 		if err != nil {
@@ -52,12 +52,12 @@ func startSyncCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) tea.
 			return syncMsg{status: "error", err: err}
 		}
 		if err := pushOutbox(appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
-			return syncMsg{status: "offline", err: err}
+			return syncMsg{status: "offline", err: err, retrySync: true}
 		}
 		if err := pullSnapshot(baseDir, appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
-			return syncMsg{status: "offline", err: err}
+			return syncMsg{status: "offline", err: err, retrySync: true}
 		}
-		return syncMsg{status: "connected", startListen: true}
+		return syncMsg{status: "connected", startListen: true, retrySync: true}
 	}
 }
 
@@ -68,10 +68,10 @@ func syncStartupCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) te
 		}
 		_, priv, err := syncsvc.EnsureKeypair(appCfg.Sync.KeyPath)
 		if err != nil {
-			return syncMsg{status: "error", err: err}
+			return syncMsg{status: "error", err: err, retrySync: true}
 		}
 		if err := enqueueRootConfigs(baseDir, c); err != nil {
-			return syncMsg{status: "error", err: err}
+			return syncMsg{status: "error", err: err, retrySync: true}
 		}
 		clientID := appCfg.Sync.ClientID
 		if clientID == "" {
@@ -79,13 +79,55 @@ func syncStartupCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) te
 			clientID = host
 		}
 		if err := pushOutbox(appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
-			return syncMsg{status: "offline", err: err}
+			return syncMsg{status: "offline", err: err, retrySync: true}
 		}
 		if err := pullSnapshot(baseDir, appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
-			return syncMsg{status: "offline", err: err}
+			return syncMsg{status: "offline", err: err, retrySync: true}
 		}
-		return syncMsg{status: "connected", startListen: true}
+		return syncMsg{status: "connected", startListen: true, retrySync: true}
 	}
+}
+
+func reconcileSyncCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) tea.Cmd {
+	return func() tea.Msg {
+		if c == nil || appCfg == nil || appCfg.Sync.ServerURL == "" || !c.IsSyncStarted() {
+			return nil
+		}
+		_, priv, err := syncsvc.EnsureKeypair(appCfg.Sync.KeyPath)
+		if err != nil {
+			return syncMsg{status: "error", err: err, retrySync: true}
+		}
+		if err := enqueueRootConfigs(baseDir, c); err != nil {
+			return syncMsg{status: "error", err: err, retrySync: true}
+		}
+		if err := c.Sync(); err != nil {
+			return syncMsg{status: "error", err: err, retrySync: true}
+		}
+		clientID := appCfg.Sync.ClientID
+		if clientID == "" {
+			host, _ := os.Hostname()
+			clientID = host
+		}
+		if err := pushOutbox(appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
+			return syncMsg{status: "offline", err: err, retrySync: true}
+		}
+		if err := pullSnapshot(baseDir, appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
+			return syncMsg{status: "offline", err: err, retrySync: true}
+		}
+		return syncMsg{status: "connected", retrySync: true}
+	}
+}
+
+func syncTickCmd(after time.Duration) tea.Cmd {
+	return tea.Tick(after, func(time.Time) tea.Msg {
+		return syncTickMsg{}
+	})
+}
+
+func syncStartTickCmd(after time.Duration) tea.Cmd {
+	return tea.Tick(after, func(time.Time) tea.Msg {
+		return syncStartTickMsg{}
+	})
 }
 
 func pushOutboxCmd(c *cache.Cache, appCfg *config.AppConfig) tea.Cmd {
@@ -105,7 +147,7 @@ func pushOutboxCmd(c *cache.Cache, appCfg *config.AppConfig) tea.Cmd {
 		if err := pushOutbox(appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
 			return syncMsg{status: "offline", err: err}
 		}
-		return syncMsg{status: "connected", startListen: true}
+		return syncMsg{status: "connected", startListen: true, retrySync: true}
 	}
 }
 
@@ -131,9 +173,9 @@ func syncListenCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) tea
 			_ = c.SetMeta("sync_last_revision", fmt.Sprintf("%d", revision))
 		}
 		if err := pullSnapshot(baseDir, appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
-			return syncMsg{status: "offline", err: err, retryListen: true}
+			return syncMsg{status: "offline", err: err, retryListen: true, retrySync: true}
 		}
-		return syncMsg{status: "connected", startListen: true}
+		return syncMsg{status: "connected", startListen: true, retrySync: true}
 	}
 }
 
@@ -280,7 +322,7 @@ func pullSnapshot(baseDir, serverURL, clientID string, priv ed25519.PrivateKey, 
 		if err := markdown.WriteFrontmatter(path, ch.Frontmatter, ch.Body); err != nil {
 			return err
 		}
-		_ = c.NotifyWrite(path)
+		_ = c.NotifyWriteNoOutbox(path)
 	}
 	return nil
 }

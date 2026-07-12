@@ -330,6 +330,20 @@ func (c *Cache) NotifyDelete(absPath string) error {
 	return err
 }
 
+func (c *Cache) NotifyDeleteNoOutbox(absPath string) error {
+	if filepath.Ext(absPath) != ".md" {
+		return nil
+	}
+	relPath, err := filepath.Rel(c.baseDir, absPath)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, err = c.db.Exec(`UPDATE items SET deleted_at = ? WHERE path = ?`, time.Now().UTC().Format(time.RFC3339Nano), relPath)
+	return err
+}
+
 func (c *Cache) IsSyncStarted() bool {
 	v, _ := c.Meta("sync_started")
 	return v == "true"
@@ -440,7 +454,22 @@ func (c *Cache) PendingOutbox(limit int) ([]OutboxEntry, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := c.db.Query(`SELECT id, op, target_kind, target_id, path, payload, status, attempts, last_error, created_at, last_attempt_at FROM outbox WHERE status IN ('pending', 'failed') ORDER BY id ASC LIMIT ?`, limit)
+	now := time.Now().UTC()
+	t1 := now.Add(-10 * time.Second).Format(time.RFC3339Nano)
+	t2 := now.Add(-1 * time.Minute).Format(time.RFC3339Nano)
+	t3 := now.Add(-5 * time.Minute).Format(time.RFC3339Nano)
+	t4 := now.Add(-15 * time.Minute).Format(time.RFC3339Nano)
+
+	rows, err := c.db.Query(`
+		SELECT id, op, target_kind, target_id, path, payload, status, attempts, last_error, created_at, last_attempt_at 
+		FROM outbox 
+		WHERE status = 'pending' OR (status = 'failed' AND attempts < 5 AND (
+			(attempts = 1 AND last_attempt_at < ?) OR
+			(attempts = 2 AND last_attempt_at < ?) OR
+			(attempts = 3 AND last_attempt_at < ?) OR
+			(attempts = 4 AND last_attempt_at < ?)
+		)) 
+		ORDER BY id ASC LIMIT ?`, t1, t2, t3, t4, limit)
 	if err != nil {
 		return nil, err
 	}

@@ -395,7 +395,7 @@ func (h *Handlers) TimingMiddleware(next http.Handler) http.Handler {
 // CSRFMiddleware protects unsafe POST requests from Cross-Site Request Forgery.
 func (h *Handlers) CSRFMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
+		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch || r.Method == http.MethodDelete {
 			// Skip webhook requests which are designed to be cross-origin
 			if strings.HasPrefix(r.URL.Path, "/webhook/") {
 				next.ServeHTTP(w, r)

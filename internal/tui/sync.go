@@ -293,6 +293,8 @@ func pullSnapshot(baseDir, serverURL, clientID string, priv ed25519.PrivateKey, 
 	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
 		return err
 	}
+	snapshotPaths := make(map[string]bool)
+
 	for _, ch := range snapshot.Configs {
 		if ch.Path == "" {
 			continue
@@ -301,6 +303,7 @@ func pullSnapshot(baseDir, serverURL, clientID string, priv ed25519.PrivateKey, 
 		if !strings.HasPrefix(path, filepath.Clean(baseDir)+string(filepath.Separator)) {
 			continue
 		}
+		snapshotPaths[ch.Path] = true
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			return err
 		}
@@ -316,6 +319,7 @@ func pullSnapshot(baseDir, serverURL, clientID string, priv ed25519.PrivateKey, 
 		if !strings.HasPrefix(path, filepath.Clean(baseDir)+string(filepath.Separator)) {
 			continue
 		}
+		snapshotPaths[ch.Path] = true
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			return err
 		}
@@ -324,6 +328,60 @@ func pullSnapshot(baseDir, serverURL, clientID string, priv ed25519.PrivateKey, 
 		}
 		_ = c.NotifyWriteNoOutbox(path)
 	}
+
+	// Retrieve all paths currently in the local outbox to avoid deleting local unsynced files.
+	outboxPaths := make(map[string]bool)
+	if c.DB() != nil {
+		if outboxRows, err := c.DB().Query(`SELECT path FROM outbox WHERE status IN ('pending', 'failed')`); err == nil {
+			defer outboxRows.Close()
+			for outboxRows.Next() {
+				var p string
+				if err := outboxRows.Scan(&p); err == nil {
+					outboxPaths[p] = true
+				}
+			}
+		}
+	}
+
+	// Delete local items that are not in the snapshot and have no pending changes.
+	if c.DB() != nil {
+		if localRows, err := c.DB().Query(`SELECT path FROM items WHERE deleted_at = ''`); err == nil {
+			defer localRows.Close()
+			var localPaths []string
+			for localRows.Next() {
+				var p string
+				if err := localRows.Scan(&p); err == nil {
+					localPaths = append(localPaths, p)
+				}
+			}
+			for _, localPath := range localPaths {
+				if !snapshotPaths[localPath] && !outboxPaths[localPath] {
+					absPath := filepath.Clean(filepath.Join(baseDir, localPath))
+					if strings.HasPrefix(absPath, filepath.Clean(baseDir)+string(filepath.Separator)) {
+						_ = os.Remove(absPath)
+						_ = c.NotifyDeleteNoOutbox(absPath)
+					}
+				}
+			}
+		}
+	}
+
+	// Delete local config (.toml) files that are not in the snapshot and not in the outbox.
+	if localConfigs, err := filepath.Glob(filepath.Join(baseDir, "*.toml")); err == nil {
+		for _, cfgPath := range localConfigs {
+			rel, err := filepath.Rel(baseDir, cfgPath)
+			if err != nil {
+				continue
+			}
+			if !snapshotPaths[rel] && !outboxPaths[rel] {
+				absPath := filepath.Clean(cfgPath)
+				if strings.HasPrefix(absPath, filepath.Clean(baseDir)+string(filepath.Separator)) {
+					_ = os.Remove(absPath)
+				}
+			}
+		}
+	}
+
 	return nil
 }
 

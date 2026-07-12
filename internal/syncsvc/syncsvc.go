@@ -398,6 +398,10 @@ func (s *Server) requireSignature(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "client not approved", http.StatusUnauthorized)
 			return
 		}
+		// Prune nonces older than 5 minutes to prevent infinite table growth
+		pruneTime := time.Now().Add(-5 * time.Minute).UTC().Format(time.RFC3339Nano)
+		_, _ = s.db.Exec(`DELETE FROM nonces WHERE created_at < ?`, pruneTime)
+
 		if _, err := s.db.Exec(`INSERT INTO nonces(client_id, nonce, created_at) VALUES(?, ?, ?)`, clientID, nonce, timestamp); err != nil {
 			http.Error(w, "reused nonce", http.StatusUnauthorized)
 			return
@@ -543,12 +547,20 @@ func (s *Server) relPath(path string) string {
 		return path
 	}
 	clean := filepath.Clean(path)
+	var rel string
 	if filepath.IsAbs(clean) {
-		if rel, err := filepath.Rel(s.baseDir, clean); err == nil && !strings.HasPrefix(rel, "..") {
-			return filepath.ToSlash(rel)
+		var err error
+		rel, err = filepath.Rel(s.baseDir, clean)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			return ""
+		}
+	} else {
+		rel = clean
+		if strings.HasPrefix(rel, "..") {
+			return ""
 		}
 	}
-	return filepath.ToSlash(clean)
+	return filepath.ToSlash(rel)
 }
 
 func (s *Server) pathForWeb(path string) string {

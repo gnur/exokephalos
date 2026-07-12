@@ -104,7 +104,7 @@ tasks:
         EXO_DIR="$temp_dir" ./exo serve
 
   dev:integration-test:
-    desc: Create local sync server/client dirs, seed client notes, and start the sync server
+    desc: Create local sync-enabled serve/client dirs, seed client notes, and start exo serve
     deps: [build]
     cmds:
       - |
@@ -142,7 +142,7 @@ tasks:
         TUI client EXO_DIR:
           $client_dir
 
-        Starting sync server on:
+        Starting sync-enabled exo serve on:
           http://localhost:$port
 
         In another terminal, start the TUI client:
@@ -153,10 +153,10 @@ tasks:
           2. Run 'start-sync'.
           3. Open http://localhost:$port/admin/sync/clients
           4. Approve 'local-dev-client'.
-          5. Run 'start-sync' again in the TUI.
+          5. Wait for the TUI to continue automatically after approval.
           6. Run 'sync-outbox' to inspect queued/synced operations.
 
-        Press Ctrl+C in this terminal to stop the sync server.
+        Press Ctrl+C in this terminal to stop exo serve.
 
         EOF
 

@@ -112,3 +112,9 @@ EXO_DIR=~/notes exo        # TUI
 EXO_DIR=~/notes exo serve  # Web UI on :8293
 EXO_DIR=~/notes exo lsp    # LSP server on stdio
 ```
+
+## Sync and API
+
+`exo serve` can also run the regular web UI with SQLite-backed sync storage by adding `.exo/serve.toml` with `[sync.server] enabled = true`. TUI clients configure `.exo/tui.toml`, run `start-sync` once, and then continue automatically after approval in the web UI's `sync clients` tab.
+
+The HTTP API, signed TUI sync endpoints, and SSE refresh endpoints are documented in [docs/api.md](../../docs/api.md).

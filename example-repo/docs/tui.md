@@ -42,8 +42,8 @@ server_url = "http://localhost:8293"
 client_id = "laptop"
 ```
 
-Use `start-sync` to generate a local ed25519 keypair, register this client with the sync server, and push local markdown files plus root-level workspace config after the server approves the client.
+Use `start-sync` to generate a local ed25519 keypair and register this client with `exo serve`. Approve the client in the web UI under the `sync clients` tab. The TUI keeps polling while it waits; after approval it continues automatically and pushes local markdown files plus root-level workspace config. You do not need to run `start-sync` a second time.
 
-Use `sync-outbox` to inspect pending, failed, and synced operations. If the server is offline, local edits continue writing to markdown and are retried from the outbox later. The footer shows the current sync state when sync is configured.
+Use `sync-outbox` to inspect pending, failed, and synced operations. The outbox view supports scrolling, status filtering, entry details, retrying one selected entry, and retrying all failed entries. If the server is offline, local edits continue writing to markdown and are retried from the outbox later. After approval, the TUI reconciles every 5 seconds and the footer shows the current sync state when sync is configured.
 
 An `All` view is always available with key `0`; it shows every item regardless of type.

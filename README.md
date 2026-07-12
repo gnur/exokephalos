@@ -14,7 +14,7 @@ A self-hosted, file-based personal knowledge management and life-tracking applic
 - **Stats pages** — Per-view stats with embedded templates
 - **Dual interface** — Full-featured TUI (default) and web interface (`exo serve`)
 - **LSP server** — Language Server Protocol support for editors (`exo lsp`)
-- **Optional sync server** — Central SQLite-backed server with signed TUI clients, approval flow, and local outbox retry
+- **Optional sync** — Regular web UI with SQLite-backed central storage, signed TUI clients, approval flow, SSE updates, and local outbox retry
 
 ## Quickstart
 
@@ -396,9 +396,11 @@ Routes:
 | `GET /api/items/{id}` | Return an item as JSON with `frontmatter` and `body` |
 | `PATCH /api/items/{id}` | Replace an item's `frontmatter` and/or `body` |
 | `POST /api/query/ids` | Return sorted item IDs matching a CEL expression |
+| `GET /api/events` | Browser SSE stream for web UI refreshes in sync-enabled serve mode |
 | `POST /webhook/{source}` | Receive webhook |
 
 API endpoints return JSON. Error responses use `{"error":"..."}`.
+See [docs/api.md](docs/api.md) for the complete web, sync, SSE, and request-signing API reference.
 
 `POST /api/items` creates a note from a URL:
 
@@ -454,19 +456,22 @@ curl -s http://localhost:8293/api/query/ids \
 {"ids":["apibook"]}
 ```
 
-## Optional Sync Server
+## Optional Sync
 
 By default, exo is local-first: the TUI, web UI, and LSP read and write markdown files under `EXO_DIR`. Sync mode adds a central server for sharing data between TUI clients.
 
-In sync-server mode:
+When `.exo/serve.toml` enables sync storage, `exo serve` is still the regular web UI. It uses SQLite as its backend, exposes the same views and item editing routes, and adds a `sync clients` tab for TUI client approvals.
+
+In sync-enabled serve mode:
 
 - `exo serve` stores notes and synced root-level workspace config in SQLite.
 - The server does not read or write markdown files.
 - TUI clients keep local markdown files and a local `.exo/cache.sqlite` cache/outbox.
 - Clients connect with signed requests using a generated ed25519 keypair.
 - New clients must be approved in the web UI before they can sync.
+- The web UI listens for server-sent revision events and refreshes when notes/config change.
 
-### Start A Sync Server
+### Start Sync-Enabled Serve Mode
 
 Create `.exo/serve.toml` in the server data directory:
 
@@ -514,13 +519,13 @@ Then start the TUI:
 EXO_DIR=/path/to/client-notes exo
 ```
 
-Open the action picker with `:` and run `start-sync`. The client generates a local ed25519 keypair, sends its public key to the server, and waits for approval. After approval, run `start-sync` again to upload local markdown files and root-level workspace config. The sync status appears in the TUI footer.
+Open the action picker with `:` and run `start-sync`. The client generates a local ed25519 keypair, sends its public key to the server, and waits for approval. After you approve it in the web UI, the TUI continues automatically; a second `start-sync` is not needed. It uploads local markdown files and root-level workspace config, then keeps reconciling every 5 seconds while approved. The sync status appears in the TUI footer.
 
-The TUI also provides a `sync-outbox` action to inspect pending, failed, and synced operations. If the server is offline, local edits continue writing to markdown files and are retried from the outbox when the server is reachable again.
+The TUI also provides a `sync-outbox` action to inspect pending, failed, and synced operations. The outbox view supports scrolling, status filtering, entry details, retrying one entry, and retrying all failed entries. If the server is offline, local edits continue writing to markdown files and are retried from the outbox when the server is reachable again.
 
-### Run The Sync Server On Kubernetes
+### Run Sync-Enabled Serve Mode On Kubernetes
 
-Plain Kubernetes manifests are available in `deploy/kubernetes/`. They run exo as a single-replica `StatefulSet` with a `ReadWriteOnce` PVC mounted at `/data`. The manifests enable sync-server mode with `.exo/serve.toml`, so the server stores all synced data in SQLite at `/data/.exo/server.sqlite`.
+Plain Kubernetes manifests are available in `deploy/kubernetes/`. They run exo as a single-replica `StatefulSet` with a `ReadWriteOnce` PVC mounted at `/data`. The manifests enable sync storage with `.exo/serve.toml`, so the regular web UI stores all synced data in SQLite at `/data/.exo/server.sqlite`.
 
 Apply the manifests:
 
@@ -602,7 +607,7 @@ Helix: Run `exo helix-init` to automatically create `.helix/languages.toml` with
 - [Bubbletea](https://github.com/charmbracelet/bubbletea) + [Lipgloss](https://github.com/charmbracelet/lipgloss) + [Glamour](https://github.com/charmbracelet/glamour) for TUI
 - Tailwind CSS v4 (web interface)
 - Go `html/template` for web rendering
-- Flat-file markdown storage (git-friendly)
+- Flat-file markdown storage in local mode; SQLite-backed storage in sync-enabled serve mode
 
 ## Build And Run
 

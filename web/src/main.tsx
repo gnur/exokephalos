@@ -20,8 +20,23 @@ function itemTitle(item: Item) {
 
 function newID() {
   const alphabet = 'abcdefghijklmnopqrstuvwxyz234567';
+  const epoch = Date.UTC(1989, 0, 17);
+  const days = Math.max(0, Math.floor((Date.now() - epoch) / 86_400_000));
   const bytes = crypto.getRandomValues(new Uint8Array(4));
-  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join('') + Date.now().toString(32).slice(-4);
+  const encodedDays = encodeBase32(days, alphabet);
+  const random = Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join('');
+  return `${encodedDays}${random}`.padStart(7, '0');
+}
+
+function encodeBase32(value: number, alphabet: string) {
+  if (value === 0) return 'a';
+  let result = '';
+  let n = value;
+  while (n > 0) {
+    result = alphabet[n % 32] + result;
+    n = Math.floor(n / 32);
+  }
+  return result;
 }
 
 function slugify(value: string) {

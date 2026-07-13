@@ -108,6 +108,11 @@ func newHarness(t *testing.T) *harness {
 
 func (h *harness) buildBinary() {
 	h.t.Helper()
+	webCmd := exec.Command("npm", "run", "build:web")
+	webCmd.Dir = h.root
+	if out, err := webCmd.CombinedOutput(); err != nil {
+		h.t.Fatalf("build SPA assets: %v\n%s", err, out)
+	}
 	version := "e2e"
 	buildTime := time.Now().UTC().Format(time.RFC3339)
 	ldflags := fmt.Sprintf("-s -w -X github.com/gnur/exokephalos/internal/version.Version=%s -X github.com/gnur/exokephalos/internal/version.BuildTime=%s", version, buildTime)

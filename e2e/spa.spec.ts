@@ -34,17 +34,21 @@ test('SPA login, mobile shell, editor, approval, and browser outbox', async ({ p
   await page.getByRole('button', { name: 'Cancel' }).click();
 
   await page.getByRole('button', { name: 'New item' }).click();
-  await page.locator('label').filter({ hasText: 'Title' }).locator('input').fill(`SPA E2E ${Date.now()}`);
+  const onlineTitle = `SPA E2E ${Date.now()}`;
+  await page.locator('label').filter({ hasText: 'Title' }).locator('input').fill(onlineTitle);
   await page.locator('label').filter({ hasText: 'Body' }).locator('textarea').fill('Created from the SPA E2E browser.');
   await page.getByRole('button', { name: 'Create' }).click();
+  await expect.poll(() => itemIDByTitle(page, onlineTitle), { timeout: 10_000 }).toMatch(exoIDPatternForToday());
   await expect.poll(() => pendingBrowserOutboxCount(page), { timeout: 10_000 }).toBe(0);
 
   await page.context().setOffline(true);
   await expect(page.locator('.sync-warning')).toContainText('sync offline');
   await page.getByRole('button', { name: 'New item' }).click();
-  await page.locator('label').filter({ hasText: 'Title' }).locator('input').fill(`Offline SPA E2E ${Date.now()}`);
+  const offlineTitle = `Offline SPA E2E ${Date.now()}`;
+  await page.locator('label').filter({ hasText: 'Title' }).locator('input').fill(offlineTitle);
   await page.locator('label').filter({ hasText: 'Body' }).locator('textarea').fill(`Offline browser change from ${browserName}.`);
   await page.getByRole('button', { name: 'Create' }).click();
+  await expect.poll(() => itemIDByTitle(page, offlineTitle), { timeout: 10_000 }).toMatch(exoIDPatternForToday());
   await expect.poll(() => pendingBrowserOutboxCount(page), { timeout: 10_000 }).toBeGreaterThan(0);
   await page.context().setOffline(false);
   await expect.poll(() => pendingBrowserOutboxCount(page), { timeout: 20_000 }).toBe(0);
@@ -90,4 +94,48 @@ async function pendingBrowserOutboxCount(page: Page) {
       };
     });
   });
+}
+
+async function itemIDByTitle(page: Page, title: string) {
+  return page.evaluate(async (itemTitle) => {
+    return new Promise<string>((resolve, reject) => {
+      const open = indexedDB.open('exokephalos');
+      open.onerror = () => reject(open.error);
+      open.onsuccess = () => {
+        const database = open.result;
+        const tx = database.transaction('items', 'readonly');
+        const store = tx.objectStore('items');
+        const req = store.getAll();
+        req.onerror = () => reject(req.error);
+        req.onsuccess = () => {
+          const rows = req.result as Array<{ id?: string; title?: string; frontmatter?: { title?: unknown } }>;
+          database.close();
+          const item = rows.find((row) => row.title === itemTitle || row.frontmatter?.title === itemTitle);
+          resolve(item?.id ?? '');
+        };
+      };
+    });
+  }, title);
+}
+
+function exoIDPatternForToday() {
+  const prefix = encodeBase32(daysSinceExoEpoch(new Date()));
+  return new RegExp(`^${prefix}[a-z2-7]{4}$`);
+}
+
+function daysSinceExoEpoch(date: Date) {
+  const epoch = Date.UTC(1989, 0, 17);
+  return Math.max(0, Math.floor((date.getTime() - epoch) / 86_400_000));
+}
+
+function encodeBase32(value: number) {
+  const alphabet = 'abcdefghijklmnopqrstuvwxyz234567';
+  if (value === 0) return 'a';
+  let result = '';
+  let n = value;
+  while (n > 0) {
+    result = alphabet[n % 32] + result;
+    n = Math.floor(n / 32);
+  }
+  return result;
 }

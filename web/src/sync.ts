@@ -67,18 +67,7 @@ export function startSyncRuntime(onStatus: (status: 'online' | 'offline' | 'sync
   let stopped = false;
   let refreshInFlight = false;
 
-  const reconnectEvents = () => {
-    if (stopped || !navigator.onLine) return;
-    events?.close();
-    events = new EventSource('/api/events');
-    events.onopen = () => onStatus('online');
-    events.onerror = () => onStatus(navigator.onLine ? 'offline' : 'offline');
-    events.addEventListener('change', () => {
-      void refreshFromServer().catch(() => undefined);
-    });
-  };
-
-  const tick = async () => {
+  const syncOnce = async () => {
     if (!navigator.onLine || refreshInFlight) {
       onStatus(navigator.onLine ? 'syncing' : 'offline');
       return;
@@ -96,16 +85,44 @@ export function startSyncRuntime(onStatus: (status: 'online' | 'offline' | 'sync
     }
   };
 
-  window.addEventListener('online', reconnectEvents);
-  window.addEventListener('online', tick);
-  window.addEventListener('offline', () => onStatus('offline'));
+  const reconnectEvents = () => {
+    if (stopped || !navigator.onLine) return;
+    events?.close();
+    events = new EventSource('/api/events');
+    events.onopen = () => {
+      onStatus('online');
+      void syncOnce();
+    };
+    events.onerror = () => onStatus(navigator.onLine ? 'offline' : 'offline');
+    events.addEventListener('change', (event) => {
+      let detail: { target_kind?: string } = {};
+      try {
+        detail = JSON.parse((event as MessageEvent).data);
+      } catch {
+        // Keep the event useful even if a future server sends non-JSON data.
+      }
+      window.dispatchEvent(new CustomEvent('exo:server-change', { detail }));
+      if (detail.target_kind !== 'client') {
+        void refreshFromServer().catch(() => undefined);
+      }
+    });
+  };
+
+  const onOnline = () => {
+    reconnectEvents();
+    void syncOnce();
+  };
+  const onOffline = () => onStatus('offline');
+
+  window.addEventListener('online', onOnline);
+  window.addEventListener('offline', onOffline);
   reconnectEvents();
-  const interval = window.setInterval(tick, 5000);
-  void tick();
+  void syncOnce();
 
   return () => {
     stopped = true;
     events?.close();
-    window.clearInterval(interval);
+    window.removeEventListener('online', onOnline);
+    window.removeEventListener('offline', onOffline);
   };
 }

@@ -144,6 +144,9 @@ func (h *Handlers) AppSyncClients(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, "reading sync clients", http.StatusInternalServerError)
 		return
 	}
+	if clients == nil {
+		clients = []syncsvc.Client{}
+	}
 	writeAppJSON(w, map[string]interface{}{"clients": clients})
 }
 

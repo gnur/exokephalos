@@ -10,3 +10,4 @@ tmp-run
 .task/
 __pycache__/
 plugin-scripts/
+test-results

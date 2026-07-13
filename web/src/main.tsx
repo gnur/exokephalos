@@ -463,7 +463,8 @@ function SettingsView() {
 
   async function loadClients() {
     try {
-      setClients((await listSyncClients()).clients);
+      const result = await listSyncClients();
+      setClients(Array.isArray(result.clients) ? result.clients : []);
     } catch {
       setClients([]);
     }
@@ -471,8 +472,12 @@ function SettingsView() {
 
   useEffect(() => {
     void loadClients();
-    const id = window.setInterval(loadClients, 5000);
-    return () => window.clearInterval(id);
+    const onServerChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ target_kind?: string }>).detail;
+      if (!detail?.target_kind || detail.target_kind === 'client') void loadClients();
+    };
+    window.addEventListener('exo:server-change', onServerChange);
+    return () => window.removeEventListener('exo:server-change', onServerChange);
   }, []);
 
   async function updatePassword() {
@@ -491,6 +496,7 @@ function SettingsView() {
       {message ? <p className="notice">{message}</p> : null}
       <h2>Sync clients</h2>
       <div className="outbox-list">
+        {clients.length === 0 ? <div className="empty-state">No sync clients.</div> : null}
         {clients.map((client) => (
           <div className="outbox-row" key={client.id}>
             <div><strong>{client.label}</strong><span>{client.id} · {client.status}</span></div>

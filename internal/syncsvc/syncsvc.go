@@ -202,6 +202,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.recordRevision("client", req.ClientID, "enroll_client")
 	writeJSON(w, map[string]string{"status": "pending", "enrollment_token": token})
 }
 
@@ -397,13 +398,23 @@ func (s *Server) Clients() ([]Client, error) {
 }
 
 func (s *Server) ApproveClient(clientID string) error {
-	_, err := s.db.Exec(`UPDATE clients SET status = 'approved', approved_at = ? WHERE id = ?`, time.Now().UTC().Format(time.RFC3339Nano), clientID)
-	return err
+	if _, err := s.db.Exec(`UPDATE clients SET status = 'approved', approved_at = ? WHERE id = ?`, time.Now().UTC().Format(time.RFC3339Nano), clientID); err != nil {
+		return err
+	}
+	s.recordRevision("client", clientID, "approve_client")
+	return nil
 }
 
 func (s *Server) RevokeClient(clientID string) error {
-	_, err := s.db.Exec(`UPDATE clients SET status = 'revoked' WHERE id = ?`, clientID)
-	return err
+	if _, err := s.db.Exec(`UPDATE clients SET status = 'revoked' WHERE id = ?`, clientID); err != nil {
+		return err
+	}
+	s.recordRevision("client", clientID, "revoke_client")
+	return nil
+}
+
+func (s *Server) recordRevision(targetKind, targetID, op string) {
+	_, _ = s.db.Exec(`INSERT INTO revisions(target_kind, target_id, op, created_at) VALUES(?, ?, ?, ?)`, targetKind, targetID, op, time.Now().UTC().Format(time.RFC3339Nano))
 }
 
 func (s *Server) requireSignature(next http.HandlerFunc) http.HandlerFunc {

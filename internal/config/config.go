@@ -37,24 +37,24 @@ type SyncServerConfig struct {
 
 // ViewConfig defines a single view (e.g., notes, books).
 type ViewConfig struct {
-	Name            string          `toml:"name"`
-	Key             string          `toml:"key"`
-	Filter          string          `toml:"filter"`
-	ShowTags        bool            `toml:"show_tags"`
-	TitleField      string          `toml:"title_field"`
-	SubtitleField   string          `toml:"subtitle_field"`
-	SortField       string          `toml:"sort_field"`
-	SortOrder       string          `toml:"sort_order"`
-	Template        string          `toml:"template"`
-	PreviewTemplate string          `toml:"preview_template"`
-	StatsTemplate   string          `toml:"stats_template"`
-	Subviews        []SubviewConfig `toml:"subviews"`
+	Name            string          `toml:"name" json:"name"`
+	Key             string          `toml:"key" json:"key"`
+	Filter          string          `toml:"filter" json:"filter"`
+	ShowTags        bool            `toml:"show_tags" json:"show_tags"`
+	TitleField      string          `toml:"title_field" json:"title_field"`
+	SubtitleField   string          `toml:"subtitle_field" json:"subtitle_field"`
+	SortField       string          `toml:"sort_field" json:"sort_field"`
+	SortOrder       string          `toml:"sort_order" json:"sort_order"`
+	Template        string          `toml:"template" json:"template"`
+	PreviewTemplate string          `toml:"preview_template" json:"preview_template"`
+	StatsTemplate   string          `toml:"stats_template" json:"stats_template"`
+	Subviews        []SubviewConfig `toml:"subviews" json:"subviews"`
 }
 
 // SubviewConfig defines a subview within a view that narrows the parent filter.
 type SubviewConfig struct {
-	Name   string `toml:"name"`
-	Filter string `toml:"filter"`
+	Name   string `toml:"name" json:"name"`
+	Filter string `toml:"filter" json:"filter"`
 }
 
 // ActionConfig defines a user-triggered action that transforms an item's frontmatter.

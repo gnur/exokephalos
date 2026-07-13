@@ -29,6 +29,9 @@ var templatesFS embed.FS
 //go:embed static/*
 var staticFS embed.FS
 
+//go:embed web/dist
+var spaFS embed.FS
+
 func main() {
 	dir := os.Getenv("EXO_DIR")
 	if dir == "" {
@@ -144,44 +147,21 @@ func runServerWithSync(appCfg *config.AppConfig, dir string) {
 	mux.HandleFunc("POST /api/items", h.CreateItem)
 	mux.HandleFunc("PATCH /api/items/{id}", h.UpdateItemByID)
 	mux.HandleFunc("POST /api/query/ids", h.QueryIDsByCEL)
+	mux.HandleFunc("GET /api/app/bootstrap", h.AppBootstrap)
+	mux.HandleFunc("POST /api/app/changes", h.AppChanges)
+	mux.HandleFunc("GET /api/app/sync-clients", h.AppSyncClients)
+	mux.HandleFunc("POST /api/app/sync-clients/{clientId}/approve", h.AppSyncClientApprove)
+	mux.HandleFunc("POST /api/app/sync-clients/{clientId}/revoke", h.AppSyncClientRevoke)
+	mux.HandleFunc("POST /api/app/password", h.AppPassword)
+	mux.HandleFunc("POST /api/app/actions/{actionName}", h.AppAction)
 
-	mux.HandleFunc("GET /import-url", h.ImportURL)
-	mux.HandleFunc("POST /import-url", h.ImportURL)
-	mux.HandleFunc("GET /admin/sync/clients", h.SyncClients)
-	mux.HandleFunc("POST /admin/sync/clients/{clientId}/approve", h.SyncClientApprove)
-	mux.HandleFunc("POST /admin/sync/clients/{clientId}/revoke", h.SyncClientRevoke)
-	mux.HandleFunc("GET /views/{viewId}/stats", h.ViewStats)
-	mux.HandleFunc("GET /views/{viewId}/new", h.ViewNew)
-	mux.HandleFunc("POST /views/{viewId}/new", h.ViewNew)
-	mux.HandleFunc("GET /views/{viewId}/edit/{itemId}", h.ViewEdit)
-	mux.HandleFunc("POST /views/{viewId}/edit/{itemId}", h.ViewEdit)
-	mux.HandleFunc("POST /views/{viewId}/delete/{itemId}", h.ViewDelete)
-	mux.HandleFunc("POST /views/{viewId}/items/{itemId}/actions/{actionName}", h.ViewAction)
-	mux.HandleFunc("GET /views/{viewId}/{itemId}", h.ViewDetail)
-	mux.HandleFunc("GET /views/{viewId}", h.ViewList)
 	mux.HandleFunc("POST /webhook/{source}", h.WebhookReceive)
 	mux.HandleFunc("GET /ping", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("pong"))
 	})
 
-	defaultView := cfg.DefaultView
-	if defaultView == "" {
-		views := cfg.OrderedViews()
-		if len(views) > 0 {
-			defaultView = views[0].ID
-		}
-	}
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-		if defaultView == "" {
-			http.Redirect(w, r, "/admin/sync/clients", http.StatusSeeOther)
-			return
-		}
-		http.Redirect(w, r, "/views/"+defaultView, http.StatusSeeOther)
-	})
+	spaSub, _ := fs.Sub(spaFS, "web/dist")
+	mux.HandleFunc("GET /{path...}", serveSPA(spaSub))
 
 	fmt.Printf("exokephalos listening on %s\n", appCfg.Server.Listen)
 	log.Fatal(http.ListenAndServe(appCfg.Server.Listen, h.TimingMiddleware(authMgr.Middleware(h.CSRFMiddleware(h.ConfigReloadMiddleware(mux))))))
@@ -214,19 +194,14 @@ func runServer(cfg *config.Config, dir string, r *repo.Repo, c *cache.Cache) {
 	mux.HandleFunc("POST /api/items", h.CreateItem)
 	mux.HandleFunc("PATCH /api/items/{id}", h.UpdateItemByID)
 	mux.HandleFunc("POST /api/query/ids", h.QueryIDsByCEL)
-
-	// --- Generic view routes ---
-	mux.HandleFunc("GET /import-url", h.ImportURL)
-	mux.HandleFunc("POST /import-url", h.ImportURL)
-	mux.HandleFunc("GET /views/{viewId}/stats", h.ViewStats)
-	mux.HandleFunc("GET /views/{viewId}/new", h.ViewNew)
-	mux.HandleFunc("POST /views/{viewId}/new", h.ViewNew)
-	mux.HandleFunc("GET /views/{viewId}/edit/{itemId}", h.ViewEdit)
-	mux.HandleFunc("POST /views/{viewId}/edit/{itemId}", h.ViewEdit)
-	mux.HandleFunc("POST /views/{viewId}/delete/{itemId}", h.ViewDelete)
-	mux.HandleFunc("POST /views/{viewId}/items/{itemId}/actions/{actionName}", h.ViewAction)
-	mux.HandleFunc("GET /views/{viewId}/{itemId}", h.ViewDetail)
-	mux.HandleFunc("GET /views/{viewId}", h.ViewList)
+	mux.HandleFunc("GET /api/app/bootstrap", h.AppBootstrap)
+	mux.HandleFunc("POST /api/app/changes", h.AppChanges)
+	mux.HandleFunc("GET /api/app/sync-clients", h.AppSyncClients)
+	mux.HandleFunc("POST /api/app/sync-clients/{clientId}/approve", h.AppSyncClientApprove)
+	mux.HandleFunc("POST /api/app/sync-clients/{clientId}/revoke", h.AppSyncClientRevoke)
+	mux.HandleFunc("POST /api/app/password", h.AppPassword)
+	mux.HandleFunc("POST /api/app/actions/{actionName}", h.AppAction)
+	mux.HandleFunc("GET /api/events", h.AppEvents)
 
 	// --- Hardcoded API endpoints (not view-specific) ---
 	mux.HandleFunc("POST /webhook/{source}", h.WebhookReceive)
@@ -236,26 +211,30 @@ func runServer(cfg *config.Config, dir string, r *repo.Repo, c *cache.Cache) {
 		_, _ = w.Write([]byte("pong"))
 	})
 
-	// Root redirect to default view
-	defaultView := cfg.DefaultView
-	if defaultView == "" {
-		views := cfg.OrderedViews()
-		if len(views) > 0 {
-			defaultView = views[0].ID
-		}
-	}
-	redirectTarget := "/views/" + defaultView
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			http.Redirect(w, r, redirectTarget, http.StatusSeeOther)
-			return
-		}
-		http.NotFound(w, r)
-	})
+	spaSub, _ := fs.Sub(spaFS, "web/dist")
+	mux.HandleFunc("GET /{path...}", serveSPA(spaSub))
 
 	// Start HTTP server
 	fmt.Println("exokephalos listening on :8293")
 	log.Fatal(http.ListenAndServe(":8293", h.TimingMiddleware(authMgr.Middleware(h.CSRFMiddleware(h.ConfigReloadMiddleware(mux))))))
+}
+
+func serveSPA(spa fs.FS) http.HandlerFunc {
+	fileServer := http.FileServer(http.FS(spa))
+	return func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path == "" {
+			path = "index.html"
+		}
+		if f, err := spa.Open(path); err == nil {
+			_ = f.Close()
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = "/index.html"
+		fileServer.ServeHTTP(w, r2)
+	}
 }
 
 func initAuth(dbPath string) (*auth.Manager, error) {

@@ -170,6 +170,12 @@ func (m *Manager) Exempt(r *http.Request) bool {
 	return r.URL.Path == "/login" ||
 		r.URL.Path == "/ping" ||
 		strings.HasPrefix(r.URL.Path, "/static/") ||
+		strings.HasPrefix(r.URL.Path, "/assets/") ||
+		strings.HasPrefix(r.URL.Path, "/icons/") ||
+		r.URL.Path == "/manifest.webmanifest" ||
+		r.URL.Path == "/registerSW.js" ||
+		r.URL.Path == "/sw.js" ||
+		strings.HasPrefix(r.URL.Path, "/workbox-") ||
 		strings.HasPrefix(r.URL.Path, "/api/sync/")
 }
 

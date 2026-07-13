@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -322,6 +324,7 @@ func pullSnapshot(baseDir, serverURL, clientID string, priv ed25519.PrivateKey, 
 		if err := os.WriteFile(path, []byte(ch.Content), 0644); err != nil {
 			return false, err
 		}
+		_ = c.SetMeta(configHashMetaKey(ch.Path), contentHashString(ch.Content))
 	}
 	for _, ch := range snapshot.Items {
 		if ch.Path == "" || ch.ID == "" {
@@ -389,6 +392,7 @@ func pullSnapshot(baseDir, serverURL, clientID string, priv ed25519.PrivateKey, 
 				absPath := filepath.Clean(cfgPath)
 				if strings.HasPrefix(absPath, filepath.Clean(baseDir)+string(filepath.Separator)) {
 					_ = os.Remove(absPath)
+					_ = c.SetMeta(configHashMetaKey(rel), "")
 					configChanged = true
 				}
 			}
@@ -461,6 +465,10 @@ func enqueueRootConfigs(baseDir string, c *cache.Cache) error {
 			continue
 		}
 		rel, _ := filepath.Rel(baseDir, path)
+		hash := contentHashString(string(data))
+		if previous, _ := c.Meta(configHashMetaKey(rel)); previous == hash {
+			continue
+		}
 		payload, _ := json.Marshal(syncsvc.Change{
 			Op:         "upsert_config",
 			TargetKind: "config",
@@ -470,6 +478,16 @@ func enqueueRootConfigs(baseDir string, c *cache.Cache) error {
 		if err := c.EnqueueOutbox("upsert_config", "config", rel, rel, string(payload)); err != nil {
 			return err
 		}
+		_ = c.SetMeta(configHashMetaKey(rel), hash)
 	}
 	return nil
+}
+
+func configHashMetaKey(path string) string {
+	return "sync_config_hash:" + filepath.ToSlash(path)
+}
+
+func contentHashString(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
 }

@@ -9,10 +9,15 @@ vars:
 
 tasks:
   build:
-    desc: Build the CSS, download vendor JS, and compile Go binary
-    deps: [css, vendor-js]
+    desc: Build the login CSS, SPA assets, and Go binary
+    deps: [css, web]
     cmds:
       - go build -ldflags="{{.LDFLAGS}}" -o exo .
+
+  web:
+    desc: Build the React SPA/PWA
+    cmds:
+      - npm run build:web
 
   container:push:
     desc: Build and push linux/amd64 and linux/arm64 container image
@@ -54,9 +59,9 @@ tasks:
 
   dev:
     desc: Run auto-reloading dev environment
-    deps: [css, vendor-js]
+    deps: [css]
     cmds:
-      - task --parallel dev:server dev:css
+      - task --parallel dev:server dev:css dev:web
 
   dev:server:
     desc: Run Go server with auto-reload on file changes
@@ -67,6 +72,11 @@ tasks:
     desc: Watch Tailwind CSS
     cmds:
       - npm run watch:css
+
+  dev:web:
+    desc: Run Vite dev server for the SPA
+    cmds:
+      - npm run dev:web
 
   dev:tui:
     desc: Create a temp dir, import all example-repo types, set up Helix LSP, and launch TUI
@@ -171,6 +181,18 @@ tasks:
     desc: Run integration tests
     cmds:
       - go test -v -count=1 ./...
+
+  test:e2e:
+    desc: Run real binary, TUI PTY, sync server, and SPA browser E2E tests
+    deps: [build]
+    cmds:
+      - npx playwright install chromium
+      - go test -tags=e2e -v -count=1 ./e2e
+
+  test:e2e:ui:
+    desc: Run SPA E2E projects in headed/debug mode against an existing harness URL
+    cmds:
+      - npx playwright test --headed --debug
 
   lint:
     desc: Run golangci-lint

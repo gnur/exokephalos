@@ -1,15 +1,34 @@
 {
   "name": "exokephalos",
   "private": true,
+  "type": "module",
   "scripts": {
     "build:css": "npx @tailwindcss/cli -i static/css/input.css -o static/css/output.css --minify",
-    "watch:css": "npx @tailwindcss/cli -i static/css/input.css -o static/css/output.css --watch"
+    "watch:css": "npx @tailwindcss/cli -i static/css/input.css -o static/css/output.css --watch",
+    "build:web": "vite build",
+    "dev:web": "vite --host 0.0.0.0"
   },
   "devDependencies": {
-    "@tailwindcss/cli": "^4"
+    "@playwright/test": "^1.61.1",
+    "@tailwindcss/cli": "^4",
+    "@tailwindcss/vite": "^4",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "latest",
+    "typescript": "latest",
+    "vite": "latest",
+    "vite-plugin-pwa": "latest"
   },
   "dependencies": {
     "@tailwindcss/typography": "^0.5.19",
-    "tailwindcss": "^4.3.0"
+    "dexie": "latest",
+    "dexie-react-hooks": "latest",
+    "dompurify": "^3.4.12",
+    "lucide-react": "latest",
+    "marked": "^18.0.6",
+    "react": "^19",
+    "react-dom": "^19",
+    "tailwindcss": "^4.3.0",
+    "yaml": "^2.9.0"
   }
 }

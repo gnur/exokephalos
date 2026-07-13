@@ -47,11 +47,11 @@ type ChangeResponse struct {
 }
 
 type Client struct {
-	ID         string
-	Label      string
-	Status     string
-	CreatedAt  string
-	ApprovedAt string
+	ID         string `json:"id"`
+	Label      string `json:"label"`
+	Status     string `json:"status"`
+	CreatedAt  string `json:"created_at"`
+	ApprovedAt string `json:"approved_at"`
 }
 
 func NewServer(dbPath string) (*Server, error) {
@@ -84,6 +84,26 @@ func (s *Server) SetOnConfigChanged(cb func()) {
 
 func (s *Server) DB() *sql.DB {
 	return s.db
+}
+
+func (s *Server) LatestRevision() int64 {
+	return s.latestRevision()
+}
+
+func (s *Server) ApplyChange(ch Change) (int64, error) {
+	return s.applyChange(ch)
+}
+
+func (s *Server) Snapshot() ([]Change, []Change, error) {
+	items, err := s.items()
+	if err != nil {
+		return nil, nil, err
+	}
+	configs, err := s.configs()
+	if err != nil {
+		return nil, nil, err
+	}
+	return items, configs, nil
 }
 
 func (s *Server) Register(mux *http.ServeMux) {

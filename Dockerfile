@@ -3,16 +3,14 @@
 FROM node:24-alpine AS assets
 WORKDIR /src
 
-RUN apk add --no-cache curl
-
 COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY static ./static
+COPY web ./web
+COPY vite.config.ts ./
 RUN npm run build:css
-RUN mkdir -p static/js \
-	&& curl -sL "https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js" -o static/js/htmx.min.js \
-	&& curl -sL "https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js" -o static/js/chart.min.js
+RUN npm run build:web
 
 FROM golang:1.26.3-alpine AS builder
 WORKDIR /src
@@ -24,7 +22,7 @@ RUN go mod download
 
 COPY . .
 COPY --from=assets /src/static/css/output.css ./static/css/output.css
-COPY --from=assets /src/static/js ./static/js
+COPY --from=assets /src/web/dist ./web/dist
 
 ARG TARGETOS
 ARG TARGETARCH

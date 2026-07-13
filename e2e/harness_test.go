@@ -72,7 +72,7 @@ func TestTUISPASyncEndToEnd(t *testing.T) {
 	h.startSyncFromTUI()
 
 	h.runPlaywright("approve-and-exercise-spa")
-	h.waitTUI("connected", 20*time.Second)
+	h.waitTUI("✓", 20*time.Second)
 	h.waitForOutboxSynced(30 * time.Second)
 	h.assertServerHasUploadedState()
 

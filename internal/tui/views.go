@@ -58,6 +58,22 @@ func (m Model) renderViewMenuOverlay() string {
 
 func (m Model) renderActionPickerOverlay() string {
 	entries := m.filteredActionEntries()
+	allEntries := m.actionEntries()
+	popupW := actionPickerWidth(allEntries)
+	if maxW := m.width - 6; maxW > 20 && popupW > maxW {
+		popupW = maxW
+	}
+	popupH := actionPickerHeight(m.height)
+	contentH := popupH - 4 // border + vertical padding from popupStyle
+	if contentH < 1 {
+		contentH = 1
+	}
+	maxEntryRows := contentH - 5 // title, input, spacer, spacer, hint
+	if maxEntryRows < 1 {
+		maxEntryRows = 1
+	}
+	visibleEntries, entryOffset := actionPickerWindow(entries, m.actionCursor, maxEntryRows)
+
 	lines := []string{
 		popupTitleStyle.Render("Actions"),
 		searchPromptStyle.Render(m.actionInput.View()),
@@ -67,27 +83,29 @@ func (m Model) renderActionPickerOverlay() string {
 	if len(entries) == 0 {
 		lines = append(lines, popupHintStyle.Render("  no matching actions"))
 	} else {
-		for i, entry := range entries {
+		for i, entry := range visibleEntries {
+			absoluteIndex := entryOffset + i
 			label := fmt.Sprintf("%s — %s", entry.Name, entry.Description)
 			if !entry.Enabled && entry.Filter != "" {
 				label += "  requires: " + entry.Filter
 			}
 			prefix := "  "
-			if i == m.actionCursor {
+			if absoluteIndex == m.actionCursor {
 				prefix = "> "
 			}
+			label = truncate(prefix+label, popupW)
 			style := popupLabelStyle
 			if !entry.Enabled {
 				style = disabledActionStyle
-			} else if i == m.actionCursor {
+			} else if absoluteIndex == m.actionCursor {
 				style = selectedItemStyle
 			}
-			lines = append(lines, style.Render(prefix+label))
+			lines = append(lines, style.Render(label))
 		}
 	}
 
 	lines = append(lines, "", popupHintStyle.Render("  enter to run  esc to cancel"))
-	return renderFloating(strings.Join(lines, "\n"), m.width, m.height, actionPickerWidth(entries))
+	return renderFloatingTop(strings.Join(lines, "\n"), m.width, popupW, contentH)
 }
 
 func actionPickerWidth(entries []actionEntry) int {
@@ -102,6 +120,34 @@ func actionPickerWidth(entries []actionEntry) int {
 		}
 	}
 	return width
+}
+
+func actionPickerHeight(terminalHeight int) int {
+	height := terminalHeight / 2
+	if height < 10 {
+		return 10
+	}
+	return height
+}
+
+func actionPickerWindow(entries []actionEntry, cursor, maxRows int) ([]actionEntry, int) {
+	if len(entries) <= maxRows {
+		return entries, 0
+	}
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor >= len(entries) {
+		cursor = len(entries) - 1
+	}
+	offset := cursor - maxRows/2
+	if offset < 0 {
+		offset = 0
+	}
+	if offset+maxRows > len(entries) {
+		offset = len(entries) - maxRows
+	}
+	return entries[offset : offset+maxRows], offset
 }
 
 func (m Model) renderHardcoverResultsOverlay() string {
@@ -345,7 +391,11 @@ func (m Model) renderFooter() string {
 		hint = m.status + "  " + hint
 	}
 	if m.syncStatus != "" {
-		indicator := lipgloss.NewStyle().Foreground(successColor).Render("sync: " + m.syncStatus)
+		label := "sync: " + m.syncStatus
+		if m.syncStatus == "connected" {
+			label = "✓"
+		}
+		indicator := lipgloss.NewStyle().Foreground(successColor).Render(label)
 		leftWidth := m.width - lipgloss.Width(indicator) - 1
 		if leftWidth < 0 {
 			leftWidth = 0

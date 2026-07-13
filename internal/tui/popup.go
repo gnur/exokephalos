@@ -67,3 +67,12 @@ func renderFloating(content string, width, height, popupW int) string {
 
 	return positioned
 }
+
+func renderFloatingTop(content string, width, popupW, contentH int) string {
+	popup := popupStyle.Width(popupW).Height(contentH).Render(content)
+	padLeft := (width - popupW - 4) / 2
+	if padLeft < 0 {
+		padLeft = 0
+	}
+	return lipgloss.NewStyle().PaddingLeft(padLeft).Render(popup)
+}

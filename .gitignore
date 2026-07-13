@@ -11,3 +11,4 @@ tmp-run
 __pycache__/
 plugin-scripts/
 test-results
+web/dist

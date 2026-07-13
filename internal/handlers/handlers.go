@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gnur/exokephalos/internal/action"
@@ -51,6 +53,12 @@ type Handlers struct {
 	actions map[string]*action.Action
 	// Pre-parsed templates keyed by page name (e.g. "views/list.html").
 	templates map[string]*template.Template
+
+	cfgMu           sync.RWMutex
+	configChanged   bool
+	configChangedMu sync.Mutex
+	lastConfigCheck time.Time
+	configFiles     map[string]time.Time
 }
 
 func New(cfg *config.Config, baseDir string, r *repo.Repo, c *cache.Cache, templateFS fs.FS) (*Handlers, error) {
@@ -284,12 +292,7 @@ func New(cfg *config.Config, baseDir string, r *repo.Repo, c *cache.Cache, templ
 		return template.HTML(sanitized)
 	}
 
-	// Verify template FS has the layout file
-	if _, err := fs.Stat(templateFS, "templates/layout.html"); err != nil {
-		return nil, fmt.Errorf("templates not found in provided FS: %w", err)
-	}
-
-	// Pre-parse all page templates paired with layout
+	// Pre-parsing templates layout
 	layoutPath := "templates/layout.html"
 	err := fs.WalkDir(templateFS, "templates", func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -311,6 +314,9 @@ func New(cfg *config.Config, baseDir string, r *repo.Repo, c *cache.Cache, templ
 		return nil, fmt.Errorf("pre-parsing templates: %w", err)
 	}
 
+	h.configFiles = make(map[string]time.Time)
+	h.updateConfigFilesList()
+
 	return h, nil
 }
 
@@ -329,6 +335,9 @@ func NewSyncServer(cfg *config.Config, baseDir string, s *syncsvc.Server, templa
 		return nil, err
 	}
 	h.SyncServer = s
+	s.SetOnConfigChanged(func() {
+		h.MarkConfigChanged()
+	})
 	return h, nil
 }
 
@@ -494,4 +503,199 @@ func newData(r *http.Request) map[string]interface{} {
 	return map[string]interface{}{
 		"_requestStart": start,
 	}
+}
+
+func (h *Handlers) MarkConfigChanged() {
+	h.configChangedMu.Lock()
+	h.configChanged = true
+	h.configChangedMu.Unlock()
+}
+
+func (h *Handlers) isConfigChanged() bool {
+	h.configChangedMu.Lock()
+	defer h.configChangedMu.Unlock()
+	return h.configChanged
+}
+
+func (h *Handlers) updateConfigFilesList() {
+	h.configChangedMu.Lock()
+	defer h.configChangedMu.Unlock()
+	files := make(map[string]time.Time)
+	entries, err := os.ReadDir(h.BaseDir)
+	if err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".toml" || entry.Name() == ".exo.toml" {
+				continue
+			}
+			path := filepath.Join(h.BaseDir, entry.Name())
+			if info, err := os.Stat(path); err == nil {
+				files[path] = info.ModTime()
+			}
+		}
+	}
+	exoDir := filepath.Join(h.BaseDir, ".exo")
+	if info, err := os.Stat(exoDir); err == nil && info.IsDir() {
+		entries, err := os.ReadDir(exoDir)
+		if err == nil && len(files) == 0 {
+			for _, entry := range entries {
+				if !entry.IsDir() && filepath.Ext(entry.Name()) == ".toml" && entry.Name() != "tui.toml" && entry.Name() != "serve.toml" {
+					path := filepath.Join(exoDir, entry.Name())
+					if info, err := os.Stat(path); err == nil {
+						files[path] = info.ModTime()
+					}
+				}
+			}
+		}
+	}
+	if len(files) == 0 {
+		path := filepath.Join(h.BaseDir, ".exo.toml")
+		if info, err := os.Stat(path); err == nil {
+			files[path] = info.ModTime()
+		}
+	}
+	h.configFiles = files
+}
+
+func (h *Handlers) detectConfigChanges() bool {
+	h.configChangedMu.Lock()
+	defer h.configChangedMu.Unlock()
+	files := make(map[string]time.Time)
+	entries, err := os.ReadDir(h.BaseDir)
+	if err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".toml" || entry.Name() == ".exo.toml" {
+				continue
+			}
+			path := filepath.Join(h.BaseDir, entry.Name())
+			if info, err := os.Stat(path); err == nil {
+				files[path] = info.ModTime()
+			}
+		}
+	}
+	exoDir := filepath.Join(h.BaseDir, ".exo")
+	if info, err := os.Stat(exoDir); err == nil && info.IsDir() {
+		entries, err := os.ReadDir(exoDir)
+		if err == nil && len(files) == 0 {
+			for _, entry := range entries {
+				if !entry.IsDir() && filepath.Ext(entry.Name()) == ".toml" && entry.Name() != "tui.toml" && entry.Name() != "serve.toml" {
+					path := filepath.Join(exoDir, entry.Name())
+					if info, err := os.Stat(path); err == nil {
+						files[path] = info.ModTime()
+					}
+				}
+			}
+		}
+	}
+	if len(files) == 0 {
+		path := filepath.Join(h.BaseDir, ".exo.toml")
+		if info, err := os.Stat(path); err == nil {
+			files[path] = info.ModTime()
+		}
+	}
+
+	if len(files) != len(h.configFiles) {
+		return true
+	}
+	for path, modTime := range files {
+		oldTime, ok := h.configFiles[path]
+		if !ok || !modTime.Equal(oldTime) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *Handlers) ensureConfigUpdated() {
+	var changed bool
+	if h.SyncServer != nil {
+		changed = h.isConfigChanged()
+	} else {
+		h.configChangedMu.Lock()
+		now := time.Now()
+		if now.Sub(h.lastConfigCheck) > 1*time.Second {
+			h.lastConfigCheck = now
+			h.configChangedMu.Unlock()
+			changed = h.detectConfigChanges()
+		} else {
+			h.configChangedMu.Unlock()
+		}
+	}
+
+	if changed {
+		if err := h.reloadConfig(); err != nil {
+			fmt.Fprintf(os.Stderr, "handlers: failed to reload config: %v\n", err)
+		}
+	}
+}
+
+func (h *Handlers) reloadConfig() error {
+	h.cfgMu.Lock()
+	defer h.cfgMu.Unlock()
+
+	var cfg *config.Config
+	var err error
+	if h.SyncServer != nil {
+		cfg, err = h.SyncServer.LoadConfig()
+	} else {
+		cfg, err = config.Load(h.BaseDir)
+	}
+	if err != nil {
+		return err
+	}
+
+	filters := make(map[string]*filter.Program)
+	subviewFilters := make(map[string]*filter.Program)
+	for id, vc := range cfg.Views {
+		prog, err := filter.Compile(vc.Filter)
+		if err != nil {
+			return fmt.Errorf("view %q: compiling filter: %w", id, err)
+		}
+		filters[id] = prog
+
+		for _, sv := range vc.Subviews {
+			if sv.Filter == "" || sv.Filter == "true" {
+				continue
+			}
+			svProg, err := filter.Compile(sv.Filter)
+			if err != nil {
+				return fmt.Errorf("view %q subview %q: compiling filter: %w", id, sv.Name, err)
+			}
+			subviewFilters[id+"\x00"+sv.Name] = svProg
+		}
+	}
+
+	actions := make(map[string]*action.Action)
+	for name, ac := range cfg.Actions {
+		act, err := action.Compile(name, ac)
+		if err != nil {
+			return fmt.Errorf("action %q: %w", name, err)
+		}
+		actions[name] = act
+	}
+
+	h.Cfg = cfg
+	h.filters = filters
+	h.subviewFilters = subviewFilters
+	h.actions = actions
+
+	if h.SyncServer == nil {
+		h.updateConfigFilesList()
+	} else {
+		h.configChangedMu.Lock()
+		h.configChanged = false
+		h.configChangedMu.Unlock()
+	}
+
+	return nil
+}
+
+func (h *Handlers) ConfigReloadMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ensureConfigUpdated()
+
+		h.cfgMu.RLock()
+		defer h.cfgMu.RUnlock()
+
+		next.ServeHTTP(w, r)
+	})
 }

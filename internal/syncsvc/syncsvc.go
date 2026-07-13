@@ -27,8 +27,9 @@ import (
 )
 
 type Server struct {
-	db      *sql.DB
-	baseDir string
+	db              *sql.DB
+	baseDir         string
+	onConfigChanged func()
 }
 
 type Change struct {
@@ -75,6 +76,14 @@ func (s *Server) SetBaseDir(baseDir string) {
 	if baseDir != "" {
 		s.baseDir = baseDir
 	}
+}
+
+func (s *Server) SetOnConfigChanged(cb func()) {
+	s.onConfigChanged = cb
+}
+
+func (s *Server) DB() *sql.DB {
+	return s.db
 }
 
 func (s *Server) Register(mux *http.ServeMux) {
@@ -255,7 +264,13 @@ func (s *Server) applyChange(ch Change) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return rev, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	if ch.TargetKind == "config" && s.onConfigChanged != nil {
+		s.onConfigChanged()
+	}
+	return rev, nil
 }
 
 func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -608,6 +623,10 @@ func LoadConfigFromServerDB(dbPath string) (*config.Config, error) {
 		return nil, err
 	}
 	defer db.Close()
+	return LoadConfigFromDB(db)
+}
+
+func LoadConfigFromDB(db *sql.DB) (*config.Config, error) {
 	rows, err := db.Query(`SELECT content FROM configs WHERE deleted_at = '' ORDER BY path ASC`)
 	if err != nil {
 		return &config.Config{Views: map[string]config.ViewConfig{}, Actions: map[string]config.ActionConfig{}}, nil
@@ -629,6 +648,10 @@ func LoadConfigFromServerDB(dbPath string) (*config.Config, error) {
 		return &config.Config{Views: map[string]config.ViewConfig{}, Actions: map[string]config.ActionConfig{}}, nil
 	}
 	return config.Load(tmp)
+}
+
+func (s *Server) LoadConfig() (*config.Config, error) {
+	return LoadConfigFromDB(s.db)
 }
 
 func BuildLocalChanges(baseDir string, c *cache.Cache, includeAll bool) ([]Change, error) {

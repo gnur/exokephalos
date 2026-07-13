@@ -173,7 +173,7 @@ func runServerWithSync(appCfg *config.AppConfig, dir string) {
 	})
 
 	fmt.Printf("exokephalos listening on %s\n", appCfg.Server.Listen)
-	log.Fatal(http.ListenAndServe(appCfg.Server.Listen, h.TimingMiddleware(h.CSRFMiddleware(mux))))
+	log.Fatal(http.ListenAndServe(appCfg.Server.Listen, h.TimingMiddleware(h.CSRFMiddleware(h.ConfigReloadMiddleware(mux)))))
 }
 
 func runServer(cfg *config.Config, dir string, r *repo.Repo, c *cache.Cache) {
@@ -234,7 +234,7 @@ func runServer(cfg *config.Config, dir string, r *repo.Repo, c *cache.Cache) {
 
 	// Start HTTP server
 	fmt.Println("exokephalos listening on :8293")
-	log.Fatal(http.ListenAndServe(":8293", h.TimingMiddleware(h.CSRFMiddleware(mux))))
+	log.Fatal(http.ListenAndServe(":8293", h.TimingMiddleware(h.CSRFMiddleware(h.ConfigReloadMiddleware(mux)))))
 }
 
 func runLSP(c *cache.Cache) {

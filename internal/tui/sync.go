@@ -54,10 +54,11 @@ func startSyncCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) tea.
 		if err := pushOutbox(appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
 			return syncMsg{status: "offline", err: err, retrySync: true}
 		}
-		if err := pullSnapshot(baseDir, appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
+		cfgChanged, err := pullSnapshot(baseDir, appCfg.Sync.ServerURL, clientID, priv, c)
+		if err != nil {
 			return syncMsg{status: "offline", err: err, retrySync: true}
 		}
-		return syncMsg{status: "connected", startListen: true, retrySync: true}
+		return syncMsg{status: "connected", startListen: true, retrySync: true, configChanged: cfgChanged}
 	}
 }
 
@@ -81,10 +82,11 @@ func syncStartupCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) te
 		if err := pushOutbox(appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
 			return syncMsg{status: "offline", err: err, retrySync: true}
 		}
-		if err := pullSnapshot(baseDir, appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
-			return syncMsg{status: "offline", err: err, retrySync: true}
+		cfgChanged, err := pullSnapshot(baseDir, appCfg.Sync.ServerURL, clientID, priv, c)
+		if err != nil {
+			return syncMsg{status: "error", err: err, retrySync: true}
 		}
-		return syncMsg{status: "connected", startListen: true, retrySync: true}
+		return syncMsg{status: "connected", startListen: true, retrySync: true, configChanged: cfgChanged}
 	}
 }
 
@@ -111,10 +113,11 @@ func reconcileSyncCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) 
 		if err := pushOutbox(appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
 			return syncMsg{status: "offline", err: err, retrySync: true}
 		}
-		if err := pullSnapshot(baseDir, appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
+		cfgChanged, err := pullSnapshot(baseDir, appCfg.Sync.ServerURL, clientID, priv, c)
+		if err != nil {
 			return syncMsg{status: "offline", err: err, retrySync: true}
 		}
-		return syncMsg{status: "connected", retrySync: true}
+		return syncMsg{status: "connected", retrySync: true, configChanged: cfgChanged}
 	}
 }
 
@@ -172,10 +175,11 @@ func syncListenCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) tea
 		if revision > 0 {
 			_ = c.SetMeta("sync_last_revision", fmt.Sprintf("%d", revision))
 		}
-		if err := pullSnapshot(baseDir, appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
+		cfgChanged, err := pullSnapshot(baseDir, appCfg.Sync.ServerURL, clientID, priv, c)
+		if err != nil {
 			return syncMsg{status: "offline", err: err, retryListen: true, retrySync: true}
 		}
-		return syncMsg{status: "connected", startListen: true, retrySync: true}
+		return syncMsg{status: "connected", startListen: true, retrySync: true, configChanged: cfgChanged}
 	}
 }
 
@@ -269,31 +273,32 @@ func pushOutbox(serverURL, clientID string, priv ed25519.PrivateKey, c *cache.Ca
 	return nil
 }
 
-func pullSnapshot(baseDir, serverURL, clientID string, priv ed25519.PrivateKey, c *cache.Cache) error {
+func pullSnapshot(baseDir, serverURL, clientID string, priv ed25519.PrivateKey, c *cache.Cache) (bool, error) {
 	url := strings.TrimRight(serverURL, "/") + "/api/sync/snapshot"
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	SignBody := []byte(nil)
 	syncsvc.SignRequest(req, SignBody, clientID, priv)
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("snapshot failed: %s", resp.Status)
+		return false, fmt.Errorf("snapshot failed: %s", resp.Status)
 	}
 	var snapshot struct {
 		Items   []syncsvc.Change `json:"items"`
 		Configs []syncsvc.Change `json:"configs"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
-		return err
+		return false, err
 	}
 	snapshotPaths := make(map[string]bool)
+	configChanged := false
 
 	for _, ch := range snapshot.Configs {
 		if ch.Path == "" {
@@ -305,10 +310,17 @@ func pullSnapshot(baseDir, serverURL, clientID string, priv ed25519.PrivateKey, 
 		}
 		snapshotPaths[ch.Path] = true
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			return err
+			return false, err
 		}
+
+		// Read existing file to check for changes
+		existing, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(existing, []byte(ch.Content)) {
+			configChanged = true
+		}
+
 		if err := os.WriteFile(path, []byte(ch.Content), 0644); err != nil {
-			return err
+			return false, err
 		}
 	}
 	for _, ch := range snapshot.Items {
@@ -321,10 +333,10 @@ func pullSnapshot(baseDir, serverURL, clientID string, priv ed25519.PrivateKey, 
 		}
 		snapshotPaths[ch.Path] = true
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			return err
+			return false, err
 		}
 		if err := markdown.WriteFrontmatter(path, ch.Frontmatter, ch.Body); err != nil {
-			return err
+			return false, err
 		}
 		_ = c.NotifyWriteNoOutbox(path)
 	}
@@ -377,12 +389,13 @@ func pullSnapshot(baseDir, serverURL, clientID string, priv ed25519.PrivateKey, 
 				absPath := filepath.Clean(cfgPath)
 				if strings.HasPrefix(absPath, filepath.Clean(baseDir)+string(filepath.Separator)) {
 					_ = os.Remove(absPath)
+					configChanged = true
 				}
 			}
 		}
 	}
 
-	return nil
+	return configChanged, nil
 }
 
 func listenForServerEvent(serverURL, clientID string, priv ed25519.PrivateKey, c *cache.Cache) (int64, error) {

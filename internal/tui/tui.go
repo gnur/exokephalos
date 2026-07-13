@@ -179,12 +179,13 @@ type urlImportMsg struct {
 }
 
 type syncMsg struct {
-	status      string
-	err         error
-	startListen bool
-	retryListen bool
-	retrySync   bool
-	retryStart  bool
+	status        string
+	err           error
+	startListen   bool
+	retryListen   bool
+	retrySync     bool
+	retryStart    bool
+	configChanged bool
 }
 
 type syncTickMsg struct{}
@@ -373,6 +374,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else if msg.status != "" && msg.status != oldSyncStatus {
 			m.status = "Sync: " + msg.status
+		}
+		if msg.configChanged {
+			if err := m.reloadConfig(); err != nil {
+				m.status = fmt.Sprintf("Config reload error: %v", err)
+			}
 		}
 		var cmds []tea.Cmd
 		cmds = append(cmds, m.loadData())
@@ -1925,6 +1931,93 @@ func (m Model) tagPaneWidth() int {
 
 func (m Model) contentHeight() int {
 	return m.height - 4
+}
+
+func (m *Model) reloadConfig() error {
+	cfg, err := config.Load(m.baseDir)
+	if err != nil {
+		return err
+	}
+	m.cfg = cfg
+
+	orderedViews := m.cfg.OrderedViews()
+	views := make([]viewState, 0, len(orderedViews))
+
+	for _, ov := range orderedViews {
+		vs := viewState{
+			cfg:            ov.Config,
+			id:             ov.ID,
+			tagCountsCache: &tagCountsCache{},
+		}
+
+		prog, err := filter.Compile(ov.Config.Filter)
+		if err != nil {
+			continue
+		}
+		vs.filter = prog
+
+		for _, sv := range ov.Config.Subviews {
+			subProg, err := filter.Compile(sv.Filter)
+			if err != nil {
+				subProg, _ = filter.Compile("true")
+			}
+			vs.subFilters = append(vs.subFilters, subProg)
+		}
+
+		if ov.Config.PreviewTemplate != "" {
+			tmpl, err := template.New("preview-" + ov.ID).Parse(ov.Config.PreviewTemplate)
+			if err != nil {
+				log.Printf("tui: failed to compile preview template for view %s: %v", ov.ID, err)
+			} else {
+				vs.previewTmpl = tmpl
+			}
+		}
+
+		views = append(views, vs)
+	}
+
+	actions := make(map[string]*action.Action)
+	for name, ac := range m.cfg.Actions {
+		act, err := action.Compile(name, ac)
+		if err != nil {
+			continue
+		}
+		actions[name] = act
+	}
+
+	// Try to preserve active view and its cursor/scroll position if it still exists
+	oldActiveViewID := ""
+	var oldViewState *viewState
+	if m.activeView >= 0 && m.activeView < len(m.views) {
+		oldActiveViewID = m.views[m.activeView].id
+		oldViewState = &m.views[m.activeView]
+	}
+
+	m.views = views
+	m.actions = actions
+
+	m.activeView = m.cfg.DefaultViewIndex()
+	if oldActiveViewID != "" {
+		for i, v := range m.views {
+			if v.id == oldActiveViewID {
+				m.activeView = i
+				// Restore cursor, offset, selected tags, etc.
+				if oldViewState != nil {
+					m.views[i].cursor = oldViewState.cursor
+					m.views[i].offset = oldViewState.offset
+					m.views[i].selectedTags = oldViewState.selectedTags
+					m.views[i].tagCursor = oldViewState.tagCursor
+					m.views[i].tagOffset = oldViewState.tagOffset
+					m.views[i].tagFilterValue = oldViewState.tagFilterValue
+					m.views[i].textFilter = oldViewState.textFilter
+				}
+				break
+			}
+		}
+	}
+
+	m.invalidateAllTagCounts()
+	return nil
 }
 
 // --- Data loading ---

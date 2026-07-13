@@ -81,7 +81,7 @@ func TestSync_Deletions(t *testing.T) {
 	}
 
 	// 7. Pull on Client B
-	if err := pullSnapshot(dirB, ts.URL, "client-b", privB, cB); err != nil {
+	if _, err := pullSnapshot(dirB, ts.URL, "client-b", privB, cB); err != nil {
 		t.Fatalf("pull client-b: %v", err)
 	}
 
@@ -105,7 +105,7 @@ func TestSync_Deletions(t *testing.T) {
 	}
 
 	// 10. Pull on Client B
-	if err := pullSnapshot(dirB, ts.URL, "client-b", privB, cB); err != nil {
+	if _, err := pullSnapshot(dirB, ts.URL, "client-b", privB, cB); err != nil {
 		t.Fatalf("pull client-b after deletion: %v", err)
 	}
 

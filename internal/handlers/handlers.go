@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gnur/exokephalos/internal/action"
+	"github.com/gnur/exokephalos/internal/auth"
 	"github.com/gnur/exokephalos/internal/cache"
 	"github.com/gnur/exokephalos/internal/config"
 	"github.com/gnur/exokephalos/internal/filter"
@@ -42,6 +43,7 @@ type Handlers struct {
 	Cache      *cache.Cache
 	Store      ItemStore
 	SyncServer *syncsvc.Server
+	Auth       *auth.Manager
 	templateFS fs.FS
 	funcMap    template.FuncMap
 	hostname   string
@@ -476,6 +478,7 @@ func (h *Handlers) render(w http.ResponseWriter, r *http.Request, name string, d
 	data["NavViews"] = h.Cfg.OrderedViews()
 	data["Config"] = h.Cfg
 	data["SyncServerEnabled"] = h.SyncServer != nil
+	data["AuthEnabled"] = h.Auth != nil
 
 	tmpl, ok := h.templates[name]
 	if !ok {
@@ -492,9 +495,12 @@ func (h *Handlers) render(w http.ResponseWriter, r *http.Request, name string, d
 		templateName = "partial"
 	}
 
-	if err := tmpl.ExecuteTemplate(w, templateName, data); err != nil {
+	var buf bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&buf, templateName, data); err != nil {
 		http.Error(w, err.Error(), 500)
+		return
 	}
+	_, _ = w.Write(buf.Bytes())
 }
 
 // newData creates a data map with request timing context pre-filled.
@@ -691,6 +697,10 @@ func (h *Handlers) reloadConfig() error {
 
 func (h *Handlers) ConfigReloadMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/events" || r.URL.Path == "/api/sync/events" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		h.ensureConfigUpdated()
 
 		h.cfgMu.RLock()

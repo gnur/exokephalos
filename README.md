@@ -380,6 +380,8 @@ An `All` view is always available with key `0`; it shows every item regardless o
 
 Run `exo serve` to start the HTTP server on port 8293.
 
+On first boot, the web UI generates a 20-character base32 password, prints it to stdout, and stores only an Argon2id hash in the auth database. The login page has a single password field and an optional `trust this device` checkbox for a long-lived cookie. Change the password from the `password` nav item after logging in.
+
 Routes:
 
 | Route | Description |

@@ -56,6 +56,9 @@
                     {{if .SyncServerEnabled}}
                     <a href="/admin/sync/clients" class="hover:bg-gray-800 px-2 sm:px-3 py-2 rounded text-sm whitespace-nowrap">sync clients</a>
                     {{end}}
+                    {{if .AuthEnabled}}
+                    <a href="/settings/password" class="hover:bg-gray-800 px-2 sm:px-3 py-2 rounded text-sm whitespace-nowrap">password</a>
+                    {{end}}
                 </div>
             </div>
         </div>

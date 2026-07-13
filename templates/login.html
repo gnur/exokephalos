@@ -1,0 +1,31 @@
+{{define "login"}}<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>exokephalos</title>
+    <link rel="stylesheet" href="/static/css/output.css">
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+    <main class="min-h-screen flex items-center justify-center px-4">
+        <form method="post" action="/login" class="w-full max-w-sm">
+            <input type="hidden" name="next" value="{{.Next}}">
+            <h1 class="text-3xl font-bold text-center mb-8">exokephalos</h1>
+            {{if .Error}}
+            <div class="mb-4 text-sm text-red-300 bg-red-950 border border-red-800 rounded px-3 py-2">{{.Error}}</div>
+            {{end}}
+            <input type="password"
+                   name="password"
+                   autofocus
+                   autocomplete="current-password"
+                   class="w-full bg-gray-950 border border-gray-700 rounded px-3 py-2 text-gray-100 focus:outline-none focus:border-blue-500"
+                   placeholder="Password">
+            <label class="mt-3 flex items-center gap-2 text-sm text-gray-400">
+                <input type="checkbox" name="trust" class="rounded border-gray-700 bg-gray-950">
+                <span>trust this device</span>
+            </label>
+            <button type="submit" class="mt-5 w-full bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded text-sm font-medium">Log in</button>
+        </form>
+    </main>
+</body>
+</html>{{end}}

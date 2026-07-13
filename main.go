@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/gnur/exokephalos/internal/auth"
 	"github.com/gnur/exokephalos/internal/cache"
 	"github.com/gnur/exokephalos/internal/config"
 	"github.com/gnur/exokephalos/internal/exporter"
@@ -120,6 +121,12 @@ func runServerWithSync(appCfg *config.AppConfig, dir string) {
 	if err != nil {
 		log.Fatalf("Failed to initialize handlers: %v", err)
 	}
+	authMgr, err := initAuth(appCfg.Server.DBPath)
+	if err != nil {
+		log.Fatalf("Failed to initialize authentication: %v", err)
+	}
+	defer authMgr.Close()
+	h.Auth = authMgr
 
 	mux := http.NewServeMux()
 
@@ -129,6 +136,10 @@ func runServerWithSync(appCfg *config.AppConfig, dir string) {
 	s.RegisterAPI(mux)
 	s.RegisterWebEvents(mux)
 
+	mux.HandleFunc("GET /login", h.Login)
+	mux.HandleFunc("POST /login", h.Login)
+	mux.HandleFunc("GET /settings/password", h.PasswordSettings)
+	mux.HandleFunc("POST /settings/password", h.PasswordSettings)
 	mux.HandleFunc("GET /api/items/{id}", h.GetItemByID)
 	mux.HandleFunc("POST /api/items", h.CreateItem)
 	mux.HandleFunc("PATCH /api/items/{id}", h.UpdateItemByID)
@@ -173,7 +184,7 @@ func runServerWithSync(appCfg *config.AppConfig, dir string) {
 	})
 
 	fmt.Printf("exokephalos listening on %s\n", appCfg.Server.Listen)
-	log.Fatal(http.ListenAndServe(appCfg.Server.Listen, h.TimingMiddleware(h.CSRFMiddleware(h.ConfigReloadMiddleware(mux)))))
+	log.Fatal(http.ListenAndServe(appCfg.Server.Listen, h.TimingMiddleware(authMgr.Middleware(h.CSRFMiddleware(h.ConfigReloadMiddleware(mux))))))
 }
 
 func runServer(cfg *config.Config, dir string, r *repo.Repo, c *cache.Cache) {
@@ -181,6 +192,12 @@ func runServer(cfg *config.Config, dir string, r *repo.Repo, c *cache.Cache) {
 	if err != nil {
 		log.Fatalf("Failed to initialize handlers: %v", err)
 	}
+	authMgr, err := initAuth(filepath.Join(dir, ".exo", "auth.sqlite"))
+	if err != nil {
+		log.Fatalf("Failed to initialize authentication: %v", err)
+	}
+	defer authMgr.Close()
+	h.Auth = authMgr
 
 	mux := http.NewServeMux()
 
@@ -189,6 +206,10 @@ func runServer(cfg *config.Config, dir string, r *repo.Repo, c *cache.Cache) {
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
 
 	// --- API endpoints ---
+	mux.HandleFunc("GET /login", h.Login)
+	mux.HandleFunc("POST /login", h.Login)
+	mux.HandleFunc("GET /settings/password", h.PasswordSettings)
+	mux.HandleFunc("POST /settings/password", h.PasswordSettings)
 	mux.HandleFunc("GET /api/items/{id}", h.GetItemByID)
 	mux.HandleFunc("POST /api/items", h.CreateItem)
 	mux.HandleFunc("PATCH /api/items/{id}", h.UpdateItemByID)
@@ -234,7 +255,19 @@ func runServer(cfg *config.Config, dir string, r *repo.Repo, c *cache.Cache) {
 
 	// Start HTTP server
 	fmt.Println("exokephalos listening on :8293")
-	log.Fatal(http.ListenAndServe(":8293", h.TimingMiddleware(h.CSRFMiddleware(h.ConfigReloadMiddleware(mux)))))
+	log.Fatal(http.ListenAndServe(":8293", h.TimingMiddleware(authMgr.Middleware(h.CSRFMiddleware(h.ConfigReloadMiddleware(mux))))))
+}
+
+func initAuth(dbPath string) (*auth.Manager, error) {
+	mgr, err := auth.New(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := mgr.EnsurePassword(); err != nil {
+		_ = mgr.Close()
+		return nil, err
+	}
+	return mgr, nil
 }
 
 func runLSP(c *cache.Cache) {

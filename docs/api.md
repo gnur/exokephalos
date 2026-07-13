@@ -4,6 +4,8 @@ This document describes the HTTP API exposed by `exo serve`.
 
 In local mode, the web UI and JSON item API read/write markdown files under `EXO_DIR`. When `.exo/serve.toml` enables `[sync.server]`, `exo serve` is still the regular web UI, but notes and synced root-level workspace config are stored in SQLite. TUI clients keep local markdown files and use the signed sync API.
 
+The browser web UI is password-protected. On first boot, `exo serve` prints a generated 20-character base32 password to stdout and stores only an Argon2id hash. Browser routes and the web JSON API require the login cookie. The signed `/api/sync/*` endpoints do not use the browser cookie; they authenticate TUI/iOS clients with ed25519 request signatures.
+
 ## Web JSON API
 
 Error responses use JSON:
@@ -109,6 +111,10 @@ These routes render HTML:
 
 | Route | Description |
 | --- | --- |
+| `GET /login` | Password-only login screen |
+| `POST /login` | Create web session cookie |
+| `GET /settings/password` | Password change form |
+| `POST /settings/password` | Change web password |
 | `GET /views/{viewId}` | List items; supports `?tags=a,b` and `?subview=Name` |
 | `GET /views/{viewId}/stats` | Stats page when the view has `stats_template` |
 | `GET /views/{viewId}/new` | New item form |

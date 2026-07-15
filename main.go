@@ -151,6 +151,7 @@ func runServer(appCfg *config.AppConfig, dir string) {
 	mux.HandleFunc("POST /api/app/sync-clients/{clientId}/approve", h.AppSyncClientApprove)
 	mux.HandleFunc("POST /api/app/sync-clients/{clientId}/revoke", h.AppSyncClientRevoke)
 	mux.HandleFunc("POST /api/app/password", h.AppPassword)
+	mux.HandleFunc("GET /api/app/items/{id}/actions", h.AppItemActions)
 	mux.HandleFunc("POST /api/app/actions/{actionName}", h.AppAction)
 	mux.HandleFunc("GET /api/app/api-keys", h.AppAPIKeys)
 	mux.HandleFunc("POST /api/app/api-keys", h.AppAPIKeyCreate)

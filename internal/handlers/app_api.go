@@ -209,6 +209,22 @@ func (h *Handlers) AppAction(w http.ResponseWriter, r *http.Request) {
 	writeAppJSON(w, h.appItem(scanner.Item{Path: item.Path, Frontmatter: fm, Body: item.Body, ID: item.ID, Type: item.Type, Tags: markdown.ExtractTags(fm)}))
 }
 
+func (h *Handlers) AppItemActions(w http.ResponseWriter, r *http.Request) {
+	item, err := h.Store.GetByID(r.PathValue("id"))
+	if err != nil {
+		writeAPIError(w, "item not found", http.StatusNotFound)
+		return
+	}
+	actions := make([]appAction, 0)
+	for name, act := range h.actions {
+		if act.Match(item.Frontmatter) {
+			actions = append(actions, appAction{Name: name, Description: act.Description, Filter: act.Filter})
+		}
+	}
+	sort.Slice(actions, func(i, j int) bool { return actions[i].Name < actions[j].Name })
+	writeAppJSON(w, map[string]interface{}{"actions": actions})
+}
+
 func (h *Handlers) AppSyncClientRevoke(w http.ResponseWriter, r *http.Request) {
 	if h.SyncServer == nil {
 		writeAPIError(w, "sync server is not enabled", http.StatusNotFound)

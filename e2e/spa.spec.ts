@@ -8,7 +8,7 @@ test.skip(!password, 'EXO_E2E_PASSWORD is required; run through task test:e2e');
 test('SPA login, mobile shell, editor, approval, and browser outbox', async ({ page, browserName, request }) => {
   await login(page);
   await expect(page.locator('.app-shell')).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Items' })).toBeVisible();
+  await expect(page.locator('.topbar').getByRole('heading', { name: 'Items' })).toBeVisible();
   await expect(page.getByRole('search')).toBeVisible();
   await expect(page.getByRole('button', { name: 'New item' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Menu' })).toBeVisible();
@@ -18,17 +18,27 @@ test('SPA login, mobile shell, editor, approval, and browser outbox', async ({ p
 
   await approvePendingClient(page);
   await page.getByRole('button', { name: 'Menu' }).click();
-  await expect(page.getByRole('banner').getByRole('button', { name: 'Notes' })).toBeVisible();
+  await expect(page.locator('.menu-panel').getByRole('button', { name: 'Notes' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'All' }).first()).toBeVisible();
-  await page.getByRole('banner').getByRole('button', { name: 'Notes' }).click();
+  await page.locator('.menu-panel').getByRole('button', { name: 'Notes' }).click();
   await expect(page).toHaveURL(/\/views\/notes/);
   await expect(page.locator('.item-row').first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('.pane-tabs')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Actions' }).click();
+  await expect(page.getByRole('button', { name: 'Import from hardcover' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Actions' }).click();
+  await exerciseTagFiltering(page);
 
   await page.locator('.item-row').first().click();
   await expect(page).toHaveURL(/\/views\/notes\/[^/?]+/);
   await expect(page.locator('.markdown-body h1, .markdown-body p').first()).toBeVisible();
   await expect(page.locator('.frontmatter-view')).toContainText('type:');
 
+  await page.getByRole('button', { name: 'Actions' }).click();
+  await expect(page.getByRole('button', { name: 'Edit', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Mark item as done' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Start reading this book' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Edit', exact: true }).click();
   await expect(page.getByLabel('Raw markdown')).toContainText('---');
   await page.getByRole('button', { name: 'Cancel' }).click();
@@ -69,6 +79,7 @@ async function login(page: Page) {
 async function approvePendingClient(page: Page) {
   await page.getByRole('button', { name: 'Menu' }).click();
   await page.getByRole('button', { name: 'Settings' }).click();
+  await page.getByRole('button', { name: 'Sync clients' }).click();
   await expect(page.getByRole('heading', { name: 'Sync clients' })).toBeVisible();
   const row = page.locator('.outbox-row').filter({ hasText: clientID });
   await expect(row).toContainText('pending');
@@ -80,6 +91,7 @@ async function approvePendingClient(page: Page) {
 async function exerciseAPIKeyManagement(page: Page, request: APIRequestContext, matchingItemID: string) {
   await page.getByRole('button', { name: 'Menu' }).click();
   await page.getByRole('button', { name: 'Settings' }).click();
+  await page.getByRole('button', { name: 'API keys' }).click();
   await page.locator('label').filter({ hasText: 'App name' }).locator('input').fill(`E2E API ${Date.now()}`);
   await page.locator('label').filter({ hasText: 'CEL filter' }).locator('textarea').fill('type == "note"');
   await page.getByRole('button', { name: 'Create API key' }).click();
@@ -101,6 +113,7 @@ async function exerciseAPIKeyManagement(page: Page, request: APIRequestContext, 
   await page.reload();
   await page.getByRole('button', { name: 'Menu' }).click();
   await page.getByRole('button', { name: 'Settings' }).click();
+  await page.getByRole('button', { name: 'API keys' }).click();
   const row = page.locator('.outbox-row').filter({ hasText: 'E2E API' });
   await expect(row).toContainText('last used');
   await row.getByRole('button', { name: 'Revoke' }).click();
@@ -110,6 +123,27 @@ async function exerciseAPIKeyManagement(page: Page, request: APIRequestContext, 
     headers: { Authorization: `Bearer ${key}` },
   });
   expect(revoked.status()).toBe(401);
+}
+
+async function exerciseTagFiltering(page: Page) {
+  const tagsButton = page.getByRole('button', { name: /^Tags/ });
+  await expect(tagsButton).toBeVisible();
+  await tagsButton.click();
+  await expect(page).toHaveURL(/pane=tags/);
+  const firstTag = page.locator('.tag-row').first();
+  await expect(firstTag).toBeVisible();
+  const firstCount = Number(await firstTag.locator('strong').textContent());
+  expect(firstCount).toBeGreaterThan(0);
+  await firstTag.click();
+  await expect(page).toHaveURL(/tags=/);
+  await expect(firstTag).toHaveClass(/active/);
+  await expect.poll(async () => {
+    const rows = await page.locator('.tag-row strong').allTextContents();
+    return rows.every((value) => Number(value) <= firstCount);
+  }).toBe(true);
+  await page.getByRole('button', { name: 'View results' }).click();
+  await expect(page).toHaveURL(/tags=/);
+  await expect(page.locator('.item-row').first()).toBeVisible();
 }
 
 async function pendingBrowserOutboxCount(page: Page) {

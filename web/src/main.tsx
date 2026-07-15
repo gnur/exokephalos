@@ -3,16 +3,17 @@ import { createRoot } from 'react-dom/client';
 import { useLiveQuery } from 'dexie-react-hooks';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
-import { Check, Cloud, CloudOff, Edit3, Menu, Plus, RefreshCw, Search, Settings, Trash2, X } from 'lucide-react';
+import { Check, CloudOff, Menu, Plus, RefreshCw, Search, Settings, Tags, Trash2, X } from 'lucide-react';
 import { parse as parseYAML, stringify as stringifyYAML } from 'yaml';
-import { approveSyncClient, changePassword, createAPIKey, importURL, listAPIKeys, listSyncClients, revokeAPIKey, revokeSyncClient } from './api';
+import { approveSyncClient, changePassword, createAPIKey, importURL, listAPIKeys, listItemActions, listSyncClients, revokeAPIKey, revokeSyncClient, runAction } from './api';
 import { db } from './db';
 import { refreshFromServer, startSyncRuntime, syncOutbox } from './sync';
-import type { APIKey, Frontmatter, Item, OutboxEntry, SyncClient, View } from './types';
+import type { Action, APIKey, Frontmatter, Item, OutboxEntry, SyncClient, View } from './types';
 import './styles.css';
 
-type Screen = 'items' | 'create' | 'outbox' | 'settings';
+type Screen = 'items' | 'create' | 'settings';
 type Pane = 'tags' | 'items' | 'editor';
+type SettingsTab = 'api-keys' | 'password' | 'sync-clients' | 'sync-status';
 
 function itemTitle(item: Item) {
   return item.title || String(item.frontmatter.title ?? item.id);
@@ -66,26 +67,32 @@ function parseRaw(raw: string): { frontmatter: Frontmatter; body: string } {
   return { frontmatter, body };
 }
 
-function routeFromState(viewID: string, itemID: string | undefined, pane: Pane, query: string, subviewName: string) {
+function routeFromState(viewID: string, itemID: string | undefined, pane: Pane, query: string, subviewName: string, tags: string[]) {
   const path = viewID ? `/views/${encodeURIComponent(viewID)}${itemID ? `/${encodeURIComponent(itemID)}` : ''}` : '/';
   const params = new URLSearchParams();
   if (pane !== 'items') params.set('pane', pane);
   if (query.trim()) params.set('q', query.trim());
   if (subviewName) params.set('subview', subviewName);
+  if (tags.length) params.set('tags', tags.join(','));
   const qs = params.toString();
   return qs ? `${path}?${qs}` : path;
 }
 
-function stateFromLocation(): { viewID: string; itemID?: string; pane: Pane; query: string; subviewName: string } {
+function stateFromLocation(): { viewID: string; itemID?: string; pane: Pane; query: string; subviewName: string; tags: string[] } {
   const parts = window.location.pathname.split('/').filter(Boolean);
   const params = new URLSearchParams(window.location.search);
   const paneParam = params.get('pane');
+  const tags = (params.get('tags') ?? '')
+    .split(',')
+    .map((tag) => tag.trim())
+    .filter(Boolean);
   return {
     viewID: parts[0] === 'views' ? decodeURIComponent(parts[1] ?? '') : '',
     itemID: parts[0] === 'views' && parts[2] ? decodeURIComponent(parts[2]) : undefined,
     pane: paneParam === 'tags' || paneParam === 'editor' ? paneParam : 'items',
     query: params.get('q') ?? '',
     subviewName: params.get('subview') ?? '',
+    tags,
   };
 }
 
@@ -104,9 +111,11 @@ function App() {
   const [query, setQuery] = useState(initialRoute.query);
   const [viewID, setViewID] = useState(initialRoute.viewID);
   const [subviewName, setSubviewName] = useState(initialRoute.subviewName);
+  const [selectedTags, setSelectedTags] = useState<string[]>(initialRoute.tags);
   const [syncStatus, setSyncStatus] = useState<'online' | 'offline' | 'syncing'>(navigator.onLine ? 'online' : 'offline');
   const items = useLiveQuery(() => db.items.filter((item) => !item.deleted).toArray(), [], []);
   const views = useLiveQuery(() => db.views.toArray(), [], []);
+  const actions = useLiveQuery(() => db.actions.toArray(), [], []);
   const outbox = useLiveQuery(() => db.outbox.orderBy('created_at').reverse().toArray(), [], []);
   const selected = items.find((item) => item.id === selectedID);
 
@@ -119,6 +128,7 @@ function App() {
       setPane(next.pane);
       setQuery(next.query);
       setSubviewName(next.subviewName);
+      setSelectedTags(next.tags);
       setScreen('items');
     };
     window.addEventListener('popstate', onPop);
@@ -126,11 +136,11 @@ function App() {
   }, []);
   useEffect(() => {
     if (screen !== 'items') return;
-    const next = routeFromState(viewID || views[0]?.id || '', selectedID, pane, query, subviewName);
+    const next = routeFromState(viewID || views[0]?.id || '', selectedID, pane, query, subviewName, selectedTags);
     if (next !== window.location.pathname + window.location.search) {
       window.history.replaceState(null, '', next);
     }
-  }, [screen, viewID, selectedID, pane, query, subviewName, views]);
+  }, [screen, viewID, selectedID, pane, query, subviewName, selectedTags, views]);
 
   return (
     <div className="app-shell">
@@ -145,28 +155,6 @@ function App() {
           <p className="eyebrow">exokephalos</p>
           <h1>{labelForScreen(screen)}</h1>
         </div>
-        <button className="icon-button menu-trigger" onClick={() => setMenuOpen((open) => !open)} aria-label="Menu">
-          {menuOpen ? <X size={20} /> : <Menu size={20} />}
-        </button>
-        {menuOpen ? (
-          <AppMenu
-            views={views}
-            activeViewID={viewID}
-            activeSubviewName={subviewName}
-            syncCount={outbox.filter((entry) => entry.status !== 'synced').length}
-            onRefresh={() => void refreshFromServer()}
-            onView={(nextViewID, nextSubviewName = '') => {
-              setViewID(nextViewID);
-              setSubviewName(nextSubviewName);
-              setScreen('items');
-              setMenuOpen(false);
-            }}
-            onScreen={(next) => {
-              setScreen(next);
-              setMenuOpen(false);
-            }}
-          />
-        ) : null}
       </header>
 
       <main className="content">
@@ -174,38 +162,57 @@ function App() {
           <ItemsView
             items={items}
             views={views}
+            actions={actions}
             selected={selected}
             onSelect={(id) => {
               setSelectedID(id);
               setPane('editor');
-              window.history.pushState(null, '', routeFromState(viewID || views[0]?.id || '', id, 'editor', query, subviewName));
+              window.history.pushState(null, '', routeFromState(viewID || views[0]?.id || '', id, 'editor', query, subviewName, selectedTags));
             }}
             viewID={viewID}
             subviewName={subviewName}
+            selectedTags={selectedTags}
             query={query}
             pane={pane}
             onPane={setPane}
-            onView={(nextViewID, nextSubviewName = '') => {
-              setViewID(nextViewID);
-              setSubviewName(nextSubviewName);
-              setSelectedID(undefined);
-              setPane('items');
-              window.history.pushState(null, '', routeFromState(nextViewID, undefined, 'items', query, nextSubviewName));
-            }}
+            onTags={setSelectedTags}
           />
         )}
         {screen === 'create' && <CreateView views={views} onCreated={(id) => { setSelectedID(id); setScreen('items'); }} />}
-        {screen === 'outbox' && <OutboxView entries={outbox} />}
-        {screen === 'settings' && <SettingsView />}
+        {screen === 'settings' && <SettingsView entries={outbox} syncStatus={syncStatus} />}
       </main>
 
       <div className="bottom-search" role="search">
+        <button className="icon-button menu-trigger" onClick={() => setMenuOpen((open) => !open)} aria-label="Menu">
+          {menuOpen ? <X size={20} /> : <Menu size={20} />}
+        </button>
         <Search size={19} />
         <input value={query} onChange={(event) => { setQuery(event.target.value); setScreen('items'); setPane('items'); }} placeholder="Search" />
         <button className="new-button" onClick={() => setScreen('create')} aria-label="New item">
           <Plus size={24} />
         </button>
       </div>
+      {menuOpen ? (
+        <AppMenu
+          views={views}
+          activeViewID={viewID}
+          activeSubviewName={subviewName}
+          onRefresh={() => void refreshFromServer()}
+          onView={(nextViewID, nextSubviewName = '') => {
+            setViewID(nextViewID);
+            setSubviewName(nextSubviewName);
+            setSelectedTags([]);
+            setSelectedID(undefined);
+            setPane('items');
+            setScreen('items');
+            setMenuOpen(false);
+          }}
+          onSettings={() => {
+            setScreen('settings');
+            setMenuOpen(false);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -213,28 +220,25 @@ function App() {
 function labelForScreen(screen: Screen) {
   switch (screen) {
     case 'create': return 'Create';
-    case 'outbox': return 'Sync outbox';
     case 'settings': return 'Settings';
     default: return 'Items';
   }
 }
 
-function AppMenu({ views, activeViewID, activeSubviewName, syncCount, onRefresh, onView, onScreen }: {
+function AppMenu({ views, activeViewID, activeSubviewName, onRefresh, onView, onSettings }: {
   views: View[];
   activeViewID: string;
   activeSubviewName: string;
-  syncCount: number;
   onRefresh: () => void;
   onView: (viewID: string, subviewName?: string) => void;
-  onScreen: (screen: Screen) => void;
+  onSettings: () => void;
 }) {
   const activeView = views.find((view) => view.id === activeViewID) ?? views[0];
   return (
     <div className="menu-panel">
       <div className="menu-actions">
         <button className="button" onClick={onRefresh}><RefreshCw size={17} /> Refresh</button>
-        <button className="button" onClick={() => onScreen('outbox')}><Cloud size={17} /> Sync{syncCount ? ` (${syncCount})` : ''}</button>
-        <button className="button" onClick={() => onScreen('settings')}><Settings size={17} /> Settings</button>
+        <button className="button" onClick={onSettings}><Settings size={17} /> Settings</button>
       </div>
       <div className="menu-section">
         {views.map((view) => (
@@ -256,20 +260,62 @@ function AppMenu({ views, activeViewID, activeSubviewName, syncCount, onRefresh,
   );
 }
 
-function ItemsView({ items, views, selected, onSelect, viewID, subviewName, query, pane, onPane, onView }: {
+function hasAllTags(item: Item, tags: string[]) {
+  return tags.every((tag) => item.tags.includes(tag));
+}
+
+function ActionFoldout({ item, actions, onEdit, onAction, onImportHardcover }: {
+  item?: Item;
+  actions: Action[];
+  onEdit: () => void;
+  onAction: (action: Action, item: Item) => void;
+  onImportHardcover: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="action-fab">
+      {open ? (
+        <div className="action-menu">
+          {item ? (
+            <>
+              <button className="button" onClick={() => { setOpen(false); onEdit(); }}>Edit</button>
+              {actions.map((action) => (
+                <button key={action.name} className="button" onClick={() => { setOpen(false); onAction(action, item); }}>
+                  {action.description || action.name}
+                </button>
+              ))}
+              {actions.length === 0 ? <div className="empty-state">No matching actions.</div> : null}
+            </>
+          ) : (
+            <button className="button" onClick={() => { setOpen(false); onImportHardcover(); }}>Import from hardcover</button>
+          )}
+        </div>
+      ) : null}
+      <button className="fab" onClick={() => setOpen((value) => !value)} aria-label="Actions">
+        {open ? <X size={19} /> : <Plus size={20} />}
+      </button>
+    </div>
+  );
+}
+
+function ItemsView({ items, views, actions, selected, onSelect, viewID, subviewName, selectedTags, query, pane, onPane, onTags }: {
   items: Item[];
   views: View[];
+  actions: Action[];
   selected?: Item;
   onSelect: (id: string) => void;
   viewID: string;
   subviewName: string;
+  selectedTags: string[];
   query: string;
   pane: Pane;
   onPane: (pane: Pane) => void;
-  onView: (viewID: string, subviewName?: string) => void;
+  onTags: (tags: string[]) => void;
 }) {
   const activeView = views.find((view) => view.id === viewID) ?? views[0];
-  const visible = useMemo(() => {
+  const [editRequest, setEditRequest] = useState(0);
+  const [applicableActions, setApplicableActions] = useState<Action[]>([]);
+  const baseVisible = useMemo(() => {
     const typeHint = activeView?.id.endsWith('s') ? activeView.id.slice(0, -1) : '';
     const subviewIDs = activeView?.subviews?.find((subview) => subview.name === subviewName)?.item_ids;
     const ids = new Set(subviewIDs ?? activeView?.item_ids ?? []);
@@ -279,51 +325,105 @@ function ItemsView({ items, views, selected, onSelect, viewID, subviewName, quer
       .filter((item) => !q || `${itemTitle(item)} ${item.raw || item.body} ${item.tags.join(' ')}`.toLowerCase().includes(q))
       .sort((a, b) => String(b.frontmatter.created ?? '').localeCompare(String(a.frontmatter.created ?? '')));
   }, [items, activeView, subviewName, query]);
-  const current = selected ?? visible[0];
+  const visible = useMemo(() => {
+    if (!selectedTags.length) return baseVisible;
+    return baseVisible.filter((item) => hasAllTags(item, selectedTags));
+  }, [baseVisible, selectedTags]);
+  const current = selected && visible.some((item) => item.id === selected.id) ? selected : visible[0];
   const tags = useMemo(() => {
     const counts = new Map<string, number>();
     for (const item of visible) {
       for (const tag of item.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
     }
+    for (const tag of selectedTags) {
+      if (!counts.has(tag)) counts.set(tag, 0);
+    }
     return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  }, [visible]);
+  }, [visible, selectedTags]);
+  const showTags = Boolean(activeView?.config.show_tags);
+  const title = activeView?.config.name || activeView?.id || 'Items';
+
+  function toggleTag(tag: string) {
+    onTags(selectedTags.includes(tag) ? selectedTags.filter((value) => value !== tag) : [...selectedTags, tag]);
+  }
+
+  async function applyAction(action: Action, item: Item) {
+    const updated = await runAction(action.name, item.id);
+    await db.items.put(updated);
+    const result = await listItemActions(updated.id);
+    setApplicableActions(result.actions ?? []);
+  }
+
+  async function importFromHardcover() {
+    const url = window.prompt('Hardcover URL');
+    if (!url?.trim()) return;
+    const result = await importURL(url.trim());
+    await refreshFromServer();
+    const id = String(result.frontmatter.id ?? result.id);
+    onSelect(id);
+    onPane('editor');
+  }
 
   useEffect(() => {
     if (pane === 'editor' && !selected && visible[0]) onSelect(visible[0].id);
   }, [pane, selected, visible, onSelect]);
+  useEffect(() => {
+    if (pane === 'tags' && !showTags) onPane('items');
+  }, [pane, showTags, onPane]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!selected) {
+      setApplicableActions([]);
+      return () => {
+        cancelled = true;
+      };
+    }
+    void listItemActions(selected.id)
+      .then((result) => {
+        if (!cancelled) setApplicableActions(result.actions ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setApplicableActions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected?.id, actions]);
 
   return (
     <section className="pane-shell">
-      <div className="pane-tabs" role="tablist">
-        <button className={pane === 'tags' ? 'pane-tab active' : 'pane-tab'} onClick={() => onPane('tags')}>Tags</button>
-        <button className={pane === 'items' ? 'pane-tab active' : 'pane-tab'} onClick={() => onPane('items')}>Items</button>
-        <button className={pane === 'editor' ? 'pane-tab active' : 'pane-tab'} onClick={() => onPane('editor')}>Editor</button>
-      </div>
+      {pane !== 'editor' ? (
+        <div className="items-header">
+          <div>
+            <h2>{title}</h2>
+            <p>{visible.length} item{visible.length === 1 ? '' : 's'}{subviewName ? ` · ${subviewName}` : ''}</p>
+          </div>
+          {showTags ? (
+            <button className="button" onClick={() => onPane('tags')}><Tags size={17} /> Tags{selectedTags.length ? ` (${selectedTags.length})` : ''}</button>
+          ) : null}
+        </div>
+      ) : null}
       {pane === 'tags' ? (
         <div className="tags-pane">
-          <div className="menu-section inline">
-            {views.map((view) => (
-              <button key={view.id} className={(activeView?.id === view.id && !subviewName) ? 'menu-item active' : 'menu-item'} onClick={() => onView(view.id)}>
-                {view.config.name || view.id}
-              </button>
-            ))}
-          </div>
-          {activeView?.subviews?.length ? (
-            <div className="menu-section inline">
-              {activeView.subviews.map((subview) => (
-                <button key={subview.name} className={subviewName === subview.name ? 'menu-item active' : 'menu-item'} onClick={() => onView(activeView.id, subview.name)}>
-                  {subview.name}
-                </button>
+          {selectedTags.length ? (
+            <div className="chips">
+              {selectedTags.map((tag) => (
+                <button key={tag} className="chip active" onClick={() => toggleTag(tag)}>{tag}</button>
               ))}
             </div>
           ) : null}
           <div className="tag-list">
+            {tags.length === 0 ? <div className="empty-state">No tags in this result set.</div> : null}
             {tags.map(([tag, count]) => (
-              <button key={tag} className="tag-row" onClick={() => onPane('items')}>
+              <button key={tag} className={selectedTags.includes(tag) ? 'tag-row active' : 'tag-row'} onClick={() => toggleTag(tag)}>
                 <span>{tag}</span>
                 <strong>{count}</strong>
               </button>
             ))}
+          </div>
+          <div className="tag-actions">
+            <button className="button" disabled={!selectedTags.length} onClick={() => onTags([])}>Clear</button>
+            <button className="button primary" onClick={() => onPane('items')}>View results</button>
           </div>
         </div>
       ) : null}
@@ -332,19 +432,31 @@ function ItemsView({ items, views, selected, onSelect, viewID, subviewName, quer
           <div className="item-list">
             {visible.map((item) => (
               <button key={item.id} className={current?.id === item.id ? 'item-row active' : 'item-row'} onClick={() => onSelect(item.id)}>
-              <strong>{itemTitle(item)}</strong>
-              <span>{item.subtitle || item.type || item.path}</span>
-            </button>
+                <strong>{itemTitle(item)}</strong>
+                <span>{item.subtitle || item.type || item.path}</span>
+              </button>
             ))}
+            {visible.length === 0 ? <div className="empty-state">No matching items.</div> : null}
           </div>
         </div>
       ) : null}
-      {pane === 'editor' ? <ItemDetail item={current} /> : null}
+      {pane === 'editor' ? <ItemDetail item={current} editRequest={editRequest} /> : null}
+      <ActionFoldout
+        item={selected}
+        actions={applicableActions}
+        onEdit={() => {
+          if (!selected) return;
+          onPane('editor');
+          setEditRequest((value) => value + 1);
+        }}
+        onAction={(action, item) => void applyAction(action, item)}
+        onImportHardcover={() => void importFromHardcover()}
+      />
     </section>
   );
 }
 
-function ItemDetail({ item }: { item?: Item }) {
+function ItemDetail({ item, editRequest }: { item?: Item; editRequest: number }) {
   const [editing, setEditing] = useState(false);
   const [raw, setRaw] = useState('');
 
@@ -352,6 +464,9 @@ function ItemDetail({ item }: { item?: Item }) {
     setRaw(item ? item.raw || rawFromParts(item.frontmatter, item.body) : '');
     setEditing(false);
   }, [item?.id]);
+  useEffect(() => {
+    if (item && editRequest > 0) setEditing(true);
+  }, [editRequest, item]);
 
   if (!item) return <div className="empty-state">No items cached yet.</div>;
 
@@ -398,7 +513,6 @@ function ItemDetail({ item }: { item?: Item }) {
             <pre className="frontmatter-view">---{'\n'}{frontmatterText}{'\n'}---</pre>
             <div className="markdown-body" dangerouslySetInnerHTML={{ __html: html }} />
           </div>
-          <button className="fab" onClick={() => setEditing(true)}>Edit</button>
         </>
       )}
     </article>
@@ -454,7 +568,7 @@ function OutboxView({ entries }: { entries: OutboxEntry[] }) {
     await syncOutbox();
   }
   return (
-    <section className="single-pane">
+    <div className="sync-status-pane">
       <div className="chips">
         {['all', 'pending', 'failed', 'synced'].map((value) => <button key={value} className={status === value ? 'chip active' : 'chip'} onClick={() => setStatus(value)}>{value}</button>)}
       </div>
@@ -466,11 +580,12 @@ function OutboxView({ entries }: { entries: OutboxEntry[] }) {
           </div>
         ))}
       </div>
-    </section>
+    </div>
   );
 }
 
-function SettingsView() {
+function SettingsView({ entries, syncStatus }: { entries: OutboxEntry[]; syncStatus: 'online' | 'offline' | 'syncing' }) {
+  const [tab, setTab] = useState<SettingsTab>('api-keys');
   const [clients, setClients] = useState<SyncClient[]>([]);
   const [apiKeys, setAPIKeys] = useState<APIKey[]>([]);
   const [currentPassword, setCurrentPassword] = useState('');
@@ -534,52 +649,81 @@ function SettingsView() {
 
   return (
     <section className="single-pane settings-pane">
-      <h2>Password</h2>
-      <input type="password" placeholder="Current password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} />
-      <input type="password" placeholder="New password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />
-      <button className="button primary" onClick={() => void updatePassword()}>Change password</button>
-      {message ? <p className="notice">{message}</p> : null}
-      <h2>API keys</h2>
-      <label>App name<input value={apiKeyAppName} onChange={(event) => setAPIKeyAppName(event.target.value)} /></label>
-      <label>Expiration<input type="date" value={apiKeyExpiresAt} min={todayDate()} max={maxAPIKeyExpiry()} onChange={(event) => setAPIKeyExpiresAt(event.target.value)} /></label>
-      <label>CEL filter<textarea value={apiKeyFilter} onChange={(event) => setAPIKeyFilter(event.target.value)} /></label>
-      <div className="chips">
-        <button className="chip" onClick={() => setAPIKeyFilter('type == "secret" && "acceptance" in tags')}>Secrets acceptance</button>
-        <button className="chip" onClick={() => setAPIKeyFilter('type == "note"')}>Notes</button>
+      <div className="settings-tabs" role="tablist" aria-label="Settings">
+        <button className={tab === 'api-keys' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('api-keys')}>API keys</button>
+        <button className={tab === 'password' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('password')}>Password</button>
+        <button className={tab === 'sync-clients' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('sync-clients')}>Sync clients</button>
+        <button className={tab === 'sync-status' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('sync-status')}>Sync status</button>
       </div>
-      <button className="button primary" disabled={!apiKeyAppName.trim() || !apiKeyFilter.trim() || !apiKeyExpiresAt} onClick={() => void addAPIKey()}>Create API key</button>
-      {newAPIKey ? (
-        <div className="notice">
-          <strong>New API key</strong>
-          <code>{newAPIKey}</code>
-          <button className="button" onClick={() => void copyAPIKey()}>Copy</button>
+
+      {tab === 'api-keys' ? (
+        <div className="settings-section">
+          <h2>API keys</h2>
+          <label>App name<input value={apiKeyAppName} onChange={(event) => setAPIKeyAppName(event.target.value)} /></label>
+          <label>Expiration<input type="date" value={apiKeyExpiresAt} min={todayDate()} max={maxAPIKeyExpiry()} onChange={(event) => setAPIKeyExpiresAt(event.target.value)} /></label>
+          <label>CEL filter<textarea value={apiKeyFilter} onChange={(event) => setAPIKeyFilter(event.target.value)} /></label>
+          <div className="chips">
+            <button className="chip" onClick={() => setAPIKeyFilter('type == "secret" && "acceptance" in tags')}>Secrets acceptance</button>
+            <button className="chip" onClick={() => setAPIKeyFilter('type == "note"')}>Notes</button>
+          </div>
+          <button className="button primary" disabled={!apiKeyAppName.trim() || !apiKeyFilter.trim() || !apiKeyExpiresAt} onClick={() => void addAPIKey()}>Create API key</button>
+          {newAPIKey ? (
+            <div className="notice">
+              <strong>New API key</strong>
+              <code>{newAPIKey}</code>
+              <button className="button" onClick={() => void copyAPIKey()}>Copy</button>
+            </div>
+          ) : null}
+          <div className="outbox-list">
+            {apiKeys.length === 0 ? <div className="empty-state">No API keys.</div> : null}
+            {apiKeys.map((key) => (
+              <div className="outbox-row" key={key.id}>
+                <div>
+                  <strong>{key.app_name}</strong>
+                  <span>...{key.key_suffix} · expires {formatDate(key.expires_at)} · last used {formatDate(key.last_used_at) || 'never'}</span>
+                  <em>{key.filter}</em>
+                  {key.revoked_at ? <em>revoked {formatDate(key.revoked_at)}</em> : null}
+                </div>
+                {!key.revoked_at ? <button className="button" onClick={() => void revokeAPIKey(key.id).then(loadAPIKeys)}>Revoke</button> : null}
+              </div>
+            ))}
+          </div>
         </div>
       ) : null}
-      <div className="outbox-list">
-        {apiKeys.length === 0 ? <div className="empty-state">No API keys.</div> : null}
-        {apiKeys.map((key) => (
-          <div className="outbox-row" key={key.id}>
-            <div>
-              <strong>{key.app_name}</strong>
-              <span>...{key.key_suffix} · expires {formatDate(key.expires_at)} · last used {formatDate(key.last_used_at) || 'never'}</span>
-              <em>{key.filter}</em>
-              {key.revoked_at ? <em>revoked {formatDate(key.revoked_at)}</em> : null}
-            </div>
-            {!key.revoked_at ? <button className="button" onClick={() => void revokeAPIKey(key.id).then(loadAPIKeys)}>Revoke</button> : null}
+
+      {tab === 'password' ? (
+        <div className="settings-section">
+          <h2>Password</h2>
+          <input type="password" placeholder="Current password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} />
+          <input type="password" placeholder="New password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />
+          <button className="button primary" onClick={() => void updatePassword()}>Change password</button>
+          {message ? <p className="notice">{message}</p> : null}
+        </div>
+      ) : null}
+
+      {tab === 'sync-clients' ? (
+        <div className="settings-section">
+          <h2>Sync clients</h2>
+          <div className="outbox-list">
+            {clients.length === 0 ? <div className="empty-state">No sync clients.</div> : null}
+            {clients.map((client) => (
+              <div className="outbox-row" key={client.id}>
+                <div><strong>{client.label}</strong><span>{client.id} · {client.status}</span></div>
+                {client.status === 'pending' ? <button className="button" onClick={() => void approveSyncClient(client.id).then(loadClients)}>Approve</button> : null}
+                {client.status === 'approved' ? <button className="button" onClick={() => void revokeSyncClient(client.id).then(loadClients)}>Revoke</button> : null}
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
-      <h2>Sync clients</h2>
-      <div className="outbox-list">
-        {clients.length === 0 ? <div className="empty-state">No sync clients.</div> : null}
-        {clients.map((client) => (
-          <div className="outbox-row" key={client.id}>
-            <div><strong>{client.label}</strong><span>{client.id} · {client.status}</span></div>
-            {client.status === 'pending' ? <button className="button" onClick={() => void approveSyncClient(client.id).then(loadClients)}>Approve</button> : null}
-            {client.status === 'approved' ? <button className="button" onClick={() => void revokeSyncClient(client.id).then(loadClients)}>Revoke</button> : null}
-          </div>
-        ))}
-      </div>
+        </div>
+      ) : null}
+
+      {tab === 'sync-status' ? (
+        <div className="settings-section">
+          <h2>Sync status</h2>
+          <div className="notice">Status: {syncStatus}</div>
+          <OutboxView entries={entries} />
+        </div>
+      ) : null}
     </section>
   );
 }

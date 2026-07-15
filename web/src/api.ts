@@ -1,4 +1,4 @@
-import type { APIKey, Bootstrap, Item, OutboxEntry, SyncClient } from './types';
+import type { Action, APIKey, Bootstrap, Item, OutboxEntry, SyncClient } from './types';
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -86,6 +86,10 @@ export function runAction(actionName: string, itemID: string) {
     method: 'POST',
     body: JSON.stringify({ item_id: itemID }),
   });
+}
+
+export function listItemActions(itemID: string) {
+  return api<{ actions: Action[] }>(`/api/app/items/${encodeURIComponent(itemID)}/actions`);
 }
 
 export function importURL(url: string) {

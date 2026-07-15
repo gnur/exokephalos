@@ -17,10 +17,7 @@ test('SPA login, mobile shell, editor, approval, and browser outbox', async ({ p
   expect(horizontalOverflow).toBe(false);
 
   await approvePendingClient(page);
-  await page.getByRole('button', { name: 'Menu' }).click();
-  await expect(page.locator('.menu-panel').getByRole('button', { name: 'Notes' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'All' }).first()).toBeVisible();
-  await page.locator('.menu-panel').getByRole('button', { name: 'Notes' }).click();
+  await verifyBottomLeftViewsMenu(page);
   await expect(page).toHaveURL(/\/views\/notes/);
   await expect(page.locator('.item-row').first()).toBeVisible({ timeout: 20_000 });
   await expect(page.locator('.pane-tabs')).toHaveCount(0);
@@ -124,6 +121,24 @@ async function exerciseAPIKeyManagement(page: Page, request: APIRequestContext, 
     headers: { Authorization: `Bearer ${key}` },
   });
   expect(revoked.status()).toBe(401);
+}
+
+async function verifyBottomLeftViewsMenu(page: Page) {
+  const menuButton = page.getByRole('button', { name: 'Menu' });
+  const box = await menuButton.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  expect(box!.x).toBeLessThan(80);
+  expect(box!.y).toBeGreaterThan(viewport!.height - 90);
+
+  await menuButton.click();
+  const panel = page.locator('.menu-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Notes', exact: true })).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Docs', exact: true })).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'All', exact: true }).first()).toBeVisible();
+  await panel.getByRole('button', { name: 'Notes', exact: true }).click();
 }
 
 async function exerciseTOMLSettings(page: Page) {

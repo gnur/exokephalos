@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -106,5 +107,46 @@ func TestSignedSyncFlow(t *testing.T) {
 	}
 	if len(snapshot.Items) != 1 || snapshot.Items[0].ID != "abc1234" {
 		t.Fatalf("snapshot items = %+v", snapshot.Items)
+	}
+}
+
+func TestLoadConfigFromDBParsesConfigWithoutTempDir(t *testing.T) {
+	server, err := NewServer(filepath.Join(t.TempDir(), "server.sqlite"))
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	defer server.Close()
+
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+
+	_, err = server.db.Exec(`
+		INSERT INTO configs(path, content, revision, updated_at, deleted_at)
+		VALUES (?, ?, ?, ?, '')
+	`, "notes.toml", `
+[views.notes]
+name = "Notes"
+key = "n"
+filter = 'type == "note"'
+template = "---\ntype: note\n---\n"
+`, 1, "2026-07-15T08:38:14Z")
+	if err != nil {
+		t.Fatalf("insert config: %v", err)
+	}
+
+	cfg, err := LoadConfigFromDB(server.db)
+	if err != nil {
+		t.Fatalf("LoadConfigFromDB: %v", err)
+	}
+	if _, err := os.Stat(os.Getenv("TMPDIR")); !os.IsNotExist(err) {
+		t.Fatalf("TMPDIR exists or stat failed with unexpected error: %v", err)
+	}
+	if cfg.Views["notes"].Name != "Notes" {
+		t.Fatalf("notes view = %+v", cfg.Views["notes"])
+	}
+	if cfg.Views["notes"].TitleField != "title" {
+		t.Fatalf("title default = %q, want title", cfg.Views["notes"].TitleField)
+	}
+	if _, ok := cfg.Views["all"]; !ok {
+		t.Fatal("built-in all view missing")
 	}
 }

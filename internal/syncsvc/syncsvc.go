@@ -658,27 +658,28 @@ func LoadConfigFromServerDB(dbPath string) (*config.Config, error) {
 }
 
 func LoadConfigFromDB(db *sql.DB) (*config.Config, error) {
-	rows, err := db.Query(`SELECT content FROM configs WHERE deleted_at = '' ORDER BY path ASC`)
+	rows, err := db.Query(`SELECT path, content FROM configs WHERE deleted_at = '' ORDER BY path ASC`)
 	if err != nil {
 		return &config.Config{Views: map[string]config.ViewConfig{}, Actions: map[string]config.ActionConfig{}}, nil
 	}
 	defer rows.Close()
-	tmp, err := os.MkdirTemp("", "exo-server-config-*")
-	if err != nil {
+
+	var contents []config.NamedContent
+	for rows.Next() {
+		var path string
+		var content string
+		if err := rows.Scan(&path, &content); err != nil {
+			return nil, err
+		}
+		contents = append(contents, config.NamedContent{Name: path, Content: []byte(content)})
+	}
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(tmp)
-	i := 0
-	for rows.Next() {
-		var content string
-		_ = rows.Scan(&content)
-		_ = os.WriteFile(filepath.Join(tmp, fmt.Sprintf("%03d.toml", i)), []byte(content), 0644)
-		i++
-	}
-	if i == 0 {
+	if len(contents) == 0 {
 		return &config.Config{Views: map[string]config.ViewConfig{}, Actions: map[string]config.ActionConfig{}}, nil
 	}
-	return config.Load(tmp)
+	return config.LoadContents(contents)
 }
 
 func (s *Server) LoadConfig() (*config.Config, error) {

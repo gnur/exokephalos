@@ -140,20 +140,35 @@ func Load(dir string) (*Config, error) {
 	// Sort files to ensure deterministic merging
 	sort.Strings(files)
 
-	combined := Config{
-		Views:   make(map[string]ViewConfig),
-		Actions: make(map[string]ActionConfig),
-	}
-
+	contents := make([]NamedContent, 0, len(files))
 	for _, file := range files {
 		data, err := os.ReadFile(file)
 		if err != nil {
 			return nil, fmt.Errorf("reading config file %s: %w", file, err)
 		}
+		contents = append(contents, NamedContent{Name: file, Content: data})
+	}
 
+	return LoadContents(contents)
+}
+
+// NamedContent is a TOML config document with a display name used in errors.
+type NamedContent struct {
+	Name    string
+	Content []byte
+}
+
+// LoadContents parses and combines config TOML documents in the provided order.
+func LoadContents(contents []NamedContent) (*Config, error) {
+	combined := Config{
+		Views:   make(map[string]ViewConfig),
+		Actions: make(map[string]ActionConfig),
+	}
+
+	for _, content := range contents {
 		var cfg Config
-		if err := toml.Unmarshal(data, &cfg); err != nil {
-			return nil, fmt.Errorf("parsing config file %s: %w", file, err)
+		if err := toml.Unmarshal(content.Content, &cfg); err != nil {
+			return nil, fmt.Errorf("parsing config file %s: %w", content.Name, err)
 		}
 
 		if cfg.DefaultView != "" {

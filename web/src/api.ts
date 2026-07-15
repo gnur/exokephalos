@@ -1,4 +1,4 @@
-import type { Action, APIKey, Bootstrap, Item, OutboxEntry, SyncClient } from './types';
+import type { Action, APIKey, Bootstrap, ConfigFile, Item, OutboxEntry, SyncClient } from './types';
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -90,6 +90,17 @@ export function runAction(actionName: string, itemID: string) {
 
 export function listItemActions(itemID: string) {
   return api<{ actions: Action[] }>(`/api/app/items/${encodeURIComponent(itemID)}/actions`);
+}
+
+export function listConfigs() {
+  return api<{ configs: ConfigFile[] }>('/api/app/configs');
+}
+
+export function updateConfig(path: string, content: string) {
+  return api<{ ok: true }>(`/api/app/configs/${encodeURIComponent(path)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ content }),
+  });
 }
 
 export function importURL(url: string) {

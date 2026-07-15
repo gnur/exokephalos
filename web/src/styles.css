@@ -345,6 +345,12 @@ textarea {
   min-width: 52px;
 }
 
+.lambda-icon {
+  font-size: 1.35rem;
+  line-height: 1;
+  font-weight: 700;
+}
+
 .action-menu {
   display: grid;
   gap: 8px;

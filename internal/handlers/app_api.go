@@ -162,6 +162,67 @@ func (h *Handlers) AppSyncClients(w http.ResponseWriter, r *http.Request) {
 	writeAppJSON(w, map[string]interface{}{"clients": clients})
 }
 
+func (h *Handlers) AppConfigs(w http.ResponseWriter, r *http.Request) {
+	if h.SyncServer == nil {
+		writeAPIError(w, "sync server is not enabled", http.StatusNotFound)
+		return
+	}
+	configs, err := h.SyncServer.Configs()
+	if err != nil {
+		writeAPIError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeAppJSON(w, map[string]interface{}{"configs": configs})
+}
+
+func (h *Handlers) AppConfigUpdate(w http.ResponseWriter, r *http.Request) {
+	if h.SyncServer == nil {
+		writeAPIError(w, "sync server is not enabled", http.StatusNotFound)
+		return
+	}
+	path := strings.TrimSpace(r.PathValue("path"))
+	if path == "" || strings.Contains(path, "..") || strings.HasPrefix(path, "/") || filepath.Ext(path) != ".toml" {
+		writeAPIError(w, "invalid config path", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	configs, err := h.SyncServer.Configs()
+	if err != nil {
+		writeAPIError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	contents := make([]config.NamedContent, 0, len(configs)+1)
+	found := false
+	for _, ch := range configs {
+		content := ch.Content
+		if ch.Path == path {
+			content = req.Content
+			found = true
+		}
+		contents = append(contents, config.NamedContent{Name: ch.Path, Content: []byte(content)})
+	}
+	if !found {
+		contents = append(contents, config.NamedContent{Name: path, Content: []byte(req.Content)})
+	}
+	sort.Slice(contents, func(i, j int) bool { return contents[i].Name < contents[j].Name })
+	if _, err := config.LoadContents(contents); err != nil {
+		writeAPIError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, err := h.SyncServer.UpsertConfig(path, req.Content); err != nil {
+		writeAPIError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	h.MarkConfigChanged()
+	writeAppJSON(w, map[string]bool{"ok": true})
+}
+
 func (h *Handlers) AppSyncClientApprove(w http.ResponseWriter, r *http.Request) {
 	if h.SyncServer == nil {
 		writeAPIError(w, "sync server is not enabled", http.StatusNotFound)

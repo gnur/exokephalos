@@ -147,6 +147,8 @@ func runServer(appCfg *config.AppConfig, dir string) {
 	mux.HandleFunc("POST /api/query/ids", h.QueryIDsByCEL)
 	mux.HandleFunc("GET /api/app/bootstrap", h.AppBootstrap)
 	mux.HandleFunc("POST /api/app/changes", h.AppChanges)
+	mux.HandleFunc("GET /api/app/configs", h.AppConfigs)
+	mux.HandleFunc("PUT /api/app/configs/{path}", h.AppConfigUpdate)
 	mux.HandleFunc("GET /api/app/sync-clients", h.AppSyncClients)
 	mux.HandleFunc("POST /api/app/sync-clients/{clientId}/approve", h.AppSyncClientApprove)
 	mux.HandleFunc("POST /api/app/sync-clients/{clientId}/revoke", h.AppSyncClientRevoke)

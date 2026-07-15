@@ -42,6 +42,11 @@ export type Action = {
   filter: string;
 };
 
+export type ConfigFile = {
+  path: string;
+  content: string;
+};
+
 export type Bootstrap = {
   default_view: string;
   views: View[];

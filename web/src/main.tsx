@@ -5,15 +5,15 @@ import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { Check, CloudOff, Menu, Plus, RefreshCw, Search, Settings, Tags, Trash2, X } from 'lucide-react';
 import { parse as parseYAML, stringify as stringifyYAML } from 'yaml';
-import { approveSyncClient, changePassword, createAPIKey, importURL, listAPIKeys, listItemActions, listSyncClients, revokeAPIKey, revokeSyncClient, runAction } from './api';
+import { approveSyncClient, changePassword, createAPIKey, importURL, listAPIKeys, listConfigs, listItemActions, listSyncClients, revokeAPIKey, revokeSyncClient, runAction, updateConfig } from './api';
 import { db } from './db';
 import { refreshFromServer, startSyncRuntime, syncOutbox } from './sync';
-import type { Action, APIKey, Frontmatter, Item, OutboxEntry, SyncClient, View } from './types';
+import type { Action, APIKey, ConfigFile, Frontmatter, Item, OutboxEntry, SyncClient, View } from './types';
 import './styles.css';
 
 type Screen = 'items' | 'create' | 'settings';
 type Pane = 'tags' | 'items' | 'editor';
-type SettingsTab = 'api-keys' | 'password' | 'sync-clients' | 'sync-status';
+type SettingsTab = 'api-keys' | 'password' | 'sync-clients' | 'sync-status' | 'toml-settings';
 
 function itemTitle(item: Item) {
   return item.title || String(item.frontmatter.title ?? item.id);
@@ -236,11 +236,8 @@ function AppMenu({ views, activeViewID, activeSubviewName, onRefresh, onView, on
   const activeView = views.find((view) => view.id === activeViewID) ?? views[0];
   return (
     <div className="menu-panel">
-      <div className="menu-actions">
-        <button className="button" onClick={onRefresh}><RefreshCw size={17} /> Refresh</button>
-        <button className="button" onClick={onSettings}><Settings size={17} /> Settings</button>
-      </div>
       <div className="menu-section">
+        {views.length === 0 ? <div className="empty-state">No views synced yet.</div> : null}
         {views.map((view) => (
           <button key={view.id} className={(activeView?.id === view.id && !activeSubviewName) ? 'menu-item active' : 'menu-item'} onClick={() => onView(view.id)}>
             {view.config.name || view.id}
@@ -256,6 +253,10 @@ function AppMenu({ views, activeViewID, activeSubviewName, onRefresh, onView, on
           ))}
         </div>
       ) : null}
+      <div className="menu-actions">
+        <button className="button" onClick={onRefresh}><RefreshCw size={17} /> Refresh</button>
+        <button className="button" onClick={onSettings}><Settings size={17} /> Settings</button>
+      </div>
     </div>
   );
 }
@@ -292,7 +293,7 @@ function ActionFoldout({ item, actions, onEdit, onAction, onImportHardcover }: {
         </div>
       ) : null}
       <button className="fab" onClick={() => setOpen((value) => !value)} aria-label="Actions">
-        {open ? <X size={19} /> : <Plus size={20} />}
+        {open ? <X size={19} /> : <span className="lambda-icon">λ</span>}
       </button>
     </div>
   );
@@ -588,6 +589,9 @@ function SettingsView({ entries, syncStatus }: { entries: OutboxEntry[]; syncSta
   const [tab, setTab] = useState<SettingsTab>('api-keys');
   const [clients, setClients] = useState<SyncClient[]>([]);
   const [apiKeys, setAPIKeys] = useState<APIKey[]>([]);
+  const [configs, setConfigs] = useState<ConfigFile[]>([]);
+  const [selectedConfigPath, setSelectedConfigPath] = useState('');
+  const [configContent, setConfigContent] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [apiKeyAppName, setAPIKeyAppName] = useState('');
@@ -614,12 +618,29 @@ function SettingsView({ entries, syncStatus }: { entries: OutboxEntry[]; syncSta
     }
   }
 
+  async function loadConfigs() {
+    try {
+      const result = await listConfigs();
+      const next = Array.isArray(result.configs) ? result.configs : [];
+      setConfigs(next);
+      const path = selectedConfigPath || next[0]?.path || '';
+      setSelectedConfigPath(path);
+      setConfigContent(next.find((cfg) => cfg.path === path)?.content ?? '');
+    } catch {
+      setConfigs([]);
+      setSelectedConfigPath('');
+      setConfigContent('');
+    }
+  }
+
   useEffect(() => {
     void loadClients();
     void loadAPIKeys();
+    void loadConfigs();
     const onServerChange = (event: Event) => {
       const detail = (event as CustomEvent<{ target_kind?: string }>).detail;
       if (!detail?.target_kind || detail.target_kind === 'client') void loadClients();
+      if (!detail?.target_kind || detail.target_kind === 'config') void loadConfigs();
     };
     window.addEventListener('exo:server-change', onServerChange);
     return () => window.removeEventListener('exo:server-change', onServerChange);
@@ -647,6 +668,19 @@ function SettingsView({ entries, syncStatus }: { entries: OutboxEntry[]; syncSta
     setMessage('API key copied');
   }
 
+  async function saveConfig() {
+    if (!selectedConfigPath) return;
+    await updateConfig(selectedConfigPath, configContent);
+    setMessage('TOML settings saved');
+    await refreshFromServer();
+    await loadConfigs();
+  }
+
+  function selectConfig(path: string) {
+    setSelectedConfigPath(path);
+    setConfigContent(configs.find((cfg) => cfg.path === path)?.content ?? '');
+  }
+
   return (
     <section className="single-pane settings-pane">
       <div className="settings-tabs" role="tablist" aria-label="Settings">
@@ -654,6 +688,7 @@ function SettingsView({ entries, syncStatus }: { entries: OutboxEntry[]; syncSta
         <button className={tab === 'password' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('password')}>Password</button>
         <button className={tab === 'sync-clients' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('sync-clients')}>Sync clients</button>
         <button className={tab === 'sync-status' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('sync-status')}>Sync status</button>
+        <button className={tab === 'toml-settings' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('toml-settings')}>TOML settings</button>
       </div>
 
       {tab === 'api-keys' ? (
@@ -722,6 +757,23 @@ function SettingsView({ entries, syncStatus }: { entries: OutboxEntry[]; syncSta
           <h2>Sync status</h2>
           <div className="notice">Status: {syncStatus}</div>
           <OutboxView entries={entries} />
+        </div>
+      ) : null}
+
+      {tab === 'toml-settings' ? (
+        <div className="settings-section">
+          <h2>TOML settings</h2>
+          {configs.length === 0 ? <div className="empty-state">No synced TOML settings.</div> : null}
+          {configs.length ? (
+            <>
+              <label>Config file<select value={selectedConfigPath} onChange={(event) => selectConfig(event.target.value)}>
+                {configs.map((cfg) => <option key={cfg.path} value={cfg.path}>{cfg.path}</option>)}
+              </select></label>
+              <textarea className="raw-editor" value={configContent} onChange={(event) => setConfigContent(event.target.value)} aria-label="TOML settings" />
+              <button className="button primary" onClick={() => void saveConfig()}>Save TOML settings</button>
+              {message ? <p className="notice">{message}</p> : null}
+            </>
+          ) : null}
         </div>
       ) : null}
     </section>

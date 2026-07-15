@@ -52,6 +52,7 @@ test('SPA login, mobile shell, editor, approval, and browser outbox', async ({ p
   const onlineID = await itemIDByTitle(page, onlineTitle);
   await expect.poll(() => pendingBrowserOutboxCount(page), { timeout: 10_000 }).toBe(0);
   await exerciseAPIKeyManagement(page, request, onlineID);
+  await exerciseTOMLSettings(page);
 
   await page.context().setOffline(true);
   await expect(page.locator('.sync-warning')).toContainText('sync offline');
@@ -123,6 +124,18 @@ async function exerciseAPIKeyManagement(page: Page, request: APIRequestContext, 
     headers: { Authorization: `Bearer ${key}` },
   });
   expect(revoked.status()).toBe(401);
+}
+
+async function exerciseTOMLSettings(page: Page) {
+  await page.getByRole('button', { name: 'Menu' }).click();
+  await page.locator('.menu-panel').getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('button', { name: 'TOML settings' }).click();
+  await expect(page.getByRole('heading', { name: 'TOML settings' })).toBeVisible();
+  await page.locator('label').filter({ hasText: 'Config file' }).locator('select').selectOption('notes.toml');
+  const editor = page.getByLabel('TOML settings');
+  await expect(editor).toContainText('[views.notes]');
+  await page.getByRole('button', { name: 'Save TOML settings' }).click();
+  await expect(page.locator('.notice').filter({ hasText: 'TOML settings saved' })).toBeVisible();
 }
 
 async function exerciseTagFiltering(page: Page) {

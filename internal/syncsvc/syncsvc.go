@@ -670,6 +670,14 @@ func (s *Server) configs() ([]Change, error) {
 	return changes, rows.Err()
 }
 
+func (s *Server) Configs() ([]Change, error) {
+	return s.configs()
+}
+
+func (s *Server) UpsertConfig(path, content string) (int64, error) {
+	return s.applyChange(Change{Op: "upsert_config", TargetKind: "config", Path: path, Content: content})
+}
+
 func LoadConfigFromServerDB(dbPath string) (*config.Config, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {

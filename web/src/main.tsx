@@ -234,20 +234,31 @@ function AppMenu({ views, activeViewID, activeSubviewName, onRefresh, onView, on
   onSettings: () => void;
 }) {
   const activeView = views.find((view) => view.id === activeViewID) ?? views[0];
+  const [expandedViewID, setExpandedViewID] = useState(activeView?.id ?? '');
+  const expandedView = views.find((view) => view.id === expandedViewID) ?? activeView;
+
+  function chooseView(view: View) {
+    if (view.subviews?.length) {
+      setExpandedViewID(view.id);
+      return;
+    }
+    onView(view.id);
+  }
+
   return (
     <div className="menu-panel">
       <div className="menu-section">
         {views.length === 0 ? <div className="empty-state">No views synced yet.</div> : null}
         {views.map((view) => (
-          <button key={view.id} className={(activeView?.id === view.id && !activeSubviewName) ? 'menu-item active' : 'menu-item'} onClick={() => onView(view.id)}>
+          <button key={view.id} className={(expandedView?.id === view.id && !activeSubviewName) ? 'menu-item active' : 'menu-item'} onClick={() => chooseView(view)}>
             {view.config.name || view.id}
           </button>
         ))}
       </div>
-      {activeView?.subviews?.length ? (
+      {expandedView?.subviews?.length ? (
         <div className="menu-section subviews">
-          {activeView.subviews.map((subview) => (
-            <button key={subview.name} className={activeSubviewName === subview.name ? 'menu-item active' : 'menu-item'} onClick={() => onView(activeView.id, subview.name)}>
+          {expandedView.subviews.map((subview) => (
+            <button key={subview.name} className={expandedView.id === activeViewID && activeSubviewName === subview.name ? 'menu-item active' : 'menu-item'} onClick={() => onView(expandedView.id, subview.name)}>
               {subview.name}
             </button>
           ))}

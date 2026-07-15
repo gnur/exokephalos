@@ -139,6 +139,10 @@ async function verifyBottomLeftViewsMenu(page: Page) {
   await expect(panel.getByRole('button', { name: 'Docs', exact: true })).toBeVisible();
   await expect(panel.getByRole('button', { name: 'All', exact: true }).first()).toBeVisible();
   await panel.getByRole('button', { name: 'Notes', exact: true }).click();
+  await expect(panel).toBeVisible();
+  await expect(page).not.toHaveURL(/\/views\/notes/);
+  await panel.locator('.menu-section.subviews').getByRole('button', { name: 'All', exact: true }).click();
+  await expect(panel).toHaveCount(0);
 }
 
 async function exerciseTOMLSettings(page: Page) {

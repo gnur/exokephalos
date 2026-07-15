@@ -4,7 +4,21 @@ This document describes the HTTP API exposed by `exo serve`.
 
 In local mode, the web UI and JSON item API read/write markdown files under `EXO_DIR`. When `.exo/serve.toml` enables `[sync.server]`, `exo serve` is still the regular web UI, but notes and synced root-level workspace config are stored in SQLite. TUI clients keep local markdown files and use the signed sync API.
 
-The browser web UI is password-protected. On first boot, `exo serve` prints a generated 20-character base32 password to stdout and stores only an Argon2id hash. Browser routes and the web JSON API require the login cookie. The signed `/api/sync/*` endpoints do not use the browser cookie; they authenticate TUI/iOS clients with ed25519 request signatures.
+The browser web UI is password-protected. On first boot, `exo serve` prints a generated 20-character base32 password to stdout and stores only an Argon2id hash. Browser routes and most web JSON API routes require the login cookie. The signed `/api/sync/*` endpoints do not use the browser cookie; they authenticate TUI/iOS clients with ed25519 request signatures.
+
+`GET /api/items/{id}` also accepts API keys created in the web settings screen. API keys are formatted as `exo_<base62 random>`, are stored hashed, require an app name, expiration date, and CEL filter, and can be sent as either:
+
+```http
+Authorization: Bearer exo_...
+X-API-Key: exo_...
+```
+
+The item must match the key's CEL filter or the endpoint returns `404`. Example filters:
+
+```cel
+type == "secret" && "acceptance" in tags
+type == "note"
+```
 
 ## Web JSON API
 
@@ -17,6 +31,8 @@ Error responses use JSON:
 ### `GET /api/items/{id}`
 
 Returns one item by frontmatter `id`.
+
+Authentication: login cookie or API key. API-key requests are limited by the key's CEL filter.
 
 Response:
 
@@ -104,6 +120,34 @@ Response:
 ```json
 {"ids":["apibook"]}
 ```
+
+## API Key Management
+
+These routes require the browser login cookie.
+
+### `GET /api/app/api-keys`
+
+Lists API key metadata. Raw keys and hashes are never returned.
+
+### `POST /api/app/api-keys`
+
+Creates an API key. The raw key is returned once.
+
+Request:
+
+```json
+{
+  "app_name": "Raycast",
+  "expires_at": "2026-12-31",
+  "filter": "type == \"note\""
+}
+```
+
+`expires_at` must be in the future and no more than 1 year away.
+
+### `POST /api/app/api-keys/{id}/revoke`
+
+Revokes an API key while preserving its metadata for audit history.
 
 ## Web UI Routes
 

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -9,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gnur/exokephalos/internal/filter"
 	"golang.org/x/crypto/argon2"
 	_ "modernc.org/sqlite"
 )
@@ -30,8 +33,29 @@ const (
 	argonKeyLen  uint32 = 32
 )
 
+const (
+	apiKeyPrefix      = "exo_"
+	apiKeyRandomBytes = 24
+	base62Chars       = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+)
+
+type contextKey string
+
+const apiKeyContextKey contextKey = "api_key"
+
 type Manager struct {
 	db *sql.DB
+}
+
+type APIKey struct {
+	ID         int64  `json:"id"`
+	AppName    string `json:"app_name"`
+	KeySuffix  string `json:"key_suffix"`
+	Filter     string `json:"filter"`
+	CreatedAt  string `json:"created_at"`
+	ExpiresAt  string `json:"expires_at"`
+	LastUsedAt string `json:"last_used_at"`
+	RevokedAt  string `json:"revoked_at"`
 }
 
 func New(dbPath string) (*Manager, error) {
@@ -154,6 +178,19 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		if m.apiKeyEligible(r) {
+			if raw := APIKeyFromRequest(r); raw != "" {
+				key, ok, err := m.VerifyAPIKey(raw)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				if ok {
+					next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), apiKeyContextKey, key)))
+					return
+				}
+			}
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 			return
@@ -164,6 +201,10 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 		}
 		http.Redirect(w, r, target, http.StatusSeeOther)
 	})
+}
+
+func (m *Manager) apiKeyEligible(r *http.Request) bool {
+	return r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/items/")
 }
 
 func (m *Manager) Exempt(r *http.Request) bool {
@@ -238,6 +279,17 @@ func (m *Manager) migrate() error {
 			created_at TEXT NOT NULL,
 			expires_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS api_keys (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			app_name TEXT NOT NULL,
+			key_hash TEXT NOT NULL UNIQUE,
+			key_suffix TEXT NOT NULL,
+			filter TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			expires_at TEXT NOT NULL,
+			last_used_at TEXT NOT NULL DEFAULT '',
+			revoked_at TEXT NOT NULL DEFAULT ''
+		)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := m.db.Exec(stmt); err != nil {
@@ -245,6 +297,118 @@ func (m *Manager) migrate() error {
 		}
 	}
 	return nil
+}
+
+func (m *Manager) CreateAPIKey(appName, filterExpr string, expiresAt time.Time) (string, APIKey, error) {
+	appName = strings.TrimSpace(appName)
+	filterExpr = strings.TrimSpace(filterExpr)
+	if appName == "" {
+		return "", APIKey{}, fmt.Errorf("app name is required")
+	}
+	if filterExpr == "" {
+		return "", APIKey{}, fmt.Errorf("filter is required")
+	}
+	if _, err := filter.Compile(filterExpr); err != nil {
+		return "", APIKey{}, fmt.Errorf("invalid filter: %w", err)
+	}
+	now := time.Now().UTC()
+	expiresAt = expiresAt.UTC()
+	if !expiresAt.After(now) {
+		return "", APIKey{}, fmt.Errorf("expiration date must be in the future")
+	}
+	maxExpiresAt := time.Date(now.Year()+1, now.Month(), now.Day(), 23, 59, 59, int(time.Second-time.Nanosecond), time.UTC)
+	if expiresAt.After(maxExpiresAt) {
+		return "", APIKey{}, fmt.Errorf("expiration date must be within one year")
+	}
+	raw, err := randomAPIKey()
+	if err != nil {
+		return "", APIKey{}, err
+	}
+	suffix := keySuffix(raw)
+	res, err := m.db.Exec(`INSERT INTO api_keys(app_name, key_hash, key_suffix, filter, created_at, expires_at) VALUES(?, ?, ?, ?, ?, ?)`,
+		appName, tokenHash(raw), suffix, filterExpr, now.Format(time.RFC3339Nano), expiresAt.Format(time.RFC3339Nano))
+	if err != nil {
+		return "", APIKey{}, err
+	}
+	id, _ := res.LastInsertId()
+	key := APIKey{
+		ID:        id,
+		AppName:   appName,
+		KeySuffix: suffix,
+		Filter:    filterExpr,
+		CreatedAt: now.Format(time.RFC3339Nano),
+		ExpiresAt: expiresAt.Format(time.RFC3339Nano),
+	}
+	return raw, key, nil
+}
+
+func (m *Manager) ListAPIKeys() ([]APIKey, error) {
+	rows, err := m.db.Query(`SELECT id, app_name, key_suffix, filter, created_at, expires_at, last_used_at, revoked_at FROM api_keys ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	keys := []APIKey{}
+	for rows.Next() {
+		var key APIKey
+		if err := rows.Scan(&key.ID, &key.AppName, &key.KeySuffix, &key.Filter, &key.CreatedAt, &key.ExpiresAt, &key.LastUsedAt, &key.RevokedAt); err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	return keys, rows.Err()
+}
+
+func (m *Manager) RevokeAPIKey(id int64) error {
+	_, err := m.db.Exec(`UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at = ''`, time.Now().UTC().Format(time.RFC3339Nano), id)
+	return err
+}
+
+func (m *Manager) VerifyAPIKey(raw string) (*APIKey, bool, error) {
+	if !strings.HasPrefix(raw, apiKeyPrefix) {
+		return nil, false, nil
+	}
+	var key APIKey
+	var hash string
+	err := m.db.QueryRow(`SELECT id, app_name, key_hash, key_suffix, filter, created_at, expires_at, last_used_at, revoked_at FROM api_keys WHERE key_hash = ?`, tokenHash(raw)).
+		Scan(&key.ID, &key.AppName, &hash, &key.KeySuffix, &key.Filter, &key.CreatedAt, &key.ExpiresAt, &key.LastUsedAt, &key.RevokedAt)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if subtle.ConstantTimeCompare([]byte(hash), []byte(tokenHash(raw))) != 1 {
+		return nil, false, nil
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, key.ExpiresAt)
+	if err != nil {
+		return nil, false, err
+	}
+	if key.RevokedAt != "" || !expiresAt.After(time.Now().UTC()) {
+		return nil, false, nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := m.db.Exec(`UPDATE api_keys SET last_used_at = ? WHERE id = ?`, now, key.ID); err != nil {
+		return nil, false, err
+	}
+	key.LastUsedAt = now
+	return &key, true, nil
+}
+
+func APIKeyFromContext(ctx context.Context) (*APIKey, bool) {
+	key, ok := ctx.Value(apiKeyContextKey).(*APIKey)
+	return key, ok
+}
+
+func APIKeyFromRequest(r *http.Request) string {
+	if authz := strings.TrimSpace(r.Header.Get("Authorization")); authz != "" {
+		parts := strings.Fields(authz)
+		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+			return parts[1]
+		}
+	}
+	return strings.TrimSpace(r.Header.Get("X-API-Key"))
 }
 
 func (m *Manager) setting(key string) (string, error) {
@@ -288,6 +452,37 @@ func randomToken(length int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+func randomAPIKey() (string, error) {
+	buf := make([]byte, apiKeyRandomBytes)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return apiKeyPrefix + encodeBase62(buf), nil
+}
+
+func encodeBase62(buf []byte) string {
+	n := new(big.Int).SetBytes(buf)
+	if n.Sign() == 0 {
+		return "0"
+	}
+	base := big.NewInt(62)
+	zero := big.NewInt(0)
+	mod := new(big.Int)
+	var out []byte
+	for n.Cmp(zero) > 0 {
+		n.DivMod(n, base, mod)
+		out = append([]byte{base62Chars[mod.Int64()]}, out...)
+	}
+	return string(out)
+}
+
+func keySuffix(key string) string {
+	if len(key) <= 8 {
+		return key
+	}
+	return key[len(key)-8:]
 }
 
 func tokenHash(token string) string {

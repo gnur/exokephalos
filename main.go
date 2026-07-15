@@ -154,6 +154,9 @@ func runServerWithSync(appCfg *config.AppConfig, dir string) {
 	mux.HandleFunc("POST /api/app/sync-clients/{clientId}/revoke", h.AppSyncClientRevoke)
 	mux.HandleFunc("POST /api/app/password", h.AppPassword)
 	mux.HandleFunc("POST /api/app/actions/{actionName}", h.AppAction)
+	mux.HandleFunc("GET /api/app/api-keys", h.AppAPIKeys)
+	mux.HandleFunc("POST /api/app/api-keys", h.AppAPIKeyCreate)
+	mux.HandleFunc("POST /api/app/api-keys/{id}/revoke", h.AppAPIKeyRevoke)
 
 	mux.HandleFunc("POST /webhook/{source}", h.WebhookReceive)
 	mux.HandleFunc("GET /ping", func(w http.ResponseWriter, r *http.Request) {
@@ -201,6 +204,9 @@ func runServer(cfg *config.Config, dir string, r *repo.Repo, c *cache.Cache) {
 	mux.HandleFunc("POST /api/app/sync-clients/{clientId}/revoke", h.AppSyncClientRevoke)
 	mux.HandleFunc("POST /api/app/password", h.AppPassword)
 	mux.HandleFunc("POST /api/app/actions/{actionName}", h.AppAction)
+	mux.HandleFunc("GET /api/app/api-keys", h.AppAPIKeys)
+	mux.HandleFunc("POST /api/app/api-keys", h.AppAPIKeyCreate)
+	mux.HandleFunc("POST /api/app/api-keys/{id}/revoke", h.AppAPIKeyRevoke)
 	mux.HandleFunc("GET /api/events", h.AppEvents)
 
 	// --- Hardcoded API endpoints (not view-specific) ---

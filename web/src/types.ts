@@ -74,3 +74,14 @@ export type SyncClient = {
   created_at: string;
   approved_at: string;
 };
+
+export type APIKey = {
+  id: number;
+  app_name: string;
+  key_suffix: string;
+  filter: string;
+  created_at: string;
+  expires_at: string;
+  last_used_at: string;
+  revoked_at: string;
+};

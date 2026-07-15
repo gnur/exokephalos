@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -80,6 +81,17 @@ type appChangeResponse struct {
 type appChangeRejection struct {
 	ID    string `json:"id"`
 	Error string `json:"error"`
+}
+
+type appAPIKeyCreateRequest struct {
+	AppName   string `json:"app_name"`
+	Filter    string `json:"filter"`
+	ExpiresAt string `json:"expires_at"`
+}
+
+type appAPIKeyCreateResponse struct {
+	Key    string      `json:"key"`
+	Record interface{} `json:"record"`
 }
 
 func (h *Handlers) AppBootstrap(w http.ResponseWriter, r *http.Request) {
@@ -245,6 +257,63 @@ func (h *Handlers) AppPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, cookie)
+	writeAppJSON(w, map[string]bool{"ok": true})
+}
+
+func (h *Handlers) AppAPIKeys(w http.ResponseWriter, r *http.Request) {
+	if h.Auth == nil {
+		writeAPIError(w, "authentication is not enabled", http.StatusNotFound)
+		return
+	}
+	keys, err := h.Auth.ListAPIKeys()
+	if err != nil {
+		writeAPIError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeAppJSON(w, map[string]interface{}{"keys": keys})
+}
+
+func (h *Handlers) AppAPIKeyCreate(w http.ResponseWriter, r *http.Request) {
+	if h.Auth == nil {
+		writeAPIError(w, "authentication is not enabled", http.StatusNotFound)
+		return
+	}
+	var req appAPIKeyCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	expiresAt, err := time.Parse(time.RFC3339, req.ExpiresAt)
+	if err != nil {
+		if parsed, parseErr := time.Parse("2006-01-02", req.ExpiresAt); parseErr == nil {
+			expiresAt = parsed.Add(24*time.Hour - time.Nanosecond)
+		} else {
+			writeAPIError(w, "invalid expiration date", http.StatusBadRequest)
+			return
+		}
+	}
+	raw, record, err := h.Auth.CreateAPIKey(req.AppName, req.Filter, expiresAt)
+	if err != nil {
+		writeAPIError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeAppJSON(w, appAPIKeyCreateResponse{Key: raw, Record: record})
+}
+
+func (h *Handlers) AppAPIKeyRevoke(w http.ResponseWriter, r *http.Request) {
+	if h.Auth == nil {
+		writeAPIError(w, "authentication is not enabled", http.StatusNotFound)
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeAPIError(w, "invalid API key id", http.StatusBadRequest)
+		return
+	}
+	if err := h.Auth.RevokeAPIKey(id); err != nil {
+		writeAPIError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	writeAppJSON(w, map[string]bool{"ok": true})
 }
 

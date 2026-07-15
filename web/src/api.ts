@@ -1,4 +1,4 @@
-import type { Bootstrap, Item, OutboxEntry, SyncClient } from './types';
+import type { APIKey, Bootstrap, Item, OutboxEntry, SyncClient } from './types';
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -64,6 +64,21 @@ export function changePassword(currentPassword: string, newPassword: string) {
     method: 'POST',
     body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
   });
+}
+
+export function listAPIKeys() {
+  return api<{ keys: APIKey[] }>('/api/app/api-keys');
+}
+
+export function createAPIKey(appName: string, filter: string, expiresAt: string) {
+  return api<{ key: string; record: APIKey }>('/api/app/api-keys', {
+    method: 'POST',
+    body: JSON.stringify({ app_name: appName, filter, expires_at: expiresAt }),
+  });
+}
+
+export function revokeAPIKey(id: number) {
+  return api<{ ok: true }>(`/api/app/api-keys/${encodeURIComponent(String(id))}/revoke`, { method: 'POST' });
 }
 
 export function runAction(actionName: string, itemID: string) {

@@ -1,11 +1,11 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 const password = process.env.EXO_E2E_PASSWORD;
 const clientID = process.env.EXO_E2E_CLIENT_ID ?? 'e2e-tui-client';
 
 test.skip(!password, 'EXO_E2E_PASSWORD is required; run through task test:e2e');
 
-test('SPA login, mobile shell, editor, approval, and browser outbox', async ({ page, browserName }) => {
+test('SPA login, mobile shell, editor, approval, and browser outbox', async ({ page, browserName, request }) => {
   await login(page);
   await expect(page.locator('.app-shell')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Items' })).toBeVisible();
@@ -18,9 +18,9 @@ test('SPA login, mobile shell, editor, approval, and browser outbox', async ({ p
 
   await approvePendingClient(page);
   await page.getByRole('button', { name: 'Menu' }).click();
-  await expect(page.getByRole('button', { name: 'Notes' })).toBeVisible();
+  await expect(page.getByRole('banner').getByRole('button', { name: 'Notes' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'All' }).first()).toBeVisible();
-  await page.getByRole('button', { name: 'Notes' }).click();
+  await page.getByRole('banner').getByRole('button', { name: 'Notes' }).click();
   await expect(page).toHaveURL(/\/views\/notes/);
   await expect(page.locator('.item-row').first()).toBeVisible({ timeout: 20_000 });
 
@@ -39,7 +39,9 @@ test('SPA login, mobile shell, editor, approval, and browser outbox', async ({ p
   await page.locator('label').filter({ hasText: 'Body' }).locator('textarea').fill('Created from the SPA E2E browser.');
   await page.getByRole('button', { name: 'Create' }).click();
   await expect.poll(() => itemIDByTitle(page, onlineTitle), { timeout: 10_000 }).toMatch(exoIDPatternForToday());
+  const onlineID = await itemIDByTitle(page, onlineTitle);
   await expect.poll(() => pendingBrowserOutboxCount(page), { timeout: 10_000 }).toBe(0);
+  await exerciseAPIKeyManagement(page, request, onlineID);
 
   await page.context().setOffline(true);
   await expect(page.locator('.sync-warning')).toContainText('sync offline');
@@ -73,6 +75,41 @@ async function approvePendingClient(page: Page) {
   await row.getByRole('button', { name: 'Approve' }).click();
   await expect(row).toContainText('approved');
   await expect(row.getByRole('button', { name: 'Approve' })).toHaveCount(0);
+}
+
+async function exerciseAPIKeyManagement(page: Page, request: APIRequestContext, matchingItemID: string) {
+  await page.getByRole('button', { name: 'Menu' }).click();
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await page.locator('label').filter({ hasText: 'App name' }).locator('input').fill(`E2E API ${Date.now()}`);
+  await page.locator('label').filter({ hasText: 'CEL filter' }).locator('textarea').fill('type == "note"');
+  await page.getByRole('button', { name: 'Create API key' }).click();
+  const key = await expect.poll(async () => {
+    const text = await page.locator('.notice code').last().textContent();
+    return text?.trim() ?? '';
+  }, { timeout: 10_000 }).toMatch(/^exo_[0-9A-Za-z]+$/).then(async () => (await page.locator('.notice code').last().textContent())!.trim());
+
+  const ok = await request.get(`/api/items/${matchingItemID}`, {
+    headers: { Authorization: `Bearer ${key}` },
+  });
+  expect(ok.status()).toBe(200);
+
+  const hidden = await request.get('/api/items/e2edoc', {
+    headers: { 'X-API-Key': key },
+  });
+  expect(hidden.status()).toBe(404);
+
+  await page.reload();
+  await page.getByRole('button', { name: 'Menu' }).click();
+  await page.getByRole('button', { name: 'Settings' }).click();
+  const row = page.locator('.outbox-row').filter({ hasText: 'E2E API' });
+  await expect(row).toContainText('last used');
+  await row.getByRole('button', { name: 'Revoke' }).click();
+  await expect(row).toContainText('revoked');
+
+  const revoked = await request.get(`/api/items/${matchingItemID}`, {
+    headers: { Authorization: `Bearer ${key}` },
+  });
+  expect(revoked.status()).toBe(401);
 }
 
 async function pendingBrowserOutboxCount(page: Page) {

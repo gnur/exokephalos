@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/gnur/exokephalos/internal/auth"
 	"github.com/gnur/exokephalos/internal/filter"
 	"github.com/gnur/exokephalos/internal/urlimport"
 )
@@ -44,6 +45,22 @@ func (h *Handlers) GetItemByID(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeAPIError(w, "item not found", http.StatusNotFound)
 		return
+	}
+	if key, ok := auth.APIKeyFromContext(r.Context()); ok {
+		prog, err := filter.Compile(key.Filter)
+		if err != nil {
+			writeAPIError(w, "invalid API key filter", http.StatusInternalServerError)
+			return
+		}
+		matches, err := prog.Eval(item.Frontmatter)
+		if err != nil {
+			writeAPIError(w, "API key filter evaluation failed", http.StatusInternalServerError)
+			return
+		}
+		if !matches {
+			writeAPIError(w, "item not found", http.StatusNotFound)
+			return
+		}
 	}
 
 	targetItem := &APIItem{

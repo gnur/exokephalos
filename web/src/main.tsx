@@ -5,10 +5,10 @@ import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { Check, Cloud, CloudOff, Edit3, Menu, Plus, RefreshCw, Search, Settings, Trash2, X } from 'lucide-react';
 import { parse as parseYAML, stringify as stringifyYAML } from 'yaml';
-import { approveSyncClient, changePassword, importURL, listSyncClients, revokeSyncClient } from './api';
+import { approveSyncClient, changePassword, createAPIKey, importURL, listAPIKeys, listSyncClients, revokeAPIKey, revokeSyncClient } from './api';
 import { db } from './db';
 import { refreshFromServer, startSyncRuntime, syncOutbox } from './sync';
-import type { Frontmatter, Item, OutboxEntry, SyncClient, View } from './types';
+import type { APIKey, Frontmatter, Item, OutboxEntry, SyncClient, View } from './types';
 import './styles.css';
 
 type Screen = 'items' | 'create' | 'outbox' | 'settings';
@@ -472,8 +472,13 @@ function OutboxView({ entries }: { entries: OutboxEntry[] }) {
 
 function SettingsView() {
   const [clients, setClients] = useState<SyncClient[]>([]);
+  const [apiKeys, setAPIKeys] = useState<APIKey[]>([]);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [apiKeyAppName, setAPIKeyAppName] = useState('');
+  const [apiKeyFilter, setAPIKeyFilter] = useState('type == "note"');
+  const [apiKeyExpiresAt, setAPIKeyExpiresAt] = useState(defaultAPIKeyExpiry());
+  const [newAPIKey, setNewAPIKey] = useState('');
   const [message, setMessage] = useState('');
 
   async function loadClients() {
@@ -485,8 +490,18 @@ function SettingsView() {
     }
   }
 
+  async function loadAPIKeys() {
+    try {
+      const result = await listAPIKeys();
+      setAPIKeys(Array.isArray(result.keys) ? result.keys : []);
+    } catch {
+      setAPIKeys([]);
+    }
+  }
+
   useEffect(() => {
     void loadClients();
+    void loadAPIKeys();
     const onServerChange = (event: Event) => {
       const detail = (event as CustomEvent<{ target_kind?: string }>).detail;
       if (!detail?.target_kind || detail.target_kind === 'client') void loadClients();
@@ -502,6 +517,21 @@ function SettingsView() {
     setMessage('Password changed');
   }
 
+  async function addAPIKey() {
+    const result = await createAPIKey(apiKeyAppName, apiKeyFilter, apiKeyExpiresAt);
+    setNewAPIKey(result.key);
+    setAPIKeyAppName('');
+    setAPIKeyFilter('type == "note"');
+    setAPIKeyExpiresAt(defaultAPIKeyExpiry());
+    await loadAPIKeys();
+  }
+
+  async function copyAPIKey() {
+    if (!newAPIKey) return;
+    await navigator.clipboard.writeText(newAPIKey);
+    setMessage('API key copied');
+  }
+
   return (
     <section className="single-pane settings-pane">
       <h2>Password</h2>
@@ -509,6 +539,36 @@ function SettingsView() {
       <input type="password" placeholder="New password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />
       <button className="button primary" onClick={() => void updatePassword()}>Change password</button>
       {message ? <p className="notice">{message}</p> : null}
+      <h2>API keys</h2>
+      <label>App name<input value={apiKeyAppName} onChange={(event) => setAPIKeyAppName(event.target.value)} /></label>
+      <label>Expiration<input type="date" value={apiKeyExpiresAt} min={todayDate()} max={maxAPIKeyExpiry()} onChange={(event) => setAPIKeyExpiresAt(event.target.value)} /></label>
+      <label>CEL filter<textarea value={apiKeyFilter} onChange={(event) => setAPIKeyFilter(event.target.value)} /></label>
+      <div className="chips">
+        <button className="chip" onClick={() => setAPIKeyFilter('type == "secret" && "acceptance" in tags')}>Secrets acceptance</button>
+        <button className="chip" onClick={() => setAPIKeyFilter('type == "note"')}>Notes</button>
+      </div>
+      <button className="button primary" disabled={!apiKeyAppName.trim() || !apiKeyFilter.trim() || !apiKeyExpiresAt} onClick={() => void addAPIKey()}>Create API key</button>
+      {newAPIKey ? (
+        <div className="notice">
+          <strong>New API key</strong>
+          <code>{newAPIKey}</code>
+          <button className="button" onClick={() => void copyAPIKey()}>Copy</button>
+        </div>
+      ) : null}
+      <div className="outbox-list">
+        {apiKeys.length === 0 ? <div className="empty-state">No API keys.</div> : null}
+        {apiKeys.map((key) => (
+          <div className="outbox-row" key={key.id}>
+            <div>
+              <strong>{key.app_name}</strong>
+              <span>...{key.key_suffix} · expires {formatDate(key.expires_at)} · last used {formatDate(key.last_used_at) || 'never'}</span>
+              <em>{key.filter}</em>
+              {key.revoked_at ? <em>revoked {formatDate(key.revoked_at)}</em> : null}
+            </div>
+            {!key.revoked_at ? <button className="button" onClick={() => void revokeAPIKey(key.id).then(loadAPIKeys)}>Revoke</button> : null}
+          </div>
+        ))}
+      </div>
       <h2>Sync clients</h2>
       <div className="outbox-list">
         {clients.length === 0 ? <div className="empty-state">No sync clients.</div> : null}
@@ -522,6 +582,27 @@ function SettingsView() {
       </div>
     </section>
   );
+}
+
+function todayDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function maxAPIKeyExpiry() {
+  const date = new Date();
+  date.setFullYear(date.getFullYear() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
+function defaultAPIKeyExpiry() {
+  const date = new Date();
+  date.setMonth(date.getMonth() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
+function formatDate(value: string) {
+  if (!value) return '';
+  return value.slice(0, 10);
 }
 
 createRoot(document.getElementById('root')!).render(<App />);

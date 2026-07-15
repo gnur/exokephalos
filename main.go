@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/gnur/exokephalos/internal/auth"
 	"github.com/gnur/exokephalos/internal/cache"
@@ -99,24 +101,30 @@ func main() {
 }
 
 func runServer(appCfg *config.AppConfig, dir string) {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
 	s, err := syncsvc.NewServer(appCfg.Server.DBPath)
 	if err != nil {
-		log.Fatalf("Failed to initialize sync server: %v", err)
+		slog.Error("failed to initialize sync server", "error", err)
+		os.Exit(1)
 	}
 	defer s.Close()
 	s.SetBaseDir(dir)
 
 	cfg, err := syncsvc.LoadConfigFromServerDB(appCfg.Server.DBPath)
 	if err != nil {
-		log.Fatalf("Failed to load sync server config: %v", err)
+		slog.Error("failed to load sync server config", "error", err)
+		os.Exit(1)
 	}
 	h, err := handlers.NewSyncServer(cfg, dir, s, templatesFS)
 	if err != nil {
-		log.Fatalf("Failed to initialize handlers: %v", err)
+		slog.Error("failed to initialize handlers", "error", err)
+		os.Exit(1)
 	}
 	authMgr, err := initAuth(appCfg.Server.DBPath, filepath.Join(dir, ".exo", "auth.sqlite"))
 	if err != nil {
-		log.Fatalf("Failed to initialize authentication: %v", err)
+		slog.Error("failed to initialize authentication", "error", err)
+		os.Exit(1)
 	}
 	defer authMgr.Close()
 	h.Auth = authMgr
@@ -156,8 +164,12 @@ func runServer(appCfg *config.AppConfig, dir string) {
 	spaSub, _ := fs.Sub(spaFS, "web/dist")
 	mux.HandleFunc("GET /{path...}", serveSPA(spaSub))
 
-	fmt.Printf("exokephalos listening on %s\n", appCfg.Server.Listen)
-	log.Fatal(http.ListenAndServe(appCfg.Server.Listen, h.TimingMiddleware(authMgr.Middleware(h.CSRFMiddleware(h.ConfigReloadMiddleware(mux))))))
+	handler := requestLoggingMiddleware(h.TimingMiddleware(authMgr.Middleware(h.CSRFMiddleware(h.ConfigReloadMiddleware(mux)))))
+	slog.Info("serve listening", "listen", appCfg.Server.Listen, "db_path", appCfg.Server.DBPath, "exo_dir", dir)
+	if err := http.ListenAndServe(appCfg.Server.Listen, handler); err != nil {
+		slog.Error("serve stopped", "error", err)
+		os.Exit(1)
+	}
 }
 
 func serveSPA(spa fs.FS) http.HandlerFunc {
@@ -189,11 +201,66 @@ func initAuth(dbPath string, legacyPaths ...string) (*auth.Manager, error) {
 			return nil, err
 		}
 	}
-	if err := mgr.EnsurePassword(); err != nil {
+	password, err := mgr.EnsurePassword()
+	if err != nil {
 		_ = mgr.Close()
 		return nil, err
 	}
+	if password != "" {
+		slog.Info("initial admin password generated", "password", password)
+	}
 	return mgr, nil
+}
+
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (w *loggingResponseWriter) WriteHeader(status int) {
+	if w.status != 0 {
+		return
+	}
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *loggingResponseWriter) Write(b []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	n, err := w.ResponseWriter.Write(b)
+	w.bytes += n
+	return n, err
+}
+
+func (w *loggingResponseWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func requestLoggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		lw := &loggingResponseWriter{ResponseWriter: w}
+		next.ServeHTTP(lw, r)
+		status := lw.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		slog.Info("http request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"query", r.URL.RawQuery,
+			"status", status,
+			"bytes", lw.bytes,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"remote_addr", r.RemoteAddr,
+			"user_agent", r.UserAgent(),
+		)
+	})
 }
 
 func runLSP(c *cache.Cache) {

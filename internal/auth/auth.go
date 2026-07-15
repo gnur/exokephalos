@@ -78,27 +78,26 @@ func (m *Manager) Close() error {
 	return m.db.Close()
 }
 
-func (m *Manager) EnsurePassword() error {
+func (m *Manager) EnsurePassword() (string, error) {
 	hash, err := m.setting("password_hash")
 	if err != nil {
-		return err
+		return "", err
 	}
 	if hash != "" {
-		return nil
+		return "", nil
 	}
 	password, err := randomBase32(20)
 	if err != nil {
-		return err
+		return "", err
 	}
 	hash, err = HashPassword(password)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := m.setSetting("password_hash", hash); err != nil {
-		return err
+		return "", err
 	}
-	fmt.Printf("exokephalos initial web password: %s\n", password)
-	return nil
+	return password, nil
 }
 
 func (m *Manager) VerifyPassword(password string) (bool, error) {

@@ -204,10 +204,15 @@ func (h *harness) captureServer(r io.Reader) {
 }
 
 func (h *harness) waitPassword(timeout time.Duration) string {
-	re := regexp.MustCompile(`initial web password:\s+(\S+)`)
+	jsonRe := regexp.MustCompile(`"password":"([^"]+)"`)
+	plainRe := regexp.MustCompile(`initial web password:\s+(\S+)`)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if match := re.FindStringSubmatch(h.serverOut.String()); len(match) == 2 {
+		output := h.serverOut.String()
+		if match := jsonRe.FindStringSubmatch(output); len(match) == 2 {
+			return match[1]
+		}
+		if match := plainRe.FindStringSubmatch(output); len(match) == 2 {
 			return match[1]
 		}
 		time.Sleep(100 * time.Millisecond)

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -193,6 +194,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	if req.Label == "" {
 		req.Label = req.ClientID
 	}
+	slog.Info("incoming sync enroll", "client_id", req.ClientID, "label", req.Label, "remote_addr", r.RemoteAddr)
 	token := randomToken()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.Exec(`INSERT INTO clients(id, label, public_key, status, enrollment_token, created_at) VALUES(?, ?, ?, 'pending', ?, ?)
@@ -203,6 +205,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordRevision("client", req.ClientID, "enroll_client")
+	slog.Info("sync client enrollment pending", "client_id", req.ClientID, "label", req.Label)
 	writeJSON(w, map[string]string{"status": "pending", "enrollment_token": token})
 }
 
@@ -219,6 +222,7 @@ func (s *Server) handleEnrollStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	slog.Info("outgoing sync enrollment status", "client_id", clientID, "status", status)
 	writeJSON(w, map[string]string{"status": status})
 }
 
@@ -230,6 +234,8 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
+	clientID := r.Header.Get("X-Exo-Client-ID")
+	slog.Info("incoming sync changes", "client_id", clientID, "count", len(req.Changes), "remote_addr", r.RemoteAddr)
 	var lastRev int64
 	for _, ch := range req.Changes {
 		rev, err := s.applyChange(ch)
@@ -239,6 +245,7 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 		}
 		lastRev = rev
 	}
+	slog.Info("outgoing sync changes response", "client_id", clientID, "revision", lastRev, "count", len(req.Changes))
 	writeJSON(w, ChangeResponse{Revision: lastRev})
 }
 
@@ -257,6 +264,9 @@ func (s *Server) applyChange(ch Change) (int64, error) {
 		return 0, err
 	}
 	rev, _ := res.LastInsertId()
+	var createdNote bool
+	var createdNoteType string
+	var createdNotePath string
 	switch ch.TargetKind {
 	case "config":
 		if ch.Op == "delete_config" || ch.Op == "delete" {
@@ -270,6 +280,8 @@ func (s *Server) applyChange(ch Change) (int64, error) {
 		if ch.ID == "" {
 			return 0, fmt.Errorf("missing item id")
 		}
+		var existingID string
+		exists := tx.QueryRow(`SELECT id FROM items WHERE id = ? AND deleted_at = ''`, ch.ID).Scan(&existingID) == nil
 		if ch.Op == "delete_item" || ch.Op == "delete" {
 			_, err = tx.Exec(`UPDATE items SET deleted_at = ?, revision = ? WHERE id = ?`, now, rev, ch.ID)
 		} else {
@@ -280,6 +292,11 @@ func (s *Server) applyChange(ch Change) (int64, error) {
 			_, err = tx.Exec(`INSERT INTO items(id, path, frontmatter, body, type, tags, created, revision, updated_at, deleted_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, '')
 				ON CONFLICT(id) DO UPDATE SET path = excluded.path, frontmatter = excluded.frontmatter, body = excluded.body, type = excluded.type, tags = excluded.tags, created = excluded.created, revision = excluded.revision, updated_at = excluded.updated_at, deleted_at = ''`,
 				ch.ID, ch.Path, string(fm), ch.Body, typ, string(tags), created, rev, now)
+			if err == nil && !exists {
+				createdNote = true
+				createdNoteType = typ
+				createdNotePath = ch.Path
+			}
 		}
 	}
 	if err != nil {
@@ -287,6 +304,9 @@ func (s *Server) applyChange(ch Change) (int64, error) {
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
+	}
+	if createdNote {
+		slog.Info("note created", "id", ch.ID, "path", createdNotePath, "type", createdNoteType, "revision", rev)
 	}
 	if ch.TargetKind == "config" && s.onConfigChanged != nil {
 		s.onConfigChanged()
@@ -305,6 +325,7 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	slog.Info("outgoing sync snapshot", "client_id", r.Header.Get("X-Exo-Client-ID"), "items", len(items), "configs", len(configs))
 	writeJSON(w, map[string]interface{}{"items": items, "configs": configs})
 }
 
@@ -375,6 +396,7 @@ func (s *Server) writeEventsAfter(w io.Writer, since int64) (int64, error) {
 		}
 		b, _ := json.Marshal(map[string]interface{}{"revision": rev, "target_kind": kind, "target_id": target, "op": op, "created_at": created})
 		fmt.Fprintf(w, "event: change\ndata: %s\n\n", b)
+		slog.Info("outgoing sync event", "revision", rev, "target_kind", kind, "target_id", target, "op", op)
 		latest = rev
 	}
 	return latest, rows.Err()

@@ -52,9 +52,9 @@ func WithPrivateHosts() Option {
 	}
 }
 
-// Import fetches a URL, extracts readable HTML, converts it to markdown, and
-// creates a type: note item in the repository.
-func Import(ctx context.Context, r *repo.Repo, baseDir, rawURL string, opts ...Option) (Result, error) {
+// Build fetches a URL, extracts readable HTML, and converts it to a type: note
+// item payload. The caller decides where to persist the returned item.
+func Build(ctx context.Context, baseDir, rawURL string, opts ...Option) (Result, error) {
 	cfg := options{}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -111,11 +111,21 @@ func Import(ctx context.Context, r *repo.Repo, baseDir, rawURL string, opts ...O
 	}
 
 	path := notePath(baseDir, itemID, note.Title)
-	if err := r.CreateItem(path, fm, note.Body); err != nil {
+	return Result{ID: itemID, Path: path, Frontmatter: fm, Body: note.Body}, nil
+}
+
+// Import fetches a URL, extracts readable HTML, converts it to markdown, and
+// creates a type: note item in the repository.
+func Import(ctx context.Context, r *repo.Repo, baseDir, rawURL string, opts ...Option) (Result, error) {
+	result, err := Build(ctx, baseDir, rawURL, opts...)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := r.CreateItem(result.Path, result.Frontmatter, result.Body); err != nil {
 		return Result{}, err
 	}
 
-	return Result{ID: itemID, Path: path, Frontmatter: fm, Body: note.Body}, nil
+	return result, nil
 }
 
 type note struct {

@@ -5,7 +5,6 @@ metadata:
   namespace: exo
 data:
   serve.toml: |
-    [sync.server]
-    enabled = true
+    [server]
     db_path = ".exo/server.sqlite"
     listen = ":8293"

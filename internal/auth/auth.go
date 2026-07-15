@@ -124,6 +124,44 @@ func (m *Manager) SetPassword(password string) error {
 	return err
 }
 
+func (m *Manager) ImportLegacy(dbPath string) error {
+	if strings.TrimSpace(dbPath) == "" {
+		return nil
+	}
+	if _, err := os.Stat(dbPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	currentPassword, err := m.setting("password_hash")
+	if err != nil {
+		return err
+	}
+	if currentPassword != "" {
+		return nil
+	}
+	legacy, err := New(dbPath)
+	if err != nil {
+		return err
+	}
+	defer legacy.Close()
+	legacyPassword, err := legacy.setting("password_hash")
+	if err != nil {
+		return err
+	}
+	if legacyPassword == "" {
+		return nil
+	}
+	if err := copyAuthSettings(legacy.db, m.db); err != nil {
+		return err
+	}
+	if err := copyAuthSessions(legacy.db, m.db); err != nil {
+		return err
+	}
+	return copyAPIKeys(legacy.db, m.db)
+}
+
 func (m *Manager) LoginCookie(r *http.Request, trust bool) (*http.Cookie, error) {
 	token, err := randomToken(32)
 	if err != nil {
@@ -297,6 +335,62 @@ func (m *Manager) migrate() error {
 		}
 	}
 	return nil
+}
+
+func copyAuthSettings(src, dst *sql.DB) error {
+	rows, err := src.Query(`SELECT key, value FROM auth_settings`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return err
+		}
+		if _, err := dst.Exec(`INSERT INTO auth_settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+func copyAuthSessions(src, dst *sql.DB) error {
+	rows, err := src.Query(`SELECT token_hash, created_at, expires_at FROM auth_sessions`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tokenHash, createdAt, expiresAt string
+		if err := rows.Scan(&tokenHash, &createdAt, &expiresAt); err != nil {
+			return err
+		}
+		if _, err := dst.Exec(`INSERT OR IGNORE INTO auth_sessions(token_hash, created_at, expires_at) VALUES(?, ?, ?)`, tokenHash, createdAt, expiresAt); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+func copyAPIKeys(src, dst *sql.DB) error {
+	rows, err := src.Query(`SELECT app_name, key_hash, key_suffix, filter, created_at, expires_at, last_used_at, revoked_at FROM api_keys`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key APIKey
+		var keyHash string
+		if err := rows.Scan(&key.AppName, &keyHash, &key.KeySuffix, &key.Filter, &key.CreatedAt, &key.ExpiresAt, &key.LastUsedAt, &key.RevokedAt); err != nil {
+			return err
+		}
+		if _, err := dst.Exec(`INSERT OR IGNORE INTO api_keys(app_name, key_hash, key_suffix, filter, created_at, expires_at, last_used_at, revoked_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+			key.AppName, keyHash, key.KeySuffix, key.Filter, key.CreatedAt, key.ExpiresAt, key.LastUsedAt, key.RevokedAt); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 func (m *Manager) CreateAPIKey(appName, filterExpr string, expiresAt time.Time) (string, APIKey, error) {

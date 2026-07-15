@@ -16,7 +16,6 @@ import (
 	"github.com/gnur/exokephalos/internal/handlers"
 	"github.com/gnur/exokephalos/internal/importer"
 	"github.com/gnur/exokephalos/internal/lsp"
-	"github.com/gnur/exokephalos/internal/repo"
 	"github.com/gnur/exokephalos/internal/syncsvc"
 	"github.com/gnur/exokephalos/internal/tui"
 	"github.com/gnur/exokephalos/internal/version"
@@ -68,12 +67,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	if len(os.Args) > 1 && os.Args[1] == "serve" && appCfg.Server.Enabled {
-		runServerWithSync(appCfg, dir)
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		runServer(appCfg, dir)
 		return
 	}
 
-	// Load configuration (required for local TUI and filesystem web)
+	// Load configuration (required for local TUI and LSP).
 	cfg, err := config.Load(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading configuration from %s: %v\n", dir, err)
@@ -90,11 +89,7 @@ func main() {
 	}
 	defer c.Close()
 
-	r := repo.New(dir, c)
-
-	if len(os.Args) > 1 && os.Args[1] == "serve" {
-		runServer(cfg, dir, r, c)
-	} else if len(os.Args) > 1 && os.Args[1] == "lsp" {
+	if len(os.Args) > 1 && os.Args[1] == "lsp" {
 		runLSP(c)
 	} else {
 		if err := tui.Run(cfg, dir, c, appCfg); err != nil {
@@ -103,7 +98,7 @@ func main() {
 	}
 }
 
-func runServerWithSync(appCfg *config.AppConfig, dir string) {
+func runServer(appCfg *config.AppConfig, dir string) {
 	s, err := syncsvc.NewServer(appCfg.Server.DBPath)
 	if err != nil {
 		log.Fatalf("Failed to initialize sync server: %v", err)
@@ -115,16 +110,11 @@ func runServerWithSync(appCfg *config.AppConfig, dir string) {
 	if err != nil {
 		log.Fatalf("Failed to load sync server config: %v", err)
 	}
-	if len(cfg.Views) == 0 {
-		if diskCfg, diskErr := config.Load(dir); diskErr == nil {
-			cfg = diskCfg
-		}
-	}
 	h, err := handlers.NewSyncServer(cfg, dir, s, templatesFS)
 	if err != nil {
 		log.Fatalf("Failed to initialize handlers: %v", err)
 	}
-	authMgr, err := initAuth(appCfg.Server.DBPath)
+	authMgr, err := initAuth(appCfg.Server.DBPath, filepath.Join(dir, ".exo", "auth.sqlite"))
 	if err != nil {
 		log.Fatalf("Failed to initialize authentication: %v", err)
 	}
@@ -170,61 +160,6 @@ func runServerWithSync(appCfg *config.AppConfig, dir string) {
 	log.Fatal(http.ListenAndServe(appCfg.Server.Listen, h.TimingMiddleware(authMgr.Middleware(h.CSRFMiddleware(h.ConfigReloadMiddleware(mux))))))
 }
 
-func runServer(cfg *config.Config, dir string, r *repo.Repo, c *cache.Cache) {
-	h, err := handlers.New(cfg, dir, r, c, templatesFS)
-	if err != nil {
-		log.Fatalf("Failed to initialize handlers: %v", err)
-	}
-	authMgr, err := initAuth(filepath.Join(dir, ".exo", "auth.sqlite"))
-	if err != nil {
-		log.Fatalf("Failed to initialize authentication: %v", err)
-	}
-	defer authMgr.Close()
-	h.Auth = authMgr
-
-	mux := http.NewServeMux()
-
-	// Static files (served from embedded FS)
-	staticSub, _ := fs.Sub(staticFS, "static")
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
-
-	// --- API endpoints ---
-	mux.HandleFunc("GET /login", h.Login)
-	mux.HandleFunc("POST /login", h.Login)
-	mux.HandleFunc("GET /settings/password", h.PasswordSettings)
-	mux.HandleFunc("POST /settings/password", h.PasswordSettings)
-	mux.HandleFunc("GET /api/items/{id}", h.GetItemByID)
-	mux.HandleFunc("POST /api/items", h.CreateItem)
-	mux.HandleFunc("PATCH /api/items/{id}", h.UpdateItemByID)
-	mux.HandleFunc("POST /api/query/ids", h.QueryIDsByCEL)
-	mux.HandleFunc("GET /api/app/bootstrap", h.AppBootstrap)
-	mux.HandleFunc("POST /api/app/changes", h.AppChanges)
-	mux.HandleFunc("GET /api/app/sync-clients", h.AppSyncClients)
-	mux.HandleFunc("POST /api/app/sync-clients/{clientId}/approve", h.AppSyncClientApprove)
-	mux.HandleFunc("POST /api/app/sync-clients/{clientId}/revoke", h.AppSyncClientRevoke)
-	mux.HandleFunc("POST /api/app/password", h.AppPassword)
-	mux.HandleFunc("POST /api/app/actions/{actionName}", h.AppAction)
-	mux.HandleFunc("GET /api/app/api-keys", h.AppAPIKeys)
-	mux.HandleFunc("POST /api/app/api-keys", h.AppAPIKeyCreate)
-	mux.HandleFunc("POST /api/app/api-keys/{id}/revoke", h.AppAPIKeyRevoke)
-	mux.HandleFunc("GET /api/events", h.AppEvents)
-
-	// --- Hardcoded API endpoints (not view-specific) ---
-	mux.HandleFunc("POST /webhook/{source}", h.WebhookReceive)
-
-	// Ping
-	mux.HandleFunc("GET /ping", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("pong"))
-	})
-
-	spaSub, _ := fs.Sub(spaFS, "web/dist")
-	mux.HandleFunc("GET /{path...}", serveSPA(spaSub))
-
-	// Start HTTP server
-	fmt.Println("exokephalos listening on :8293")
-	log.Fatal(http.ListenAndServe(":8293", h.TimingMiddleware(authMgr.Middleware(h.CSRFMiddleware(h.ConfigReloadMiddleware(mux))))))
-}
-
 func serveSPA(spa fs.FS) http.HandlerFunc {
 	fileServer := http.FileServer(http.FS(spa))
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -243,10 +178,16 @@ func serveSPA(spa fs.FS) http.HandlerFunc {
 	}
 }
 
-func initAuth(dbPath string) (*auth.Manager, error) {
+func initAuth(dbPath string, legacyPaths ...string) (*auth.Manager, error) {
 	mgr, err := auth.New(dbPath)
 	if err != nil {
 		return nil, err
+	}
+	for _, path := range legacyPaths {
+		if err := mgr.ImportLegacy(path); err != nil {
+			_ = mgr.Close()
+			return nil, err
+		}
 	}
 	if err := mgr.EnsurePassword(); err != nil {
 		_ = mgr.Close()

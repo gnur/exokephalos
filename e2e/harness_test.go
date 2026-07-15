@@ -161,7 +161,6 @@ This doc verifies config-backed view sync.
 	port := freePort(h.t)
 	h.baseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
 	writeFile(h.t, filepath.Join(h.serverDir, ".exo", "serve.toml"), fmt.Sprintf(`[server]
-enabled = true
 db_path = ".exo/server.sqlite"
 listen = "127.0.0.1:%d"
 `, port))

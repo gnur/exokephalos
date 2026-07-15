@@ -1,6 +1,6 @@
 # Exokephalos
 
-A self-hosted, file-based personal knowledge management and life-tracking application. In local mode, data is stored as plain markdown files with YAML frontmatter. Views are fully configurable via root-level TOML files in `EXO_DIR` using CEL filter expressions. Optional sync mode adds a central SQLite-backed server while TUI clients keep local markdown files.
+A self-hosted personal knowledge management and life-tracking application. The TUI and LSP use plain markdown files with YAML frontmatter; `exo serve` runs a central SQLite-backed web and sync server. Views are fully configurable via root-level TOML files in `EXO_DIR` using CEL filter expressions.
 
 ## Features
 
@@ -398,7 +398,7 @@ Routes:
 | `GET /api/items/{id}` | Return an item as JSON with `frontmatter` and `body` |
 | `PATCH /api/items/{id}` | Replace an item's `frontmatter` and/or `body` |
 | `POST /api/query/ids` | Return sorted item IDs matching a CEL expression |
-| `GET /api/events` | Browser SSE stream for web UI refreshes in sync-enabled serve mode |
+| `GET /api/events` | Browser SSE stream for web UI refreshes |
 | `POST /webhook/{source}` | Receive webhook |
 
 API endpoints return JSON. Error responses use `{"error":"..."}`.
@@ -458,13 +458,11 @@ curl -s http://localhost:8293/api/query/ids \
 {"ids":["apibook"]}
 ```
 
-## Optional Sync
+## Sync Server and Web UI
 
-By default, exo is local-first: the TUI, web UI, and LSP read and write markdown files under `EXO_DIR`. Sync mode adds a central server for sharing data between TUI clients.
+`exo serve` is always SQLite-backed and always exposes the sync server. The TUI and LSP remain local-first and read/write markdown files under `EXO_DIR`; the web UI reads/writes the server database.
 
-When `.exo/serve.toml` enables sync storage, `exo serve` is still the regular web UI. It uses SQLite as its backend, exposes the same views and item editing routes, and adds a `sync clients` tab for TUI client approvals.
-
-In sync-enabled serve mode:
+In serve mode:
 
 - `exo serve` stores notes and synced root-level workspace config in SQLite.
 - The server does not read or write markdown files.
@@ -473,13 +471,12 @@ In sync-enabled serve mode:
 - New clients must be approved in the web UI before they can sync.
 - The web UI listens for server-sent revision events and refreshes when notes/config change.
 
-### Start Sync-Enabled Serve Mode
+### Start Serve Mode
 
-Create `.exo/serve.toml` in the server data directory:
+Optionally create `.exo/serve.toml` in the server data directory to override the default database path or listen address:
 
 ```toml
-[sync.server]
-enabled = true
+[server]
 db_path = ".exo/server.sqlite"
 listen = ":8293"
 ```
@@ -525,9 +522,9 @@ Open the action picker with `:` and run `start-sync`. The client generates a loc
 
 The TUI also provides a `sync-outbox` action to inspect pending, failed, and synced operations. The outbox view supports scrolling, status filtering, entry details, retrying one entry, and retrying all failed entries. If the server is offline, local edits continue writing to markdown files and are retried from the outbox when the server is reachable again.
 
-### Run Sync-Enabled Serve Mode On Kubernetes
+### Run Serve Mode On Kubernetes
 
-Plain Kubernetes manifests are available in `deploy/kubernetes/`. They run exo as a single-replica `StatefulSet` with a `ReadWriteOnce` PVC mounted at `/data`. The manifests enable sync storage with `.exo/serve.toml`, so the regular web UI stores all synced data in SQLite at `/data/.exo/server.sqlite`.
+Plain Kubernetes manifests are available in `deploy/kubernetes/`. They run exo as a single-replica `StatefulSet` with a `ReadWriteOnce` PVC mounted at `/data`. The web UI stores synced data in SQLite at `/data/.exo/server.sqlite`.
 
 Apply the manifests:
 
@@ -609,7 +606,7 @@ Helix: Run `exo helix-init` to automatically create `.helix/languages.toml` with
 - [Bubbletea](https://github.com/charmbracelet/bubbletea) + [Lipgloss](https://github.com/charmbracelet/lipgloss) + [Glamour](https://github.com/charmbracelet/glamour) for TUI
 - Tailwind CSS v4 (web interface)
 - Go `html/template` for web rendering
-- Flat-file markdown storage in local mode; SQLite-backed storage in sync-enabled serve mode
+- Flat-file markdown storage for TUI/LSP clients; SQLite-backed storage for `exo serve`
 
 ## Build And Run
 

@@ -2,7 +2,7 @@
 
 This document describes the HTTP API exposed by `exo serve`.
 
-In local mode, the web UI and JSON item API read/write markdown files under `EXO_DIR`. When `.exo/serve.toml` enables `[sync.server]`, `exo serve` is still the regular web UI, but notes and synced root-level workspace config are stored in SQLite. TUI clients keep local markdown files and use the signed sync API.
+`exo serve` is SQLite-backed and always exposes the sync server. The web UI and JSON item API read/write notes and synced root-level workspace config from the server database. TUI clients keep local markdown files and use the signed sync API.
 
 The browser web UI is password-protected. On first boot, `exo serve` prints a generated 20-character base32 password to stdout and stores only an Argon2id hash. Browser routes and most web JSON API routes require the login cookie. The signed `/api/sync/*` endpoints do not use the browser cookie; they authenticate TUI/iOS clients with ed25519 request signatures.
 
@@ -103,7 +103,7 @@ Response:
 }
 ```
 
-This endpoint is available in local filesystem mode. In sync-enabled serve mode, URL import currently returns an error because the importer writes through the local markdown repository.
+This endpoint writes the imported note directly into the server database.
 
 ### `POST /api/query/ids`
 
@@ -176,7 +176,7 @@ These routes render HTML:
 
 ### `GET /api/events`
 
-Unsigned browser-only server-sent event stream used by the web UI in sync-enabled serve mode.
+Unsigned browser-only server-sent event stream used by the web UI.
 
 The stream starts at the current latest revision, so opening a page does not replay old history. Future revisions are sent as `change` events:
 
@@ -359,12 +359,12 @@ SHA256_BODY_HEX
 
 ## Client Approval Routes
 
-These routes are rendered inside the regular web UI when sync storage is enabled:
+Sync clients are managed from the SPA settings screen. The JSON routes are:
 
 | Route | Description |
 | --- | --- |
-| `GET /admin/sync/clients` | List enrolled clients; auto-refreshes |
-| `POST /admin/sync/clients/{clientId}/approve` | Approve a pending/revoked client |
-| `POST /admin/sync/clients/{clientId}/revoke` | Revoke a client |
+| `GET /api/app/sync-clients` | List enrolled clients |
+| `POST /api/app/sync-clients/{clientId}/approve` | Approve a pending/revoked client |
+| `POST /api/app/sync-clients/{clientId}/revoke` | Revoke a client |
 
 The approve button is hidden after a client is approved. Revoked clients must enroll or be approved again before signed sync requests are accepted.

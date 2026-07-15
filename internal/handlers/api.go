@@ -87,14 +87,14 @@ func (h *Handlers) CreateItem(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, "missing url", http.StatusBadRequest)
 		return
 	}
-	if h.Repo == nil {
-		writeAPIError(w, "URL import is not available in sync-server mode", http.StatusBadRequest)
-		return
-	}
 
-	result, err := urlimport.Import(r.Context(), h.Repo, h.BaseDir, req.URL)
+	result, err := urlimport.Build(r.Context(), h.BaseDir, req.URL)
 	if err != nil {
 		writeAPIError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := h.Store.CreateItem(result.Path, result.Frontmatter, result.Body); err != nil {
+		writeAPIError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 

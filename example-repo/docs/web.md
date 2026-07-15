@@ -34,13 +34,12 @@ docker run --rm \
 
 The image runs `exo serve` by default. Prebuilt binaries for TUI, web, and LSP usage are available from the [GitHub releases page](https://github.com/gnur/exokephalos/releases).
 
-## Sync-Enabled Serve Mode
+## Serve Mode
 
-By default, `exo serve` uses local markdown files from `EXO_DIR`. To make the regular web UI use central SQLite sync storage, create `.exo/serve.toml`:
+`exo serve` is always SQLite-backed and always exposes the sync server. Optionally create `.exo/serve.toml` to override the database path or listen address:
 
 ```toml
-[sync.server]
-enabled = true
+[server]
 db_path = ".exo/server.sqlite"
 listen = ":8293"
 ```
@@ -51,7 +50,7 @@ Then start the server:
 EXO_DIR=/path/to/server-data exo serve
 ```
 
-In sync-enabled serve mode, `exo serve` is still the regular web UI. It stores notes and synced root-level workspace config in SQLite, does not scan or write markdown files, and adds a `sync clients` tab for approving TUI clients. TUI clients keep markdown files locally and sync through signed HTTP requests and SSE updates.
+In serve mode, `exo serve` stores notes and synced root-level workspace config in SQLite, does not scan or write markdown files, and adds a `sync clients` tab for approving TUI clients. TUI clients keep markdown files locally and sync through signed HTTP requests and SSE updates.
 
 New clients appear in the approval page, which auto-refreshes:
 
@@ -59,9 +58,9 @@ New clients appear in the approval page, which auto-refreshes:
 http://localhost:8293/admin/sync/clients
 ```
 
-## Running Sync-Enabled Serve Mode On Kubernetes
+## Running Serve Mode On Kubernetes
 
-Plain Kubernetes manifests are available in `deploy/kubernetes/`. They run exo as a single-replica `StatefulSet` with a `ReadWriteOnce` PVC mounted at `/data`, and they enable SQLite sync storage with `.exo/serve.toml`.
+Plain Kubernetes manifests are available in `deploy/kubernetes/`. They run exo as a single-replica `StatefulSet` with a `ReadWriteOnce` PVC mounted at `/data`.
 
 Apply the manifests:
 
@@ -102,7 +101,7 @@ The web server also exposes JSON API routes:
 | `GET /api/items/{id}` | Return an item as JSON with `frontmatter` and `body` |
 | `PATCH /api/items/{id}` | Replace an item's `frontmatter` and/or `body` |
 | `POST /api/query/ids` | Return sorted item IDs matching a CEL expression |
-| `GET /api/events` | Browser SSE stream for web UI refreshes in sync-enabled serve mode |
+| `GET /api/events` | Browser SSE stream for web UI refreshes |
 
 `POST /api/items` accepts a JSON object with a `url` field. The server fetches the page, extracts readable article HTML, converts it to markdown, and stores it as a `type: note` item.
 

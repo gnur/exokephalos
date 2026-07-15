@@ -1,6 +1,6 @@
 # Introduction to exokephalos
 
-exokephalos is a lightweight, local-first personal knowledge management system. In local mode it reads and writes flat-file markdown documents with YAML frontmatter. Optional sync mode adds a central SQLite-backed server while TUI clients keep local markdown files.
+exokephalos is a lightweight personal knowledge management system. The TUI and LSP read and write flat-file markdown documents with YAML frontmatter, while `exo serve` runs a central SQLite-backed web and sync server.
 
 It offers three distinct interfaces:
 1. **TUI**: A terminal UI built with Bubble Tea for fast, keyboard-driven navigation (`exo`).

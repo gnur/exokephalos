@@ -202,6 +202,14 @@ func (h *Handlers) QueryIDsByCEL(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, "invalid CEL expression", http.StatusBadRequest)
 		return
 	}
+	var apiKeyProg *filter.Program
+	if key, ok := auth.APIKeyFromContext(r.Context()); ok {
+		apiKeyProg, err = filter.Compile(key.Filter)
+		if err != nil {
+			writeAPIError(w, "invalid API key filter", http.StatusInternalServerError)
+			return
+		}
+	}
 
 	items, err := h.Store.All()
 	if err != nil {
@@ -218,6 +226,16 @@ func (h *Handlers) QueryIDsByCEL(w http.ResponseWriter, r *http.Request) {
 		}
 		if !ok {
 			continue
+		}
+		if apiKeyProg != nil {
+			ok, err = apiKeyProg.Eval(item.Frontmatter)
+			if err != nil {
+				writeAPIError(w, "API key filter evaluation failed", http.StatusInternalServerError)
+				return
+			}
+			if !ok {
+				continue
+			}
 		}
 		id, ok := item.Frontmatter["id"].(string)
 		if !ok || id == "" {

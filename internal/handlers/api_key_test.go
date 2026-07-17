@@ -162,6 +162,47 @@ func TestUpdateItemByIDWithAPIKeyFilters(t *testing.T) {
 	}
 }
 
+func TestQueryIDsByCELWithAPIKeyFilter(t *testing.T) {
+	authMgr, err := auth.New(filepath.Join(t.TempDir(), "auth.sqlite"))
+	if err != nil {
+		t.Fatalf("auth.New: %v", err)
+	}
+	defer authMgr.Close()
+
+	raw, _, err := authMgr.CreateAPIKey("books app", `type == "book"`, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateAPIKey: %v", err)
+	}
+	h := &Handlers{Store: testItemStore{items: map[string]scanner.Item{
+		"book1": {Frontmatter: map[string]interface{}{"id": "book1", "type": "book", "tags": []interface{}{"to-read"}}},
+		"book2": {Frontmatter: map[string]interface{}{"id": "book2", "type": "book", "tags": []interface{}{"read"}}},
+		"note1": {Frontmatter: map[string]interface{}{"id": "note1", "type": "note", "tags": []interface{}{"to-read"}}},
+	}}}
+	server := apiKeyTestServer(authMgr, h)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/query/ids", strings.NewReader(`"to-read" in tags`))
+	req.Header.Set("Authorization", "Bearer "+raw)
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s, want 200", rr.Code, rr.Body.String())
+	}
+	var result QueryIDsResponse
+	if err := json.NewDecoder(rr.Body).Decode(&result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(result.IDs) != 1 || result.IDs[0] != "book1" {
+		t.Fatalf("ids = %v, want [book1]", result.IDs)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/query/ids", strings.NewReader(`true`))
+	rr = httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("missing key status = %d body=%s, want 401", rr.Code, rr.Body.String())
+	}
+}
+
 func TestAPIKeyDoesNotAuthenticateOtherRoutes(t *testing.T) {
 	authMgr, err := auth.New(filepath.Join(t.TempDir(), "auth.sqlite"))
 	if err != nil {
@@ -192,5 +233,6 @@ func apiKeyTestServer(authMgr *auth.Manager, h *Handlers) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/items/{id}", h.GetItemByID)
 	mux.HandleFunc("PATCH /api/items/{id}", h.UpdateItemByID)
+	mux.HandleFunc("POST /api/query/ids", h.QueryIDsByCEL)
 	return authMgr.Middleware(mux)
 }

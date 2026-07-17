@@ -116,7 +116,7 @@ API keys may read and update items that match their CEL filter; an update must a
 {"frontmatter":{"id":"apibook","type":"book","title":"API Book"}}
 ```
 
-`POST /api/query/ids` accepts a plain CEL expression in the request body. The expression uses the same CEL environment as views: `type`, `tags`, and `fm`.
+`POST /api/query/ids` accepts a plain CEL expression in the request body. The expression uses the same CEL environment as views: `type`, `tags`, and `fm`. API-key requests return only IDs that match both this expression and the key's CEL filter.
 
 ```cel
 type == "book" && "reading" in tags

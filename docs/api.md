@@ -109,6 +109,8 @@ This endpoint writes the imported note directly into the server database.
 
 Returns item IDs matching a CEL expression.
 
+API keys may call this endpoint. Their responses are restricted to IDs that match both the request expression and the key's CEL filter.
+
 Request body is plain text using the same CEL environment as view filters: `type`, `tags`, and `fm`.
 
 ```cel

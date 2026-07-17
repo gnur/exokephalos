@@ -447,7 +447,7 @@ The response is the updated item:
 }
 ```
 
-`POST /api/query/ids` accepts a plain CEL expression in the request body using the same environment as views: `type`, `tags`, and `fm`.
+`POST /api/query/ids` accepts a plain CEL expression in the request body using the same environment as views: `type`, `tags`, and `fm`. API-key requests return only IDs that match both this expression and the key's CEL filter.
 
 ```bash
 curl -s http://localhost:8293/api/query/ids \

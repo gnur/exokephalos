@@ -218,6 +218,16 @@ tasks:
       - mkdir -p ~/.local/bin
       - mv exo ~/.local/bin/exo
 
+  deploy-staging:
+    desc: Push the container image and install a native binary to ~/prive/exo-staging/bin/
+    deps: [css, vendor-js]
+    cmds:
+      - task: container:push
+      - go build -ldflags="{{.LDFLAGS}}" -o exo .
+      - mkdir -p ~/prive/exo-staging/bin
+      - cp exo ~/prive/exo-staging/bin/exo
+      - rm exo
+
   deploy-fedora:
     desc: Build linux/amd64 binary and deploy to fedora
     deps: [css, vendor-js]

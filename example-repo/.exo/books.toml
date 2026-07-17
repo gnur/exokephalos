@@ -16,6 +16,7 @@ title: "{{.Title}}"
 pages: {{.Pages}}
 cover: "{{.Cover}}"
 url: "{{.URL}}"
+{{if .ISBN}}isbn: "{{.ISBN}}"{{end}}
 added: {{.Date}}
 started:
 finished:

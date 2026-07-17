@@ -148,6 +148,21 @@ type hardcoverSearchMsg struct {
 	err     error
 }
 
+const hardcoverBookTemplate = `---
+type: book
+tags: [to-read]
+author: {{.Author}}
+title: "{{.Title}}"
+pages: {{.Pages}}
+cover: "{{.Cover}}"
+url: "{{.URL}}"
+{{if .ISBN}}isbn: "{{.ISBN}}"{{end}}
+added: {{.Date}}
+started:
+finished:
+---
+`
+
 type actionEntryKind int
 
 const (
@@ -1678,7 +1693,7 @@ func (m Model) importBook(url string) (tea.Model, tea.Cmd) {
 	// Find the books view to get its template and path
 	for _, vs := range m.views {
 		if isBookView(&vs) {
-			content, path, err := renderCreateTemplate(vs.cfg.Template, vs.id, m.baseDir, vars)
+			content, path, err := renderCreateTemplate(hardcoverBookTemplate, vs.id, m.baseDir, vars)
 			if err != nil {
 				m.status = fmt.Sprintf("Template error: %v", err)
 				return m, nil
@@ -1719,6 +1734,7 @@ func (m Model) createHardcoverBook(book hardcover.Book) (tea.Model, tea.Cmd) {
 	vars["URL"] = book.URL
 	vars["Pages"] = fmt.Sprintf("%d", book.Pages)
 	vars["Cover"] = book.Cover
+	vars["ISBN"] = book.ISBN
 
 	for _, vs := range m.views {
 		if isBookView(&vs) {

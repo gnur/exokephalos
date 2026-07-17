@@ -59,6 +59,35 @@ func TestHardcoverBookTitle(t *testing.T) {
 	}
 }
 
+func TestHardcoverBookTemplateIncludesImportedMetadata(t *testing.T) {
+	vars := newAutoFillVars()
+	vars["Title"] = "Book Title"
+	vars["Author"] = "[Author Name]"
+	vars["URL"] = "https://hardcover.app/books/book-title"
+	vars["Pages"] = "123"
+	vars["Cover"] = "https://example.com/cover.jpg"
+	vars["ISBN"] = "9781234567890"
+
+	content, _, err := renderCreateTemplate(hardcoverBookTemplate, "books", t.TempDir(), vars)
+	if err != nil {
+		t.Fatalf("renderCreateTemplate: %v", err)
+	}
+	for _, want := range []string{
+		"type: book",
+		"tags:\n  - to-read",
+		"author:\n  - Author Name",
+		"title: Book Title",
+		"pages: 123",
+		"cover: https://example.com/cover.jpg",
+		"url: https://hardcover.app/books/book-title",
+		`isbn: "9781234567890"`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("rendered content missing %q:\n%s", want, content)
+		}
+	}
+}
+
 func TestAppendImportedDescriptionPreservesExistingBody(t *testing.T) {
 	content := "---\ntype: book\n---\nExisting notes\n"
 	got := appendImportedDescription(content, "A short description.")

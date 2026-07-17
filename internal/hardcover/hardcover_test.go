@@ -16,6 +16,7 @@ func TestExtractBooksFromSearchResultsList(t *testing.T) {
 						"external_ids": map[string]interface{}{
 							"goodreads": "36284236-genesis",
 						},
+						"isbn_13":      "978-1-234567-89-7",
 						"release_year": float64(2017),
 					},
 				},
@@ -46,8 +47,35 @@ func TestExtractBooksFromSearchResultsList(t *testing.T) {
 	if book.URL != "https://www.goodreads.com/book/show/36284236-genesis" {
 		t.Fatalf("url = %q", book.URL)
 	}
+	if book.ISBN != "978-1-234567-89-7" {
+		t.Fatalf("ISBN = %q", book.ISBN)
+	}
 	if book.Year != "2017" {
 		t.Fatalf("year = %q", book.Year)
+	}
+}
+
+func TestExtractBooksPrefersISBN13(t *testing.T) {
+	data := map[string]interface{}{
+		"data": map[string]interface{}{
+			"search": map[string]interface{}{
+				"results": []interface{}{
+					map[string]interface{}{
+						"title":   "Example Book",
+						"isbn_13": "9781234567890",
+						"isbn_10": "1234567890",
+					},
+				},
+			},
+		},
+	}
+
+	books := extractBooks(data, 5)
+	if len(books) != 1 {
+		t.Fatalf("expected 1 book, got %d", len(books))
+	}
+	if books[0].ISBN != "9781234567890" {
+		t.Fatalf("ISBN = %q", books[0].ISBN)
 	}
 }
 

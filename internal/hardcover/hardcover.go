@@ -24,6 +24,7 @@ type Book struct {
 	Pages       int
 	Cover       string
 	URL         string
+	ISBN        string
 	Year        string
 	Series      string
 }
@@ -157,6 +158,7 @@ func normalizeBook(result map[string]interface{}) Book {
 		Pages:       intValue(result, "pages", "page_count", "pageCount"),
 		Cover:       urlValue(result, "image", "image_url", "cover", "cover_url"),
 		URL:         bookURL(result),
+		ISBN:        stringValue(result, "isbn_13", "isbn13", "isbn", "isbn_10", "isbn10"),
 		Year:        stringValue(result, "release_year"),
 		Series:      seriesValue(result),
 	}

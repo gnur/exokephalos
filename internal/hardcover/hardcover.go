@@ -18,13 +18,14 @@ const (
 
 // Book is the normalized metadata used by exokephalos.
 type Book struct {
-	Title   string
-	Authors []string
-	Pages   int
-	Cover   string
-	URL     string
-	Year    string
-	Series  string
+	Title       string
+	Authors     []string
+	Description string
+	Pages       int
+	Cover       string
+	URL         string
+	Year        string
+	Series      string
 }
 
 type Client struct {
@@ -150,13 +151,14 @@ func extractResultMaps(results interface{}, limit int) []map[string]interface{} 
 
 func normalizeBook(result map[string]interface{}) Book {
 	book := Book{
-		Title:   stringValue(result, "title"),
-		Authors: stringSliceValue(result, "author_names"),
-		Pages:   intValue(result, "pages", "page_count", "pageCount"),
-		Cover:   urlValue(result, "image", "image_url", "cover", "cover_url"),
-		URL:     bookURL(result),
-		Year:    stringValue(result, "release_year"),
-		Series:  seriesValue(result),
+		Title:       stringValue(result, "title"),
+		Authors:     stringSliceValue(result, "author_names"),
+		Description: stringValue(result, "description"),
+		Pages:       intValue(result, "pages", "page_count", "pageCount"),
+		Cover:       urlValue(result, "image", "image_url", "cover", "cover_url"),
+		URL:         bookURL(result),
+		Year:        stringValue(result, "release_year"),
+		Series:      seriesValue(result),
 	}
 	if len(book.Authors) == 0 {
 		book.Authors = stringSliceValue(result, "authors")

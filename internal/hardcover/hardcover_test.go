@@ -10,6 +10,7 @@ func TestExtractBooksFromSearchResultsList(t *testing.T) {
 					map[string]interface{}{
 						"title":        "Genesis (First Colony, #1)",
 						"author_names": []interface{}{"Ken Lozito"},
+						"description":  "Humanity's first colony faces an unexpected threat.",
 						"pages":        float64(328),
 						"image":        "https://example.com/cover.jpg",
 						"external_ids": map[string]interface{}{
@@ -35,6 +36,9 @@ func TestExtractBooksFromSearchResultsList(t *testing.T) {
 	}
 	if book.Pages != 328 {
 		t.Fatalf("pages = %d", book.Pages)
+	}
+	if book.Description != "Humanity's first colony faces an unexpected threat." {
+		t.Fatalf("description = %q", book.Description)
 	}
 	if book.Cover != "https://example.com/cover.jpg" {
 		t.Fatalf("cover = %q", book.Cover)

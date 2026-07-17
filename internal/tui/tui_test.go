@@ -17,6 +17,24 @@ import (
 	"github.com/gnur/exokephalos/internal/scanner"
 )
 
+func TestAppendImportedDescription(t *testing.T) {
+	content := "---\ntype: book\n---\n"
+	got := appendImportedDescription(content, "A short description.")
+	want := "---\ntype: book\n---\n\nA short description.\n"
+	if got != want {
+		t.Fatalf("content = %q, want %q", got, want)
+	}
+}
+
+func TestAppendImportedDescriptionPreservesExistingBody(t *testing.T) {
+	content := "---\ntype: book\n---\nExisting notes\n"
+	got := appendImportedDescription(content, "A short description.")
+	want := "---\ntype: book\n---\nExisting notes\n\nA short description.\n"
+	if got != want {
+		t.Fatalf("content = %q, want %q", got, want)
+	}
+}
+
 func setupTestRepo(t *testing.T) string {
 	tmpDir := t.TempDir()
 

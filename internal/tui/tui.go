@@ -1727,6 +1727,7 @@ func (m Model) createHardcoverBook(book hardcover.Book) (tea.Model, tea.Cmd) {
 				m.status = fmt.Sprintf("Template error: %v", err)
 				return m, nil
 			}
+			content = appendImportedDescription(content, book.Description)
 			if err := writeNewFile(path, content); err != nil {
 				m.status = fmt.Sprintf("Write error: %v", err)
 				return m, nil
@@ -1738,6 +1739,21 @@ func (m Model) createHardcoverBook(book hardcover.Book) (tea.Model, tea.Cmd) {
 
 	m.status = "No books view configured"
 	return m, nil
+}
+
+// appendImportedDescription adds an imported book description to the body
+// without requiring it to be present in the user's books template.
+func appendImportedDescription(content, description string) string {
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return content
+	}
+
+	content = strings.TrimRight(content, "\n")
+	if content == "" {
+		return description + "\n"
+	}
+	return content + "\n\n" + description + "\n"
 }
 
 func isBookView(vs *viewState) bool {

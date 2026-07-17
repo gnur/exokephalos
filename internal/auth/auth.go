@@ -247,6 +247,7 @@ func (m *Manager) apiKeyEligible(r *http.Request) bool {
 func (m *Manager) Exempt(r *http.Request) bool {
 	return r.URL.Path == "/login" ||
 		r.URL.Path == "/ping" ||
+		r.URL.Path == "/healthz" ||
 		strings.HasPrefix(r.URL.Path, "/static/") ||
 		strings.HasPrefix(r.URL.Path, "/assets/") ||
 		strings.HasPrefix(r.URL.Path, "/icons/") ||

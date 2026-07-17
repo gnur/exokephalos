@@ -163,6 +163,7 @@ func runServer(appCfg *config.AppConfig, dir string) {
 	mux.HandleFunc("GET /ping", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("pong"))
 	})
+	mux.HandleFunc("GET /healthz", healthCheck)
 
 	spaSub, _ := fs.Sub(spaFS, "web/dist")
 	mux.HandleFunc("GET /{path...}", serveSPA(spaSub))
@@ -173,6 +174,11 @@ func runServer(appCfg *config.AppConfig, dir string) {
 		slog.Error("serve stopped", "error", err)
 		os.Exit(1)
 	}
+}
+
+func healthCheck(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte("ok\n"))
 }
 
 func serveSPA(spa fs.FS) http.HandlerFunc {

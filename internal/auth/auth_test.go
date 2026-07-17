@@ -1,12 +1,27 @@
 package auth
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestHealthcheckIsExempt(t *testing.T) {
+	m := &Manager{}
+	called := false
+	handler := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if !called {
+		t.Fatal("anonymous healthcheck request did not reach the handler")
+	}
+}
 
 func TestPasswordAndSessionFlow(t *testing.T) {
 	m, err := New(filepath.Join(t.TempDir(), "auth.sqlite"))

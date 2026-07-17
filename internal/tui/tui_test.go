@@ -12,6 +12,7 @@ import (
 	"github.com/gnur/exokephalos/internal/cache"
 	"github.com/gnur/exokephalos/internal/config"
 	"github.com/gnur/exokephalos/internal/filter"
+	"github.com/gnur/exokephalos/internal/hardcover"
 	"github.com/gnur/exokephalos/internal/importer"
 	"github.com/gnur/exokephalos/internal/markdown"
 	"github.com/gnur/exokephalos/internal/scanner"
@@ -23,6 +24,38 @@ func TestAppendImportedDescription(t *testing.T) {
 	want := "---\ntype: book\n---\n\nA short description.\n"
 	if got != want {
 		t.Fatalf("content = %q, want %q", got, want)
+	}
+}
+
+func TestHardcoverBookTitle(t *testing.T) {
+	tests := []struct {
+		name string
+		book hardcover.Book
+		want string
+	}{
+		{
+			name: "numbered series",
+			book: hardcover.Book{Title: "Book Title", Series: "Series Name, #1"},
+			want: "Book Title (Series Name, #1)",
+		},
+		{
+			name: "series without position",
+			book: hardcover.Book{Title: "Book Title", Series: "Series Name"},
+			want: "Book Title (Series Name)",
+		},
+		{
+			name: "no series",
+			book: hardcover.Book{Title: "Book Title"},
+			want: "Book Title",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hardcoverBookTitle(tt.book); got != tt.want {
+				t.Fatalf("hardcoverBookTitle() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

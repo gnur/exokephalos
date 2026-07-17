@@ -200,7 +200,7 @@ func seriesValue(result map[string]interface{}) string {
 			name := stringValue(series, "name")
 			position := scalarString(featured["position"])
 			if name != "" && position != "" {
-				return name + " #" + position
+				return name + ", #" + position
 			}
 			return name
 		}

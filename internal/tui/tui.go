@@ -1714,7 +1714,7 @@ func importURLCmd(baseDir string, c *cache.Cache, rawURL string) tea.Cmd {
 
 func (m Model) createHardcoverBook(book hardcover.Book) (tea.Model, tea.Cmd) {
 	vars := newAutoFillVars()
-	vars["Title"] = book.Title
+	vars["Title"] = hardcoverBookTitle(book)
 	vars["Author"] = formatYAMLStringList(book.Authors)
 	vars["URL"] = book.URL
 	vars["Pages"] = fmt.Sprintf("%d", book.Pages)
@@ -1732,13 +1732,20 @@ func (m Model) createHardcoverBook(book hardcover.Book) (tea.Model, tea.Cmd) {
 				m.status = fmt.Sprintf("Write error: %v", err)
 				return m, nil
 			}
-			m.status = fmt.Sprintf("Added book: %s", book.Title)
+			m.status = fmt.Sprintf("Added book: %s", vars["Title"])
 			return m, tea.Batch(m.loadData(), m.reconcileIfStartedCmd())
 		}
 	}
 
 	m.status = "No books view configured"
 	return m, nil
+}
+
+func hardcoverBookTitle(book hardcover.Book) string {
+	if strings.TrimSpace(book.Series) == "" {
+		return book.Title
+	}
+	return fmt.Sprintf("%s (%s)", book.Title, book.Series)
 }
 
 // appendImportedDescription adds an imported book description to the body

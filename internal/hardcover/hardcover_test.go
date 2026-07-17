@@ -83,3 +83,31 @@ func TestExtractBooksFromSearchHits(t *testing.T) {
 		t.Fatalf("url = %q", book.URL)
 	}
 }
+
+func TestExtractBooksIncludesFeaturedSeries(t *testing.T) {
+	data := map[string]interface{}{
+		"data": map[string]interface{}{
+			"search": map[string]interface{}{
+				"results": []interface{}{
+					map[string]interface{}{
+						"title": "The Fifth Season",
+						"featured_series": map[string]interface{}{
+							"position": float64(1),
+							"series": map[string]interface{}{
+								"name": "The Broken Earth",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	books := extractBooks(data, 5)
+	if len(books) != 1 {
+		t.Fatalf("expected 1 book, got %d", len(books))
+	}
+	if books[0].Series != "The Broken Earth, #1" {
+		t.Fatalf("series = %q", books[0].Series)
+	}
+}

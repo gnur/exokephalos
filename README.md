@@ -426,6 +426,7 @@ curl -s -X POST http://localhost:8293/api/items \
 ```
 
 `PATCH /api/items/{id}` accepts `frontmatter`, `body`, or both. Provided fields replace the complete stored value; omitted fields are preserved.
+API keys may read and update items that match their CEL filter; an update must also leave the item matching that filter.
 
 ```bash
 curl -s -X PATCH http://localhost:8293/api/items/apibook \

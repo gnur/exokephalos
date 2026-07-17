@@ -110,6 +110,7 @@ The web server also exposes JSON API routes:
 ```
 
 `PATCH /api/items/{id}` accepts `frontmatter`, `body`, or both. Provided fields replace the complete stored value; omitted fields are preserved.
+API keys may read and update items that match their CEL filter; an update must also leave the item matching that filter.
 
 ```json
 {"frontmatter":{"id":"apibook","type":"book","title":"API Book"}}

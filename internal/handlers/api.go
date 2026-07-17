@@ -46,21 +46,14 @@ func (h *Handlers) GetItemByID(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, "item not found", http.StatusNotFound)
 		return
 	}
-	if key, ok := auth.APIKeyFromContext(r.Context()); ok {
-		prog, err := filter.Compile(key.Filter)
-		if err != nil {
-			writeAPIError(w, "invalid API key filter", http.StatusInternalServerError)
-			return
-		}
-		matches, err := prog.Eval(item.Frontmatter)
-		if err != nil {
-			writeAPIError(w, "API key filter evaluation failed", http.StatusInternalServerError)
-			return
-		}
-		if !matches {
-			writeAPIError(w, "item not found", http.StatusNotFound)
-			return
-		}
+	matches, err := apiKeyFilterMatches(r, item.Frontmatter)
+	if err != nil {
+		writeAPIError(w, "API key filter evaluation failed", http.StatusInternalServerError)
+		return
+	}
+	if !matches {
+		writeAPIError(w, "item not found", http.StatusNotFound)
+		return
 	}
 
 	targetItem := &APIItem{
@@ -137,6 +130,15 @@ func (h *Handlers) UpdateItemByID(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, "item not found", http.StatusNotFound)
 		return
 	}
+	matches, err := apiKeyFilterMatches(r, item.Frontmatter)
+	if err != nil {
+		writeAPIError(w, "API key filter evaluation failed", http.StatusInternalServerError)
+		return
+	}
+	if !matches {
+		writeAPIError(w, "item not found", http.StatusNotFound)
+		return
+	}
 
 	fm := item.Frontmatter
 	if req.Frontmatter != nil {
@@ -145,6 +147,15 @@ func (h *Handlers) UpdateItemByID(w http.ResponseWriter, r *http.Request) {
 	body := item.Body
 	if req.Body != nil {
 		body = *req.Body
+	}
+	matches, err = apiKeyFilterMatches(r, fm)
+	if err != nil {
+		writeAPIError(w, "API key filter evaluation failed", http.StatusInternalServerError)
+		return
+	}
+	if !matches {
+		writeAPIError(w, "updated item does not match API key filter", http.StatusForbidden)
+		return
 	}
 
 	if err := h.Store.UpdateItem(item.Path, fm, body); err != nil {
@@ -157,6 +168,18 @@ func (h *Handlers) UpdateItemByID(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(APIItem{Frontmatter: fm, Body: body}); err != nil {
 		http.Error(w, `{"error": "encoding error"}`, http.StatusInternalServerError)
 	}
+}
+
+func apiKeyFilterMatches(r *http.Request, frontmatter map[string]interface{}) (bool, error) {
+	key, ok := auth.APIKeyFromContext(r.Context())
+	if !ok {
+		return true, nil
+	}
+	prog, err := filter.Compile(key.Filter)
+	if err != nil {
+		return false, err
+	}
+	return prog.Eval(frontmatter)
 }
 
 // QueryIDsByCEL returns IDs for all cached items matching a CEL expression.

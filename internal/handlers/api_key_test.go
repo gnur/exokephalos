@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,6 +119,49 @@ func TestGetItemByIDWithXAPIKey(t *testing.T) {
 	}
 }
 
+func TestUpdateItemByIDWithAPIKeyFilters(t *testing.T) {
+	authMgr, err := auth.New(filepath.Join(t.TempDir(), "auth.sqlite"))
+	if err != nil {
+		t.Fatalf("auth.New: %v", err)
+	}
+	defer authMgr.Close()
+
+	raw, _, err := authMgr.CreateAPIKey("notes app", `type == "note"`, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("CreateAPIKey: %v", err)
+	}
+	h := &Handlers{Store: testItemStore{items: map[string]scanner.Item{
+		"note1": {
+			Frontmatter: map[string]interface{}{"id": "note1", "type": "note", "title": "Note"},
+			Body:        "note body",
+		},
+		"secret1": {
+			Frontmatter: map[string]interface{}{"id": "secret1", "type": "secret", "title": "Secret"},
+			Body:        "secret body",
+		},
+	}}}
+	server := apiKeyTestServer(authMgr, h)
+
+	request := func(id, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPatch, "/api/items/"+id, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+raw)
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		server.ServeHTTP(rr, req)
+		return rr
+	}
+
+	if rr := request("note1", `{"body":"updated note body"}`); rr.Code != http.StatusOK {
+		t.Fatalf("matching item status = %d body=%s, want 200", rr.Code, rr.Body.String())
+	}
+	if rr := request("secret1", `{"body":"updated secret body"}`); rr.Code != http.StatusNotFound {
+		t.Fatalf("non-matching item status = %d body=%s, want 404", rr.Code, rr.Body.String())
+	}
+	if rr := request("note1", `{"frontmatter":{"id":"note1","type":"secret","title":"Secret"}}`); rr.Code != http.StatusForbidden {
+		t.Fatalf("out-of-scope update status = %d body=%s, want 403", rr.Code, rr.Body.String())
+	}
+}
+
 func TestAPIKeyDoesNotAuthenticateOtherRoutes(t *testing.T) {
 	authMgr, err := auth.New(filepath.Join(t.TempDir(), "auth.sqlite"))
 	if err != nil {
@@ -147,5 +191,6 @@ func TestAPIKeyDoesNotAuthenticateOtherRoutes(t *testing.T) {
 func apiKeyTestServer(authMgr *auth.Manager, h *Handlers) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/items/{id}", h.GetItemByID)
+	mux.HandleFunc("PATCH /api/items/{id}", h.UpdateItemByID)
 	return authMgr.Middleware(mux)
 }

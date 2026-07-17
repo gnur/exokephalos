@@ -241,7 +241,7 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 }
 
 func (m *Manager) apiKeyEligible(r *http.Request) bool {
-	return r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/items/")
+	return (r.Method == http.MethodGet || r.Method == http.MethodPatch) && strings.HasPrefix(r.URL.Path, "/api/items/")
 }
 
 func (m *Manager) Exempt(r *http.Request) bool {

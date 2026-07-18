@@ -142,6 +142,15 @@ function App() {
     }
   }, [screen, viewID, selectedID, pane, query, subviewName, selectedTags, views]);
 
+  async function refreshApp() {
+    await refreshFromServer();
+    if ('serviceWorker' in navigator) {
+      const registration = await navigator.serviceWorker.getRegistration();
+      await registration?.update();
+    }
+    window.location.reload();
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -198,7 +207,7 @@ function App() {
           views={views}
           activeViewID={viewID}
           activeSubviewName={subviewName}
-          onRefresh={() => void refreshFromServer()}
+          onRefresh={() => void refreshApp()}
           onView={(nextViewID, nextSubviewName = '') => {
             setViewID(nextViewID);
             setSubviewName(nextSubviewName);

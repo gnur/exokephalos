@@ -3,6 +3,8 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
+const serverDocumentRoutes = /^\/(?:login|settings)(?:\/|$)/;
+
 export default defineConfig({
   root: 'web',
   plugins: [
@@ -43,17 +45,8 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: '/index.html',
+        navigateFallbackDenylist: [serverDocumentRoutes],
         globPatterns: ['**/*.{js,css,html,svg,png,webmanifest}'],
-        runtimeCaching: [
-          {
-            urlPattern: ({ request }) => request.mode === 'navigate',
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'exo-navigations',
-              networkTimeoutSeconds: 2,
-            },
-          },
-        ],
       },
     }),
   ],

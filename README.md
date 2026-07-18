@@ -1,6 +1,11 @@
-# Exokephalos
+# exokephalos
 
-A self-hosted personal knowledge management and life-tracking application. The TUI and LSP use plain markdown files with YAML frontmatter; `exo serve` runs a central SQLite-backed web and sync server. Views are fully configurable via root-level TOML files in `EXO_DIR` using CEL filter expressions.
+** outside of head, from the greek εγκέφαλος which literally means within the head, or brain **
+
+`xo` (pronounced exo) is a offline first note / personal knowledge / zettelkasten application. It's a TUI for quickly creating, updating and searching notes. It uses markdown with frontmatter for managing metadata. The tui can sync with a sync server that doubles as a PWA host. Everything is offline first.
+Views and subviews can be configured using TOML files, using [CEL](https://cel.dev/overview/cel-overview) for filtering.
+The sync server also has an API that can be used for querying, retrieving and updating items in the `xo` database.
+
 
 ## Features
 
@@ -12,13 +17,13 @@ A self-hosted personal knowledge management and life-tracking application. The T
 - **Book tracking** — Manage a reading list with statuses (to-read, reading, read)
 - **Webhooks** — Receive and store incoming webhooks as markdown files
 - **Stats pages** — Per-view stats with embedded templates
-- **Dual interface** — Full-featured TUI (default) and web interface (`exo serve`)
-- **LSP server** — Language Server Protocol support for editors (`exo lsp`)
+- **Dual interface** — Full-featured TUI (default) and web interface (`xo serve`)
+- **LSP server** — Language Server Protocol support for editors (`xo lsp`)
 - **Optional sync** — Regular web UI with SQLite-backed central storage, signed TUI clients, approval flow, SSE updates, and local outbox retry
 
 ## Quickstart
 
-Install `exo` first, then create a data directory. exo stores all data in a directory you choose and reads configuration from that directory.
+Install `xo` first, then create a data directory. xo stores all data in a directory you choose and reads configuration from that directory.
 
 ### Install
 
@@ -31,8 +36,8 @@ Download prebuilt binaries from the [GitHub releases page](https://github.com/gn
 On Linux or macOS, make the downloaded binary executable and put it on your `PATH`:
 
 ```bash
-chmod +x exo-*
-sudo mv exo-* /usr/local/bin/exo
+chmod +x xo-*
+sudo mv xo-* /usr/local/bin/xo
 ```
 
 You can also run the web interface as a container:
@@ -44,7 +49,7 @@ docker run --rm \
   ghcr.io/gnur/exokephalos:latest
 ```
 
-The container runs `exo serve`, exposes port `8293`, and uses `/data` as `EXO_DIR`.
+The container runs `xo serve`, exposes port `8293`, and uses `/data` as `EXO_DIR`.
 
 ### 1. Create a data directory
 
@@ -119,12 +124,12 @@ EOF
 
 Every item is a markdown file with YAML frontmatter. The `type` field determines which view can see it; the example view above shows items where `type == "note"`.
 
-### 4. Run exo
+### 4. Run xo
 
 ```bash
-EXO_DIR=~/notes exo        # TUI
-EXO_DIR=~/notes exo serve  # Web UI on :8293
-EXO_DIR=~/notes exo lsp    # LSP server on stdio
+EXO_DIR=~/notes xo        # TUI
+EXO_DIR=~/notes xo serve  # Web UI on :8293
+EXO_DIR=~/notes xo lsp    # LSP server on stdio
 ```
 
 ## Configuration
@@ -358,7 +363,7 @@ Any other `{{.VarName}}` in the template prompts the user (TUI) or shows a form 
 
 ### TUI (default)
 
-Run `exo` to launch the terminal UI. Keybindings:
+Run `xo` to launch the terminal UI. Keybindings:
 
 | Key | Action |
 |-----|--------|
@@ -378,7 +383,7 @@ An `All` view is always available with key `0`; it shows every item regardless o
 
 ### Web Interface
 
-Run `exo serve` to start the HTTP server on port 8293.
+Run `xo serve` to start the HTTP server on port 8293.
 
 On first boot, the web UI generates a 20-character base32 password, prints it to stdout, and stores only an Argon2id hash in the auth database. The login page has a single password field and an optional `trust this device` checkbox for a long-lived cookie. Change the password from the `password` nav item after logging in.
 
@@ -461,11 +466,11 @@ curl -s http://localhost:8293/api/query/ids \
 
 ## Sync Server and Web UI
 
-`exo serve` is always SQLite-backed and always exposes the sync server. The TUI and LSP remain local-first and read/write markdown files under `EXO_DIR`; the web UI reads/writes the server database.
+`xo serve` is always SQLite-backed and always exposes the sync server. The TUI and LSP remain local-first and read/write markdown files under `EXO_DIR`; the web UI reads/writes the server database.
 
 In serve mode:
 
-- `exo serve` stores notes and synced root-level workspace config in SQLite.
+- `xo serve` stores notes and synced root-level workspace config in SQLite.
 - The server does not read or write markdown files.
 - TUI clients keep local markdown files and a local `.exo/cache.sqlite` cache/outbox.
 - Clients connect with signed requests using a generated ed25519 keypair.
@@ -485,7 +490,7 @@ listen = ":8293"
 Start the server:
 
 ```bash
-EXO_DIR=/path/to/server-data exo serve
+EXO_DIR=/path/to/server-data xo serve
 ```
 
 With Docker, mount the server data directory at `/data`:
@@ -516,7 +521,7 @@ client_id = "laptop"
 Then start the TUI:
 
 ```bash
-EXO_DIR=/path/to/client-notes exo
+EXO_DIR=/path/to/client-notes xo
 ```
 
 Open the action picker with `:` and run `start-sync`. The client generates a local ed25519 keypair, sends its public key to the server, and waits for approval. After you approve it in the web UI, the TUI continues automatically; a second `start-sync` is not needed. It uploads local markdown files and root-level workspace config, then keeps reconciling every 5 seconds while approved. The sync status appears in the TUI footer.
@@ -570,7 +575,7 @@ The manifest is intentionally single-replica because SQLite should not be writte
 
 ### LSP Server
 
-Run `exo lsp` to start the Language Server Protocol server over stdio. This provides IDE-like features for editing notes in any LSP-compatible editor.
+Run `xo lsp` to start the Language Server Protocol server over stdio. This provides IDE-like features for editing notes in any LSP-compatible editor.
 
 **Features:**
 - **Tag completion** — Complete tags in frontmatter (`tags: [...]` or `tags:\n  - ...`) and body (`:tag:` syntax)
@@ -584,7 +589,7 @@ Neovim (using nvim-lspconfig):
 ```lua
 require('lspconfig.configs').exokephalos = {
   default_config = {
-    cmd = { 'exo', 'lsp' },
+    cmd = { 'xo', 'lsp' },
     filetypes = { 'markdown' },
     root_dir = function(fname)
       return vim.fs.dirname(vim.fs.find({ '.exo.toml', '.exo' }, { upward = true })[1])
@@ -595,9 +600,9 @@ require('lspconfig.configs').exokephalos = {
 require('lspconfig').exokephalos.setup{}
 ```
 
-VS Code: Create an extension that runs `exo lsp` as the language server (see [LSP client examples](https://code.visualstudio.com/api/language-extensions/language-server-extension-guide)).
+VS Code: Create an extension that runs `xo lsp` as the language server (see [LSP client examples](https://code.visualstudio.com/api/language-extensions/language-server-extension-guide)).
 
-Helix: Run `exo helix-init` to automatically create `.helix/languages.toml` with the LSP configuration.
+Helix: Run `xo helix-init` to automatically create `.helix/languages.toml` with the LSP configuration.
 
 ## Tech Stack
 
@@ -607,7 +612,7 @@ Helix: Run `exo helix-init` to automatically create `.helix/languages.toml` with
 - [Bubbletea](https://github.com/charmbracelet/bubbletea) + [Lipgloss](https://github.com/charmbracelet/lipgloss) + [Glamour](https://github.com/charmbracelet/glamour) for TUI
 - Tailwind CSS v4 (web interface)
 - Go `html/template` for web rendering
-- Flat-file markdown storage for TUI/LSP clients; SQLite-backed storage for `exo serve`
+- Flat-file markdown storage for TUI/LSP clients; SQLite-backed storage for `xo serve`
 
 ## Build And Run
 
@@ -627,10 +632,10 @@ npm install
 task build
 
 # Run TUI (default)
-EXO_DIR=/path/to/your/notes ./exo
+EXO_DIR=/path/to/your/notes ./xo
 
 # Run web server
-EXO_DIR=/path/to/your/notes ./exo serve
+EXO_DIR=/path/to/your/notes ./xo serve
 ```
 
 ### Run With Docker
@@ -650,7 +655,7 @@ docker run --rm \
   ghcr.io/gnur/exokephalos:latest
 ```
 
-The image runs `exo serve` by default. To run another subcommand, override the command:
+The image runs `xo serve` by default. To run another subcommand, override the command:
 
 ```bash
 docker run --rm \
@@ -666,7 +671,7 @@ Exokephalos supports several command line subcommands for maintenance and data i
 #### `import`
 Recursively imports all markdown files from a source directory, generates safe 7-character lowercase base32 IDs for them, and writes them into the structured `EXO_DIR` directory.
 ```bash
-EXO_DIR=/path/to/your/notes ./exo import <source-dir> <type>
+EXO_DIR=/path/to/your/notes ./xo import <source-dir> <type>
 ```
 
 #### `export`
@@ -676,10 +681,10 @@ Exports all items from your Exokephalos repository to a specified output folder,
 * Automatically resolves filename conflicts by appending sequential suffixes (`-1`, `-2`).
 ```bash
 # Export all items
-EXO_DIR=/path/to/your/notes ./exo export /path/to/output/dir
+EXO_DIR=/path/to/your/notes ./xo export /path/to/output/dir
 
 # Export a specific item type only
-EXO_DIR=/path/to/your/notes ./exo export /path/to/output/dir --type book
+EXO_DIR=/path/to/your/notes ./xo export /path/to/output/dir --type book
 ```
 
 ### Development

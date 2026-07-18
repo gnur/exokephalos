@@ -7,7 +7,7 @@ exokephalos includes a beautiful, premium, responsive web interface utilizing HT
 To spin up the web interface, run the server subcommand:
 
 ```bash
-EXO_DIR=/path/to/your/notes exo serve
+EXO_DIR=/path/to/your/notes xo serve
 ```
 
 By default, the server listens locally at:
@@ -32,11 +32,11 @@ docker run --rm \
   ghcr.io/gnur/exokephalos:latest
 ```
 
-The image runs `exo serve` by default. Prebuilt binaries for TUI, web, and LSP usage are available from the [GitHub releases page](https://github.com/gnur/exokephalos/releases).
+The image runs `xo serve` by default. Prebuilt binaries for TUI, web, and LSP usage are available from the [GitHub releases page](https://github.com/gnur/exokephalos/releases).
 
 ## Serve Mode
 
-`exo serve` is always SQLite-backed and always exposes the sync server. Optionally create `.exo/serve.toml` to override the database path or listen address:
+`xo serve` is always SQLite-backed and always exposes the sync server. Optionally create `.exo/serve.toml` to override the database path or listen address:
 
 ```toml
 [server]
@@ -47,10 +47,10 @@ listen = ":8293"
 Then start the server:
 
 ```bash
-EXO_DIR=/path/to/server-data exo serve
+EXO_DIR=/path/to/server-data xo serve
 ```
 
-In serve mode, `exo serve` stores notes and synced root-level workspace config in SQLite, does not scan or write markdown files, and adds a `sync clients` tab for approving TUI clients. TUI clients keep markdown files locally and sync through signed HTTP requests and SSE updates.
+In serve mode, `xo serve` stores notes and synced root-level workspace config in SQLite, does not scan or write markdown files, and adds a `sync clients` tab for approving TUI clients. TUI clients keep markdown files locally and sync through signed HTTP requests and SSE updates.
 
 New clients appear in the approval page, which auto-refreshes:
 

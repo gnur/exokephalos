@@ -285,7 +285,7 @@ func runHelixInit(dir string) {
 		os.Exit(1)
 	}
 
-	// Get the absolute path to the exo binary and directory
+	// Get the absolute path to the xo binary and directory
 	exePath, err := os.Executable()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error determining executable path: %v\n", err)
@@ -322,7 +322,7 @@ EXO_DIR = "%s"
 
 func runImport(exoDir string) {
 	if len(os.Args) < 4 {
-		fmt.Fprintf(os.Stderr, "Usage: exo import <source-dir> <type>\n")
+		fmt.Fprintf(os.Stderr, "Usage: xo import <source-dir> <type>\n")
 		fmt.Fprintf(os.Stderr, "\nRecursively imports markdown files from source-dir into EXO_DIR.\n")
 		fmt.Fprintf(os.Stderr, "Files are placed in EXO_DIR/<first-3-id-chars>/<id>.md\n")
 		os.Exit(1)
@@ -375,7 +375,7 @@ func runExport(exoDir string) {
 	}
 
 	if outputDir == "" {
-		fmt.Fprintf(os.Stderr, "Usage: exo export <output-dir> [--type <type>]\n")
+		fmt.Fprintf(os.Stderr, "Usage: xo export <output-dir> [--type <type>]\n")
 		fmt.Fprintf(os.Stderr, "\nExports markdown files from EXO_DIR into the output directory.\n")
 		fmt.Fprintf(os.Stderr, "Files are placed in <output-dir>/<type>/<year>/<month>/<slug-title>.md\n")
 		os.Exit(1)

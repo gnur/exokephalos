@@ -16,7 +16,7 @@ The `.exo/` directory is local-only. It is used for `.exo/tui.toml`, `.exo/serve
 
 For compatibility, exo falls back to legacy `.exo/*.toml` view/action files when no root-level `*.toml` files exist, and then to `.exo.toml` when neither root-level nor legacy `.exo/*.toml` files exist.
 
-exo also adds a built-in `All` view with key `0`. This view uses the filter `true`, so it shows every item regardless of type in both the TUI and web interface at `/views/all`.
+xo also adds a built-in `All` view with key `0`. This view uses the filter `true`, so it shows every item regardless of type in both the TUI and web interface at `/views/all`.
 
 ## Minimal View
 
@@ -97,7 +97,7 @@ name = "Todo"
 filter = '"todo" in tags && !("done" in tags)'
 ```
 
-If a view has no subviews, exo adds an `All` subview with `filter = "true"`.
+If a view has no subviews, xo adds an `All` subview with `filter = "true"`.
 
 ## Template Variables
 

@@ -155,6 +155,7 @@ function App() {
           <p className="eyebrow">exokephalos</p>
           <h1>{labelForScreen(screen)}</h1>
         </div>
+        <img className="brand-logo" src="/icons/logo.svg" alt="" aria-hidden="true" />
       </header>
 
       <main className="content">

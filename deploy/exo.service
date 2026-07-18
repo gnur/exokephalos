@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/home/erwin/.local/bin/exo serve
+ExecStart=/home/erwin/.local/bin/xo serve
 Environment=EXO_DIR=/home/erwin/exo
 Restart=on-failure
 RestartSec=5

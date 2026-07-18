@@ -258,6 +258,7 @@ func (m *Manager) Exempt(r *http.Request) bool {
 		r.URL.Path == "/registerSW.js" ||
 		r.URL.Path == "/sw.js" ||
 		strings.HasPrefix(r.URL.Path, "/workbox-") ||
+		strings.HasPrefix(r.URL.Path, "/webhook/") ||
 		strings.HasPrefix(r.URL.Path, "/api/sync/")
 }
 

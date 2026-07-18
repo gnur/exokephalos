@@ -1,11 +1,11 @@
 # Introduction to exokephalos
 
-exokephalos is a lightweight personal knowledge management system. The TUI and LSP read and write flat-file markdown documents with YAML frontmatter, while `exo serve` runs a central SQLite-backed web and sync server.
+exokephalos is a lightweight personal knowledge management system. The TUI and LSP read and write flat-file markdown documents with YAML frontmatter, while `xo serve` runs a central SQLite-backed web and sync server.
 
 It offers three distinct interfaces:
-1. **TUI**: A terminal UI built with Bubble Tea for fast, keyboard-driven navigation (`exo`).
-2. **Web UI**: A modern, responsive web server powered by HTMX (`exo serve`).
-3. **LSP Server**: A Language Server Protocol server that provides auto-completions, hover previews, and wiki-link go-to-definition in text editors (`exo lsp`).
+1. **TUI**: A terminal UI built with Bubble Tea for fast, keyboard-driven navigation (`xo`).
+2. **Web UI**: A modern, responsive web server powered by HTMX (`xo serve`).
+3. **LSP Server**: A Language Server Protocol server that provides auto-completions, hover previews, and wiki-link go-to-definition in text editors (`xo lsp`).
 
 Start with the Quickstart doc to create a data directory, set `EXO_DIR`, and add the first root-level workspace configuration file.
 

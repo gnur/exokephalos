@@ -23,6 +23,24 @@ func TestHealthcheckIsExempt(t *testing.T) {
 	}
 }
 
+func TestWebhookIsExempt(t *testing.T) {
+	m := &Manager{}
+	called := false
+	handler := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusAccepted)
+	}))
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/webhook/example", nil))
+	if !called {
+		t.Fatal("anonymous webhook request did not reach the handler")
+	}
+	if response.Code != http.StatusAccepted {
+		t.Errorf("status = %d, want %d", response.Code, http.StatusAccepted)
+	}
+}
+
 func TestPasswordAndSessionFlow(t *testing.T) {
 	m, err := New(filepath.Join(t.TempDir(), "auth.sqlite"))
 	if err != nil {

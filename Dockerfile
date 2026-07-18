@@ -33,15 +33,15 @@ ARG BUILD_TIME
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
 	go build \
 	-ldflags="-s -w -X github.com/gnur/exokephalos/internal/version.Version=${VERSION} -X github.com/gnur/exokephalos/internal/version.BuildTime=${BUILD_TIME}" \
-	-o /out/exo .
+	-o /out/xo .
 
 FROM gcr.io/distroless/static-debian12:nonroot
 
-COPY --from=builder /out/exo /usr/local/bin/exo
+COPY --from=builder /out/xo /usr/local/bin/xo
 
 ENV EXO_DIR=/data
 VOLUME ["/data"]
 EXPOSE 8293
 
-ENTRYPOINT ["/usr/local/bin/exo"]
+ENTRYPOINT ["/usr/local/bin/xo"]
 CMD ["serve"]

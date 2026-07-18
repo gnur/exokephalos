@@ -85,6 +85,12 @@ textarea {
   text-transform: uppercase;
 }
 
+.brand-logo {
+  width: 36px;
+  height: 36px;
+  flex: none;
+}
+
 .content {
   min-width: 0;
   padding-bottom: calc(92px + env(safe-area-inset-bottom));

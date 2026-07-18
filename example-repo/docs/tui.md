@@ -1,13 +1,13 @@
 # Terminal User Interface (TUI)
 
-exo features an interactive terminal user interface built on Bubble Tea, providing full parity with the storage repository.
+xo features an interactive terminal user interface built on Bubble Tea, providing full parity with the storage repository.
 
 ## Starting the TUI
 
-To start the TUI mode, run the `exo` command with no arguments:
+To start the TUI mode, run the `xo` command with no arguments:
 
 ```bash
-EXO_DIR=/path/to/your/notes exo
+EXO_DIR=/path/to/your/notes xo
 ```
 
 `EXO_DIR` must point at the data directory containing root-level workspace `*.toml` config files. If it is not set, exo uses `./example-repo`.
@@ -42,7 +42,7 @@ server_url = "http://localhost:8293"
 client_id = "laptop"
 ```
 
-Use `start-sync` to generate a local ed25519 keypair and register this client with `exo serve`. Approve the client in the web UI under the `sync clients` tab. The TUI keeps polling while it waits; after approval it continues automatically and pushes local markdown files plus root-level workspace config. You do not need to run `start-sync` a second time.
+Use `start-sync` to generate a local ed25519 keypair and register this client with `xo serve`. Approve the client in the web UI under the `sync clients` tab. The TUI keeps polling while it waits; after approval it continues automatically and pushes local markdown files plus root-level workspace config. You do not need to run `start-sync` a second time.
 
 Use `sync-outbox` to inspect pending, failed, and synced operations. The outbox view supports scrolling, status filtering, entry details, retrying one selected entry, and retrying all failed entries. If the server is offline, local edits continue writing to markdown and are retried from the outbox later. After approval, the TUI reconciles every 5 seconds and the footer shows the current sync state when sync is configured.
 

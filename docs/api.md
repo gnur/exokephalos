@@ -1,10 +1,10 @@
-# exo API Reference
+# xo API Reference
 
-This document describes the HTTP API exposed by `exo serve`.
+This document describes the HTTP API exposed by `xo serve`.
 
-`exo serve` is SQLite-backed and always exposes the sync server. The web UI and JSON item API read/write notes and synced root-level workspace config from the server database. TUI clients keep local markdown files and use the signed sync API.
+`xo serve` is SQLite-backed and always exposes the sync server. The web UI and JSON item API read/write notes and synced root-level workspace config from the server database. TUI clients keep local markdown files and use the signed sync API.
 
-The browser web UI is password-protected. On first boot, `exo serve` prints a generated 20-character base32 password to stdout and stores only an Argon2id hash. Browser routes and most web JSON API routes require the login cookie. The signed `/api/sync/*` endpoints do not use the browser cookie; they authenticate TUI/iOS clients with ed25519 request signatures.
+The browser web UI is password-protected. On first boot, `xo serve` prints a generated 20-character base32 password to stdout and stores only an Argon2id hash. Browser routes and most web JSON API routes require the login cookie. The signed `/api/sync/*` endpoints do not use the browser cookie; they authenticate TUI/iOS clients with ed25519 request signatures.
 
 `GET /api/items/{id}` also accepts API keys created in the web settings screen. API keys are formatted as `exo_<base62 random>`, are stored hashed, require an app name, expiration date, and CEL filter, and can be sent as either:
 

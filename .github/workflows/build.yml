@@ -43,6 +43,9 @@ jobs:
       - name: Build CSS
         run: npm run build:css
 
+      - name: Build SPA assets
+        run: npm run build:web
+
       - name: Run tests
         run: go test -v -count=1 ./...
 
@@ -56,28 +59,28 @@ jobs:
         include:
           - goos: linux
             goarch: amd64
-            artifact: exo-linux-amd64
-            binary: exo
+            artifact: xo-linux-amd64
+            binary: xo
           - goos: linux
             goarch: arm64
-            artifact: exo-linux-arm64
-            binary: exo
+            artifact: xo-linux-arm64
+            binary: xo
           - goos: darwin
             goarch: amd64
-            artifact: exo-darwin-amd64
-            binary: exo
+            artifact: xo-darwin-amd64
+            binary: xo
           - goos: darwin
             goarch: arm64
-            artifact: exo-darwin-arm64
-            binary: exo
+            artifact: xo-darwin-arm64
+            binary: xo
           - goos: windows
             goarch: amd64
-            artifact: exo-windows-amd64
-            binary: exo.exe
+            artifact: xo-windows-amd64
+            binary: xo.exe
           - goos: windows
             goarch: arm64
-            artifact: exo-windows-arm64
-            binary: exo.exe
+            artifact: xo-windows-arm64
+            binary: xo.exe
 
     steps:
       - name: Checkout
@@ -103,6 +106,7 @@ jobs:
       - name: Build web assets
         run: |
           npm run build:css
+          npm run build:web
           mkdir -p static/js
           curl -sL "https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js" -o static/js/htmx.min.js
           curl -sL "https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js" -o static/js/chart.min.js

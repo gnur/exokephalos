@@ -98,7 +98,7 @@ func newHarness(t *testing.T) *harness {
 	h := &harness{
 		t:         t,
 		root:      root,
-		bin:       filepath.Join(tmp, "exo"),
+		bin:       filepath.Join(tmp, "xo"),
 		serverDir: filepath.Join(tmp, "server"),
 		clientDir: filepath.Join(tmp, "client"),
 	}
@@ -120,7 +120,7 @@ func (h *harness) buildBinary() {
 	cmd.Dir = h.root
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		h.t.Fatalf("build exo: %v\n%s", err, out)
+		h.t.Fatalf("build xo: %v\n%s", err, out)
 	}
 }
 

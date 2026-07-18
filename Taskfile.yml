@@ -12,7 +12,7 @@ tasks:
     desc: Build the login CSS, SPA assets, and Go binary
     deps: [css, web]
     cmds:
-      - go build -ldflags="{{.LDFLAGS}}" -o exo .
+      - go build -ldflags="{{.LDFLAGS}}" -o xo .
 
   web:
     desc: Build the React SPA/PWA
@@ -88,13 +88,13 @@ tasks:
         echo "Created temporary EXO_DIR at $temp_dir"
         mkdir -p "$temp_dir/.exo"
         cp -r ./example-repo/.exo/* "$temp_dir/.exo/"
-        EXO_DIR="$temp_dir" ./exo import ./example-repo/book book
-        EXO_DIR="$temp_dir" ./exo import ./example-repo/note note
-        EXO_DIR="$temp_dir" ./exo import ./example-repo/webhook webhook
-        EXO_DIR="$temp_dir" ./exo import ./example-repo/secret secret
-        EXO_DIR="$temp_dir" ./exo import ./example-repo/docs doc
-        EXO_DIR="$temp_dir" ./exo helix-init
-        EXO_DIR="$temp_dir" ./exo
+        EXO_DIR="$temp_dir" ./xo import ./example-repo/book book
+        EXO_DIR="$temp_dir" ./xo import ./example-repo/note note
+        EXO_DIR="$temp_dir" ./xo import ./example-repo/webhook webhook
+        EXO_DIR="$temp_dir" ./xo import ./example-repo/secret secret
+        EXO_DIR="$temp_dir" ./xo import ./example-repo/docs doc
+        EXO_DIR="$temp_dir" ./xo helix-init
+        EXO_DIR="$temp_dir" ./xo
 
   dev:serve:
     desc: Create a temp DB-backed web UI server
@@ -105,11 +105,11 @@ tasks:
         temp_dir=$(mktemp -d ./tmp-run/exo-XXXXXX)
         echo "Created temporary EXO_DIR at $temp_dir"
         mkdir -p "$temp_dir/.exo"
-        echo "Starting empty SQLite-backed exo serve. Sync a TUI client to populate notes and view config."
-        EXO_DIR="$temp_dir" ./exo serve
+        echo "Starting empty SQLite-backed xo serve. Sync a TUI client to populate notes and view config."
+        EXO_DIR="$temp_dir" ./xo serve
 
   dev:integration-test:
-    desc: Create local DB-backed serve/client dirs, seed client notes, and start exo serve
+    desc: Create local DB-backed serve/client dirs, seed client notes, and start xo serve
     deps: [build]
     cmds:
       - |
@@ -133,8 +133,8 @@ tasks:
         EOF
 
         cp ./example-repo/.exo/*.toml "$client_dir"/
-        EXO_DIR="$client_dir" ./exo import ./example-repo/note note
-        EXO_DIR="$client_dir" ./exo import ./example-repo/docs doc
+        EXO_DIR="$client_dir" ./xo import ./example-repo/note note
+        EXO_DIR="$client_dir" ./xo import ./example-repo/docs doc
 
         cat <<EOF
 
@@ -146,11 +146,11 @@ tasks:
         TUI client EXO_DIR:
           $client_dir
 
-        Starting SQLite-backed exo serve on:
+        Starting SQLite-backed xo serve on:
           http://localhost:$port
 
         In another terminal, start the TUI client:
-          EXO_DIR="$client_dir" ./exo
+          EXO_DIR="$client_dir" ./xo
 
         Then in the TUI:
           1. Press ':' to open the action picker.
@@ -160,11 +160,11 @@ tasks:
           5. Wait for the TUI to continue automatically after approval.
           6. Run 'sync-outbox' to inspect queued/synced operations.
 
-        Press Ctrl+C in this terminal to stop exo serve.
+        Press Ctrl+C in this terminal to stop xo serve.
 
         EOF
 
-        EXO_DIR="$server_dir" ./exo serve
+        EXO_DIR="$server_dir" ./xo serve
 
   run:
     desc: Alias for dev:tui
@@ -214,44 +214,44 @@ tasks:
     desc: Build native binary and install to ~/.local/bin/
     deps: [css, vendor-js]
     cmds:
-      - go build -ldflags="{{.LDFLAGS}}" -o exo .
+      - go build -ldflags="{{.LDFLAGS}}" -o xo .
       - mkdir -p ~/.local/bin
-      - mv exo ~/.local/bin/exo
+      - mv xo ~/.local/bin/xo
 
   deploy-staging:
     desc: Push the container image and install a native binary to ~/prive/exo-staging/bin/
     deps: [css, vendor-js]
     cmds:
       - task: container:push
-      - go build -ldflags="{{.LDFLAGS}}" -o exo .
+      - go build -ldflags="{{.LDFLAGS}}" -o xo .
       - mkdir -p ~/prive/exo-staging/bin
-      - cp exo ~/prive/exo-staging/bin/exo
-      - rm exo
+      - cp xo ~/prive/exo-staging/bin/xo
+      - rm xo
 
   deploy-fedora:
     desc: Build linux/amd64 binary and deploy to fedora
     deps: [css, vendor-js]
     cmds:
-      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="{{.LDFLAGS}}" -o exo .
+      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="{{.LDFLAGS}}" -o xo .
       - ssh fedora "mkdir -p ~/.local/bin ~/.config/systemd/user"
       - ssh fedora "systemctl --user stop exo || true"
-      - scp exo fedora:/home/erwin/.local/bin/exo
-      - ssh fedora "chmod +x ~/.local/bin/exo"
+      - scp xo fedora:/home/erwin/.local/bin/xo
+      - ssh fedora "chmod +x ~/.local/bin/xo"
       - scp deploy/exo.service fedora:/home/erwin/.config/systemd/user/exo.service
       - ssh fedora "systemctl --user daemon-reload && systemctl --user enable exo && systemctl --user start exo"
       - ssh fedora "tailscale serve --service=svc:exo http://localhost:8293"
-      - rm exo
+      - rm xo
 
   deploy-imp:
     desc: Build linux/amd64 binary and deploy to imp
     deps: [css, vendor-js]
     cmds:
-      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="{{.LDFLAGS}}" -o exo .
+      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="{{.LDFLAGS}}" -o xo .
       - ssh imp "mkdir -p ~/.local/bin ~/.config/systemd/user"
       - ssh imp "systemctl --user stop exo || true"
-      - scp exo imp:/home/erwin/.local/bin/exo
-      - ssh imp "chmod +x ~/.local/bin/exo"
+      - scp xo imp:/home/erwin/.local/bin/xo
+      - ssh imp "chmod +x ~/.local/bin/xo"
       - scp deploy/exo.service imp:/home/erwin/.config/systemd/user/exo.service
       - ssh imp "systemctl --user daemon-reload && systemctl --user enable exo && systemctl --user start exo"
       - ssh imp "sudo tailscale serve --service=svc:exo http://localhost:8293"
-      - rm exo
+      - rm xo

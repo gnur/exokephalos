@@ -2,11 +2,11 @@
 
 ## Project Overview
 
-exokephalos is a Go application for personal knowledge management with a TUI (terminal UI), a web interface, and an LSP server. It uses flat-file markdown with YAML frontmatter as its storage layer (no database). The TUI is the default mode; the web interface is launched with `exo serve`; the LSP server is launched with `exo lsp`.
+exokephalos is a Go application for personal knowledge management with a TUI (terminal UI), a web interface, and an LSP server. It uses flat-file markdown with YAML frontmatter as its storage layer (no database). The TUI is the default mode; the web interface is launched with `xo serve`; the LSP server is launched with `xo lsp`.
 
 ## Architecture
 
-- **Entry point:** `main.go` — subcommand dispatch (`exo` = TUI, `exo serve` = web server, `exo lsp` = LSP server)
+- **Entry point:** `main.go` — subcommand dispatch (`xo` = TUI, `xo serve` = web server, `xo lsp` = LSP server)
 - **`internal/tui/`** — Bubbletea-based terminal UI
 - **`internal/handlers/`** — HTTP handler functions for the web interface
 - **`internal/lsp/`** — Language Server Protocol implementation for editor integration
@@ -19,7 +19,7 @@ exokephalos is a Go application for personal knowledge management with a TUI (te
 
 - All references to "exo" and "exokephalos" (except for environment variables like `EXO_DIR` and `EXO_PORT`) must be lowercase.
 - All data is stored as markdown files with YAML frontmatter in the directory specified by `EXO_DIR`.
-- `exo` (no args) launches the TUI; `exo serve` starts the HTTP server on `:8293`; `exo lsp` starts the LSP server on stdio.
+- `xo` (no args) launches the TUI; `xo serve` starts the HTTP server on `:8293`; `xo lsp` starts the LSP server on stdio.
 - Routes use Go 1.22+ stdlib routing patterns (method + path).
 - Templates use Go `html/template`.
 - CSS is built with Tailwind v4 (`npm run build:css`).
@@ -57,8 +57,8 @@ exokephalos is a Go application for personal knowledge management with a TUI (te
 
 ## Import and Export Commands
 
-- `exo import <source-directory> <type>` scans raw files, normalizes frontmatter (generating lowercase IDs, converting dates to unquoted YAML timestamps), and writes to the workspace folder layout: `<EXO_DIR>/<type>/<year>/<month>/<slugified-title>.md`.
-- `exo export <output-directory> [--type <type>]` exports repository files, cleaning up application-specific frontmatter fields (`id`, `type`, `created`) and resolving naming conflicts by appending suffixes (`-1.md`).
+- `xo import <source-directory> <type>` scans raw files, normalizes frontmatter (generating lowercase IDs, converting dates to unquoted YAML timestamps), and writes to the workspace folder layout: `<EXO_DIR>/<type>/<year>/<month>/<slugified-title>.md`.
+- `xo export <output-directory> [--type <type>]` exports repository files, cleaning up application-specific frontmatter fields (`id`, `type`, `created`) and resolving naming conflicts by appending suffixes (`-1.md`).
 
 ## Feature Requests
 
@@ -78,13 +78,13 @@ When receiving a feature request, always ask whether it applies to:
 - Version is set at build time via `-ldflags` in `internal/version/`.
 - The version string is `git describe --tags --always --dirty` output (or `dev` fallback).
 - Build time is injected as an RFC 3339 UTC timestamp.
-- Displayed via `exo version` / `exo --version` and in the web UI footer.
+- Displayed via `xo version` / `xo --version` and in the web UI footer.
 - Add `-ldflags="{{.LDFLAGS}}"` to any new `go build` commands in `Taskfile.yml`.
 
 ## Build
 
 ```bash
-task build   # Builds CSS + Go binary (exo)
+task build   # Builds CSS + Go binary (xo)
 ```
 
 ## Deploy

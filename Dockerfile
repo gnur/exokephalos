@@ -7,6 +7,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY static ./static
+COPY templates ./templates
 COPY web ./web
 COPY vite.config.ts ./
 RUN npm run build:css

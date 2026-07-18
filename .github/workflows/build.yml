@@ -195,23 +195,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build variables
+        id: vars
+        run: |
+          echo "version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" >> "${GITHUB_OUTPUT}"
+          echo "build_time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "${GITHUB_OUTPUT}"
+
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=branch
-            type=ref,event=tag
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-
-      - name: Build variables
-        id: vars
-        run: |
-          echo "version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" >> "${GITHUB_OUTPUT}"
-          echo "build_time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "${GITHUB_OUTPUT}"
+            type=raw,value=latest
+            type=raw,value=${{ steps.vars.outputs.version }}
 
       - name: Build and publish image
         uses: docker/build-push-action@v6

@@ -599,6 +599,7 @@ function CreateView({ views, onCreated }: { views: View[]; onCreated: (id: strin
   const [type, setType] = useState('note');
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
+  const [encrypted, setEncrypted] = useState(false);
   const [url, setURL] = useState('');
   const types = Array.from(new Set(['note', ...views.map((view) => view.id.endsWith('s') ? view.id.slice(0, -1) : view.id)]));
 
@@ -606,12 +607,20 @@ function CreateView({ views, onCreated }: { views: View[]; onCreated: (id: strin
     const id = newID();
     const created = new Date().toISOString();
     const path = `${type}/${created.slice(0, 4)}/${created.slice(5, 7)}/${slugify(title)}.md`;
-    const frontmatter = { id, type, title, tags: [], created };
-    const item: Item = { id, type, path, title, subtitle: '', tags: [], frontmatter, body, raw: rawFromParts(frontmatter, body), updated_at: created };
+    const frontmatter: Frontmatter = { id, type, title, tags: [], created };
+    let storedBody = body;
+    if (encrypted) {
+      const passphrase = window.prompt('Passphrase for this note');
+      if (!passphrase) return;
+      frontmatter.encrypted = true;
+      storedBody = await encryptBody(id, passphrase, body);
+    }
+    const item: Item = { id, type, path, title, subtitle: '', tags: [], frontmatter, body: storedBody, raw: rawFromParts(frontmatter, storedBody), updated_at: created };
     await db.items.put(item);
-    await enqueue({ id: crypto.randomUUID(), op: 'upsert_item', item_id: id, path, frontmatter, body });
+    await enqueue({ id: crypto.randomUUID(), op: 'upsert_item', item_id: id, path, frontmatter, body: storedBody });
     setTitle('');
     setBody('');
+    setEncrypted(false);
     onCreated(id);
   }
 
@@ -628,6 +637,7 @@ function CreateView({ views, onCreated }: { views: View[]; onCreated: (id: strin
       <label>Type<select value={type} onChange={(event) => setType(event.target.value)}>{types.map((value) => <option key={value}>{value}</option>)}</select></label>
       <label>Title<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
       <label>Body<textarea value={body} onChange={(event) => setBody(event.target.value)} /></label>
+      <label><input type="checkbox" checked={encrypted} onChange={(event) => setEncrypted(event.target.checked)} /> Encrypt body</label>
       <button className="button primary" disabled={!title.trim()} onClick={() => void create()}>Create</button>
       <div className="divider" />
       <label>Import URL<input value={url} onChange={(event) => setURL(event.target.value)} placeholder="https://..." /></label>

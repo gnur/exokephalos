@@ -48,6 +48,7 @@ test('SPA login, mobile shell, editor, approval, and browser outbox', async ({ p
   await expect.poll(() => itemIDByTitle(page, onlineTitle), { timeout: 10_000 }).toMatch(exoIDPatternForToday());
   const onlineID = await itemIDByTitle(page, onlineTitle);
   await expect.poll(() => pendingBrowserOutboxCount(page), { timeout: 10_000 }).toBe(0);
+  await exerciseEncryptedNote(page);
   await exerciseAPIKeyManagement(page, request, onlineID);
   await exerciseTOMLSettings(page);
 
@@ -72,6 +73,30 @@ async function login(page: Page) {
     await page.getByRole('button', { name: 'Log in' }).click();
   }
   await page.waitForURL((url) => !url.pathname.startsWith('/login'));
+}
+
+async function exerciseEncryptedNote(page: Page) {
+  await page.getByRole('button', { name: 'New item' }).click();
+  const title = `Encrypted SPA E2E ${Date.now()}`;
+  const secret = 'encrypted browser body';
+  await page.locator('label').filter({ hasText: 'Title' }).locator('input').fill(title);
+  await page.locator('label').filter({ hasText: 'Body' }).locator('textarea').fill(secret);
+  await page.getByLabel('Encrypt body').check();
+  page.once('dialog', dialog => dialog.accept('playwright-passphrase'));
+  await page.getByRole('button', { name: 'Create' }).click();
+  await expect.poll(() => itemIDByTitle(page, title), { timeout: 10_000 }).toMatch(exoIDPatternForToday());
+  await page.getByText(title, { exact: true }).click();
+  await expect(page.getByText('This note body is encrypted.')).toBeVisible();
+  await expect(page.locator('.markdown-body')).toHaveCount(0);
+  page.once('dialog', dialog => dialog.accept('playwright-passphrase'));
+  await page.getByRole('button', { name: 'Unlock' }).click();
+  await expect(page.locator('.markdown-body')).toContainText(secret);
+  await page.getByRole('button', { name: 'Actions' }).click();
+  page.once('dialog', dialog => dialog.accept('playwright-passphrase'));
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(page.getByLabel('Raw markdown')).toContainText(secret);
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.getByText('This note body is encrypted.')).toBeVisible();
 }
 
 async function approvePendingClient(page: Page) {

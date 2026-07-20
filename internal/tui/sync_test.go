@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/gnur/exokephalos/internal/cache"
+	"github.com/gnur/exokephalos/internal/encryption"
 	"github.com/gnur/exokephalos/internal/markdown"
 	"github.com/gnur/exokephalos/internal/syncsvc"
 	"github.com/gnur/exokephalos/internal/version"
@@ -133,6 +134,62 @@ func TestSync_Deletions(t *testing.T) {
 	// Verify note was deleted on B
 	if _, err := os.Stat(notePathB); !os.IsNotExist(err) {
 		t.Fatalf("expected note to be deleted on B, but stat got: %v", err)
+	}
+}
+
+func TestSync_EncryptedBodyRemainsOpaque(t *testing.T) {
+	server, err := syncsvc.NewServer(filepath.Join(t.TempDir(), "server.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	mux := http.NewServeMux()
+	server.Register(mux)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	dirA, dirB := t.TempDir(), t.TempDir()
+	pubA, privA, _ := ed25519.GenerateKey(rand.Reader)
+	pubB, privB, _ := ed25519.GenerateKey(rand.Reader)
+	cA, _ := cache.New(dirA)
+	defer cA.Close()
+	cB, _ := cache.New(dirB)
+	defer cB.Close()
+	_ = cA.SetSyncStarted(true)
+	_ = cB.SetSyncStarted(true)
+	enrollClient(t, ts.URL, "encrypted-a", pubA, server)
+	enrollClient(t, ts.URL, "encrypted-b", pubB, server)
+	secret := "body that must never reach the sync server"
+	ciphertext, err := encryption.Encrypt("secret1", "passphrase", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pathA := filepath.Join(dirA, "secret.md")
+	fm := map[string]interface{}{"id": "secret1", "type": "note", "title": "Visible title", "encrypted": true}
+	if err := markdown.WriteFrontmatter(pathA, fm, ciphertext); err != nil {
+		t.Fatal(err)
+	}
+	if err := cA.NotifyWrite(pathA); err != nil {
+		t.Fatal(err)
+	}
+	if err := pushOutbox(ts.URL, "encrypted-a", privA, cA); err != nil {
+		t.Fatal(err)
+	}
+	var stored string
+	if err := server.DB().QueryRow(`SELECT body FROM items WHERE id = 'secret1'`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != ciphertext || bytes.Contains([]byte(stored), []byte(secret)) {
+		t.Fatal("server did not retain opaque ciphertext")
+	}
+	if _, err := pullSnapshot(dirB, ts.URL, "encrypted-b", privB, cB); err != nil {
+		t.Fatal(err)
+	}
+	_, received, err := markdown.ParseFrontmatter(filepath.Join(dirB, "secret.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if received != ciphertext {
+		t.Fatal("client B body changed during sync")
 	}
 }
 

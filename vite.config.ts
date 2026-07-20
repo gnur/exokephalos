@@ -7,6 +7,7 @@ const serverDocumentRoutes = /^\/(?:login|settings)(?:\/|$)/;
 
 export default defineConfig({
   root: 'web',
+  base: '/app-assets/',
   plugins: [
     react(),
     tailwindcss(),

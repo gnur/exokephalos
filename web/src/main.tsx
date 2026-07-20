@@ -7,7 +7,7 @@ import { Check, CloudOff, Menu, Plus, RefreshCw, Search, Settings, Tags, Trash2,
 import { parse as parseYAML, stringify as stringifyYAML } from 'yaml';
 import { approveSyncClient, changePassword, createAPIKey, importURL, listAPIKeys, listConfigs, listItemActions, listSyncClients, revokeAPIKey, revokeSyncClient, runAction, updateConfig, uploadAsset } from './api';
 import { db } from './db';
-import { decryptBody, encryptBody, isEncrypted } from './encryption';
+const encryption = () => import('./encryption');
 import { refreshFromServer, startSyncRuntime, syncOutbox } from './sync';
 import type { Action, APIKey, ConfigFile, Frontmatter, Item, OutboxEntry, SyncClient, View } from './types';
 import './styles.css';
@@ -507,10 +507,10 @@ function ItemDetail({ item, editRequest }: { item?: Item; editRequest: number })
     const { frontmatter } = parseRaw(raw);
     let { body } = parseRaw(raw);
     const title = String(frontmatter.title ?? item.id);
-    if (frontmatter.encrypted === true && !isEncrypted(body)) {
+    if (frontmatter.encrypted === true && !(await encryption()).isEncrypted(body)) {
       const passphrase = window.prompt('Passphrase for this note');
       if (!passphrase) return;
-      body = await encryptBody(item.id, passphrase, body);
+      body = await (await encryption()).encryptBody(item.id, passphrase, body);
     }
     const updated = { ...item, title, frontmatter, body, raw: rawFromParts(frontmatter, body), updated_at: new Date().toISOString() };
     await db.items.put(updated);
@@ -523,7 +523,7 @@ function ItemDetail({ item, editRequest }: { item?: Item; editRequest: number })
     const passphrase = window.prompt('Passphrase for this note');
     if (!passphrase) return;
     try {
-      const plain = await decryptBody(item.id, passphrase, item.body);
+      const plain = await (await encryption()).decryptBody(item.id, passphrase, item.body);
       setDecryptedBody(plain);
       setRaw(rawFromParts(item.frontmatter, plain));
     } catch {
@@ -613,7 +613,7 @@ function CreateView({ views, onCreated }: { views: View[]; onCreated: (id: strin
       const passphrase = window.prompt('Passphrase for this note');
       if (!passphrase) return;
       frontmatter.encrypted = true;
-      storedBody = await encryptBody(id, passphrase, body);
+      storedBody = await (await encryption()).encryptBody(id, passphrase, body);
     }
     const item: Item = { id, type, path, title, subtitle: '', tags: [], frontmatter, body: storedBody, raw: rawFromParts(frontmatter, storedBody), updated_at: created };
     await db.items.put(item);

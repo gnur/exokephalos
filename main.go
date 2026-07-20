@@ -30,7 +30,7 @@ var templatesFS embed.FS
 //go:embed static/*
 var staticFS embed.FS
 
-//go:embed web/dist
+//go:embed all:web/dist
 var spaFS embed.FS
 
 func main() {
@@ -168,6 +168,7 @@ func runServer(appCfg *config.AppConfig, dir string) {
 	mux.HandleFunc("GET /healthz", healthCheck)
 
 	spaSub, _ := fs.Sub(spaFS, "web/dist")
+	mux.Handle("GET /app-assets/", http.StripPrefix("/app-assets/", http.FileServer(http.FS(spaSub))))
 	mux.HandleFunc("GET /{path...}", serveSPA(spaSub))
 
 	handler := requestLoggingMiddleware(h.TimingMiddleware(authMgr.Middleware(h.CSRFMiddleware(h.ConfigReloadMiddleware(mux)))))
@@ -196,7 +197,10 @@ func serveSPA(spa fs.FS) http.HandlerFunc {
 			return
 		}
 		r2 := r.Clone(r.Context())
-		r2.URL.Path = "/index.html"
+		// Let FileServer resolve the root index directly. Passing /index.html
+		// triggers its canonicalization redirect to ./, which loops on nested
+		// SPA routes such as /views/notes/<id>.
+		r2.URL.Path = "/"
 		fileServer.ServeHTTP(w, r2)
 	}
 }

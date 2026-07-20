@@ -1,5 +1,3 @@
-import { argon2id } from 'hash-wasm';
-
 const prefix = 'exo-encrypted:v1:';
 type Envelope = { v: 1; kdf: 'argon2id'; m: number; t: number; p: number; s: string; n: string; ct: string };
 const bytes = new TextEncoder();
@@ -7,6 +5,7 @@ const b64 = (v: Uint8Array) => btoa(String.fromCharCode(...v)).replaceAll('+', '
 const unb64 = (s: string) => Uint8Array.from(atob(s.replaceAll('-', '+').replaceAll('_', '/').padEnd(Math.ceil(s.length / 4) * 4, '=')), c => c.charCodeAt(0));
 const aad = (id: string) => bytes.encode(`exo-encrypted:v1\0${id}`);
 async function key(passphrase: string, salt: Uint8Array, e: Pick<Envelope, 'm'|'t'|'p'>) {
+  const { argon2id } = await import('hash-wasm');
   return argon2id({ password: passphrase, salt, memorySize: e.m, iterations: e.t, parallelism: e.p, hashLength: 32, outputType: 'binary' }) as Promise<Uint8Array>;
 }
 export function isEncrypted(body: string) { return body.startsWith(prefix); }

@@ -85,7 +85,11 @@ async function exerciseEncryptedNote(page: Page) {
   page.once('dialog', dialog => dialog.accept('playwright-passphrase'));
   await page.getByRole('button', { name: 'Create' }).click();
   await expect.poll(() => itemIDByTitle(page, title), { timeout: 10_000 }).toMatch(exoIDPatternForToday());
-  await page.getByText(title, { exact: true }).click();
+  const id = await itemIDByTitle(page, title);
+  await page.evaluate((noteID) => {
+    history.pushState(null, '', `/views/notes/${noteID}?pane=editor`);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, id);
   await expect(page.getByText('This note body is encrypted.')).toBeVisible();
   await expect(page.locator('.markdown-body')).toHaveCount(0);
   page.once('dialog', dialog => dialog.accept('playwright-passphrase'));

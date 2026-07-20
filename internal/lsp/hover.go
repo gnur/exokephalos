@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/gnur/exokephalos/internal/cache"
-	"github.com/modern-dev/go-lsp/protocol"
+	"go.lsp.dev/protocol"
 )
 
 func GetHover(ctx context.Context, c *cache.Cache, text string, line, char int) (*protocol.Hover, error) {
@@ -18,7 +18,7 @@ func GetHover(ctx context.Context, c *cache.Cache, text string, line, char int) 
 	item := findNoteByIDOrTitle(c, link.ID)
 	if item == nil {
 		return &protocol.Hover{
-			Contents: protocol.MarkupContent{
+			Contents: &protocol.MarkupContent{
 				Kind:  protocol.MarkupKindMarkdown,
 				Value: fmt.Sprintf("*Note not found: `%s`*", link.ID),
 			},
@@ -39,10 +39,9 @@ func GetHover(ctx context.Context, c *cache.Cache, text string, line, char int) 
 	content := fmt.Sprintf("## %s\n\n**Tags:** %s\n\n---\n\n%s", title, tags, body)
 
 	return &protocol.Hover{
-		Contents: protocol.MarkupContent{
+		Contents: &protocol.MarkupContent{
 			Kind:  protocol.MarkupKindMarkdown,
 			Value: content,
 		},
 	}, nil
 }
-

@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/gnur/exokephalos/internal/cache"
-	"github.com/modern-dev/go-lsp/protocol"
+	"go.lsp.dev/protocol"
 )
 
 func GetInlayHints(ctx context.Context, c *cache.Cache, text string, startLine, endLine int) ([]protocol.InlayHint, error) {
@@ -45,8 +45,8 @@ func GetInlayHints(ctx context.Context, c *cache.Cache, text string, startLine, 
 					Line:      uint32(lineIdx),
 					Character: uint32(link.EndCol),
 				},
-				Label:      " " + title,
-				Kind:       &kind,
+				Label:       protocol.String(" " + title),
+				Kind:        kind,
 				PaddingLeft: &paddingLeft,
 			})
 		}
@@ -54,4 +54,3 @@ func GetInlayHints(ctx context.Context, c *cache.Cache, text string, startLine, 
 
 	return hints, nil
 }
-

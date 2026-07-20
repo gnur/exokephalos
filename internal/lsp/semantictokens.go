@@ -4,11 +4,11 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/modern-dev/go-lsp/protocol"
+	"go.lsp.dev/protocol"
 )
 
 var SemanticTokenLegend = protocol.SemanticTokensLegend{
-	TokenTypes:    []string{"decorator", "keyword"},
+	TokenTypes:     []string{"decorator", "keyword"},
 	TokenModifiers: []string{},
 }
 

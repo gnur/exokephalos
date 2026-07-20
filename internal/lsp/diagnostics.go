@@ -3,10 +3,11 @@ package lsp
 import (
 	"context"
 
-	"github.com/modern-dev/go-lsp/protocol"
+	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
-func (s *Server) publishDiagnostics(uri protocol.DocumentURI, text string) {
+func (s *Server) publishDiagnostics(uri uri.URI, text string) {
 	diagnostics := []protocol.Diagnostic{} // Initialize as empty slice, not nil
 
 	if text != "" {
@@ -29,9 +30,9 @@ func (s *Server) publishDiagnostics(uri protocol.DocumentURI, text string) {
 					Start: protocol.Position{Line: uint32(link.Line), Character: uint32(link.StartCol)},
 					End:   protocol.Position{Line: uint32(link.Line), Character: uint32(link.EndCol)},
 				},
-				Severity: &severity,
-				Source:   &source,
-				Message:  "Note not found: " + link.ID,
+				Severity: severity,
+				Source:   protocol.NewOptional(source),
+				Message:  protocol.String("Note not found: " + link.ID),
 			})
 		}
 	}

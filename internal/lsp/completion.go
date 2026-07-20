@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/gnur/exokephalos/internal/cache"
-	"github.com/modern-dev/go-lsp/protocol"
+	"go.lsp.dev/protocol"
 )
 
 type CompletionContext int
@@ -199,10 +199,10 @@ func getLinkCompletions(ctx context.Context, c *cache.Cache, prefix string) ([]p
 			titleStr := title
 			completions = append(completions, protocol.CompletionItem{
 				Label:      title,
-				FilterText: &titleStr,
-				InsertText: &item.ID,
-				Kind:       &kind,
-				Detail:     &item.ID,
+				FilterText: protocol.NewOptional(titleStr),
+				InsertText: protocol.NewOptional(item.ID),
+				Kind:       kind,
+				Detail:     protocol.NewOptional(item.ID),
 			})
 		}
 	}
@@ -232,8 +232,8 @@ func getTagCompletions(ctx context.Context, c *cache.Cache, prefix string) ([]pr
 			detail := formatTagCount(count)
 			completions = append(completions, protocol.CompletionItem{
 				Label:  tag,
-				Kind:   &kind,
-				Detail: &detail,
+				Kind:   kind,
+				Detail: protocol.NewOptional(detail),
 			})
 		}
 	}

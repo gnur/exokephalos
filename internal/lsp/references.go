@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/gnur/exokephalos/internal/cache"
-	"github.com/modern-dev/go-lsp/protocol"
+	"go.lsp.dev/protocol"
 )
 
 func GetReferences(ctx context.Context, c *cache.Cache, text string, line, char int) ([]protocol.Location, error) {

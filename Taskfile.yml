@@ -52,6 +52,13 @@ tasks:
       - static/js/htmx.min.js
       - static/js/chart.min.js
 
+  deps:update:
+    desc: Update npm and Go dependencies
+    cmds:
+      - npm update
+      - go get -u ./...
+      - go mod tidy
+
   css:watch:
     desc: Watch and rebuild Tailwind CSS on changes
     cmds:

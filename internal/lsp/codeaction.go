@@ -2,14 +2,15 @@ package lsp
 
 import (
 	"context"
-	"strings"
 	"slices"
+	"strings"
 
 	"github.com/gnur/exokephalos/internal/markdown"
-	"github.com/modern-dev/go-lsp/protocol"
+	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
-func GetCodeActions(ctx context.Context, text string, line int, uri protocol.DocumentURI) ([]protocol.CodeAction, error) {
+func GetCodeActions(ctx context.Context, text string, line int, uri uri.URI) ([]protocol.CodeAction, error) {
 	lines := strings.Split(text, "\n")
 	if line >= len(lines) {
 		return nil, nil
@@ -50,12 +51,11 @@ func GetCodeActions(ctx context.Context, text string, line int, uri protocol.Doc
 	return actions, nil
 }
 
-
 func containsTag(tags []string, tag string) bool {
 	return slices.Contains(tags, tag)
 }
 
-func createMarkDoneAction(text string, uri protocol.DocumentURI) *protocol.CodeAction {
+func createMarkDoneAction(text string, uri uri.URI) *protocol.CodeAction {
 	lines := strings.Split(text, "\n")
 	var tagsLineIdx = -1
 	var tagsContent string
@@ -76,21 +76,24 @@ func createMarkDoneAction(text string, uri protocol.DocumentURI) *protocol.CodeA
 
 	title := "Mark as done"
 	kind := protocol.CodeActionKindQuickFix
-	data := any(map[string]any{
+	data, err := protocol.Marshal(map[string]any{
 		"uri":        string(uri),
 		"actionType": "markDone",
 		"tagLineIdx": tagsLineIdx,
 		"newLine":    newLine,
 	})
+	if err != nil {
+		return nil
+	}
 
 	return &protocol.CodeAction{
 		Title: title,
 		Kind:  &kind,
-		Data:  &data,
+		Data:  data,
 	}
 }
 
-func createBookStatusActions(text string, uri protocol.DocumentURI, tags []string) []protocol.CodeAction {
+func createBookStatusActions(text string, uri uri.URI, tags []string) []protocol.CodeAction {
 	var actions []protocol.CodeAction
 	statuses := []string{"to-read", "reading", "read"}
 
@@ -132,16 +135,19 @@ func createBookStatusActions(text string, uri protocol.DocumentURI, tags []strin
 
 		title := "Mark as " + status
 		kind := protocol.CodeActionKindQuickFix
-		data := any(map[string]any{
+		data, err := protocol.Marshal(map[string]any{
 			"uri":        string(uri),
 			"actionType": "bookStatus",
 			"tagLineIdx": tagsLineIdx,
 			"newLine":    newLine,
 		})
+		if err != nil {
+			continue
+		}
 		actions = append(actions, protocol.CodeAction{
 			Title: title,
 			Kind:  &kind,
-			Data:  &data,
+			Data:  data,
 		})
 	}
 
@@ -162,7 +168,7 @@ func isListItem(line string) bool {
 	return false
 }
 
-func createStrikethroughAction(line string, lineNum int, uri protocol.DocumentURI) *protocol.CodeAction {
+func createStrikethroughAction(line string, lineNum int, uri uri.URI) *protocol.CodeAction {
 	trimmed := strings.TrimSpace(line)
 	indent := line[:len(line)-len(trimmed)]
 
@@ -196,16 +202,19 @@ func createStrikethroughAction(line string, lineNum int, uri protocol.DocumentUR
 
 	title := "Toggle strikethrough"
 	kind := protocol.CodeActionKindRefactor
-	data := any(map[string]any{
+	data, err := protocol.Marshal(map[string]any{
 		"uri":     string(uri),
 		"line":    lineNum,
 		"newLine": newLine,
 	})
+	if err != nil {
+		return nil
+	}
 
 	return &protocol.CodeAction{
 		Title: title,
 		Kind:  &kind,
-		Data:  &data,
+		Data:  data,
 	}
 }
 
@@ -214,8 +223,8 @@ func ResolveCodeAction(ctx context.Context, action *protocol.CodeAction) (*proto
 		return action, nil
 	}
 
-	dataMap, ok := (*action.Data).(map[string]any)
-	if !ok {
+	var dataMap map[string]any
+	if err := protocol.Unmarshal(action.Data, &dataMap); err != nil {
 		return action, nil
 	}
 
@@ -223,7 +232,7 @@ func ResolveCodeAction(ctx context.Context, action *protocol.CodeAction) (*proto
 	if !ok {
 		return action, nil
 	}
-	uri := protocol.DocumentURI(uriStr)
+	uri := uri.URI(uriStr)
 
 	actionType, _ := dataMap["actionType"].(string)
 
@@ -237,7 +246,7 @@ func ResolveCodeAction(ctx context.Context, action *protocol.CodeAction) (*proto
 	}
 }
 
-func resolveStrikethrough(action *protocol.CodeAction, uri protocol.DocumentURI, dataMap map[string]any) (*protocol.CodeAction, error) {
+func resolveStrikethrough(action *protocol.CodeAction, documentURI uri.URI, dataMap map[string]any) (*protocol.CodeAction, error) {
 	lineNum, ok := dataMap["line"].(float64)
 	if !ok {
 		return action, nil
@@ -249,8 +258,8 @@ func resolveStrikethrough(action *protocol.CodeAction, uri protocol.DocumentURI,
 
 	line := int(lineNum)
 	action.Edit = &protocol.WorkspaceEdit{
-		Changes: map[protocol.DocumentURI][]protocol.TextEdit{
-			uri: {
+		Changes: map[uri.URI][]protocol.TextEdit{
+			documentURI: {
 				{
 					Range: protocol.Range{
 						Start: protocol.Position{Line: uint32(line), Character: 0},
@@ -265,7 +274,7 @@ func resolveStrikethrough(action *protocol.CodeAction, uri protocol.DocumentURI,
 	return action, nil
 }
 
-func resolveMarkDone(action *protocol.CodeAction, uri protocol.DocumentURI, dataMap map[string]any) (*protocol.CodeAction, error) {
+func resolveMarkDone(action *protocol.CodeAction, documentURI uri.URI, dataMap map[string]any) (*protocol.CodeAction, error) {
 	tagLineIdx, ok := dataMap["tagLineIdx"].(float64)
 	if !ok {
 		return action, nil
@@ -277,8 +286,8 @@ func resolveMarkDone(action *protocol.CodeAction, uri protocol.DocumentURI, data
 
 	line := int(tagLineIdx)
 	action.Edit = &protocol.WorkspaceEdit{
-		Changes: map[protocol.DocumentURI][]protocol.TextEdit{
-			uri: {
+		Changes: map[uri.URI][]protocol.TextEdit{
+			documentURI: {
 				{
 					Range: protocol.Range{
 						Start: protocol.Position{Line: uint32(line), Character: 0},
@@ -293,7 +302,7 @@ func resolveMarkDone(action *protocol.CodeAction, uri protocol.DocumentURI, data
 	return action, nil
 }
 
-func resolveBookStatus(action *protocol.CodeAction, uri protocol.DocumentURI, dataMap map[string]any) (*protocol.CodeAction, error) {
+func resolveBookStatus(action *protocol.CodeAction, documentURI uri.URI, dataMap map[string]any) (*protocol.CodeAction, error) {
 	tagLineIdx, ok := dataMap["tagLineIdx"].(float64)
 	if !ok {
 		return action, nil
@@ -305,8 +314,8 @@ func resolveBookStatus(action *protocol.CodeAction, uri protocol.DocumentURI, da
 
 	line := int(tagLineIdx)
 	action.Edit = &protocol.WorkspaceEdit{
-		Changes: map[protocol.DocumentURI][]protocol.TextEdit{
-			uri: {
+		Changes: map[uri.URI][]protocol.TextEdit{
+			documentURI: {
 				{
 					Range: protocol.Range{
 						Start: protocol.Position{Line: uint32(line), Character: 0},

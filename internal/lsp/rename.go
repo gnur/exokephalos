@@ -8,10 +8,11 @@ import (
 
 	"github.com/gnur/exokephalos/internal/cache"
 	"github.com/gnur/exokephalos/internal/markdown"
-	"github.com/modern-dev/go-lsp/protocol"
+	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
-func PrepareRename(ctx context.Context, c *cache.Cache, text string, line, char int) (*protocol.PrepareRenameResult, error) {
+func PrepareRename(ctx context.Context, c *cache.Cache, text string, line, char int) (protocol.PrepareRenameResult, error) {
 	lines := strings.Split(text, "\n")
 	if line >= len(lines) {
 		return nil, nil
@@ -22,14 +23,14 @@ func PrepareRename(ctx context.Context, c *cache.Cache, text string, line, char 
 		note := findNoteByID(c, link.ID)
 		if note != nil {
 			title := note.Title("title")
-			result := protocol.PrepareRenameResult(protocol.PrepareRenamePlaceholder{
+			result := protocol.PrepareRenameResult(&protocol.PrepareRenamePlaceholder{
 				Range: protocol.Range{
 					Start: protocol.Position{Line: uint32(link.Line), Character: uint32(link.StartCol)},
 					End:   protocol.Position{Line: uint32(link.Line), Character: uint32(link.EndCol)},
 				},
 				Placeholder: title,
 			})
-			return &result, nil
+			return result, nil
 		}
 		return nil, nil
 	}
@@ -44,14 +45,14 @@ func PrepareRename(ctx context.Context, c *cache.Cache, text string, line, char 
 			startCol = len(currentLine) - len(trimmed) + 7
 		}
 		endCol := startCol + len(stripped)
-		result := protocol.PrepareRenameResult(protocol.PrepareRenamePlaceholder{
+		result := protocol.PrepareRenameResult(&protocol.PrepareRenamePlaceholder{
 			Range: protocol.Range{
 				Start: protocol.Position{Line: uint32(line), Character: uint32(startCol)},
 				End:   protocol.Position{Line: uint32(line), Character: uint32(endCol)},
 			},
 			Placeholder: stripped,
 		})
-		return &result, nil
+		return result, nil
 	}
 
 	return nil, nil
@@ -117,7 +118,7 @@ func ReworkEdits(ctx context.Context, c *cache.Cache, text string, line, char in
 
 	targetURI := pathToURI(targetPath)
 	return &protocol.WorkspaceEdit{
-		Changes: map[protocol.DocumentURI][]protocol.TextEdit{
+		Changes: map[uri.URI][]protocol.TextEdit{
 			targetURI: {
 				{
 					Range: protocol.Range{
@@ -130,4 +131,3 @@ func ReworkEdits(ctx context.Context, c *cache.Cache, text string, line, char in
 		},
 	}, nil
 }
-

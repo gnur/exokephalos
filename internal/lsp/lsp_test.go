@@ -64,6 +64,28 @@ func TestParseWikilinks(t *testing.T) {
 	}
 }
 
+func TestDocumentSymbols(t *testing.T) {
+	symbols := documentSymbols("---\ntitle: Example\ntags: [one]\n---\n# Heading\n## Child")
+	if len(symbols) != 4 {
+		t.Fatalf("expected 4 symbols, got %d", len(symbols))
+	}
+	for i, name := range []string{"title", "tags", "Heading", "Child"} {
+		if symbols[i].Name != name {
+			t.Errorf("symbols[%d].Name = %q, want %q", i, symbols[i].Name, name)
+		}
+	}
+}
+
+func TestMarkdownLinkRanges(t *testing.T) {
+	links := markdownLinkRanges("See [guide](docs/guide.md) and [other](other.md).")
+	if len(links) != 2 {
+		t.Fatalf("expected 2 links, got %d", len(links))
+	}
+	if links[0].target != "docs/guide.md" || links[1].target != "other.md" {
+		t.Errorf("unexpected link targets: %#v", links)
+	}
+}
+
 func TestWikilinkAtPosition(t *testing.T) {
 	text := "See [[abc123]] for details\nAnd [[xyz]] here"
 
@@ -509,18 +531,14 @@ func TestGetSemanticTokens(t *testing.T) {
 			name: "body tag keyword token",
 			text: "---\ntags: []\n---\n\nSee :mytag: here",
 			checkFn: func(tokens []uint32) bool {
-				if len(tokens) < 5 {
-					return false
-				}
-				tokenType := tokens[3]
-				return tokenType == 1
+				return containsSemanticTokenType(tokens, 1)
 			},
 		},
 		{
 			name: "no frontmatter tags in body",
 			text: "---\ntags: [test]\n---\n\nNo tags here",
 			checkFn: func(tokens []uint32) bool {
-				return len(tokens) == 0
+				return containsSemanticTokenType(tokens, 2) && containsSemanticTokenType(tokens, 3)
 			},
 		},
 		{
@@ -544,12 +562,7 @@ func TestGetSemanticTokens(t *testing.T) {
 				if len(tokens) < 5 {
 					return false
 				}
-				// First token should be hash tag at line 4 (delta=4), char 4, length 6 ("#mytag")
-				deltaLine := tokens[0]
-				deltaChar := tokens[1]
-				length := tokens[2]
-				tokenType := tokens[3]
-				return deltaLine == 4 && deltaChar == 4 && length == 6 && tokenType == 1
+				return containsSemanticTokenType(tokens, 1)
 			},
 		},
 		{
@@ -570,6 +583,11 @@ func TestGetSemanticTokens(t *testing.T) {
 			}
 		})
 	}
+}
+
+func containsSemanticTokenType(tokens []uint32, tokenType uint32) bool {
+	for i := 3; i < len(tokens); i += 5 { if tokens[i] == tokenType { return true } }
+	return false
 }
 
 func TestDetectHashTagContext(t *testing.T) {

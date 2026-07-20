@@ -16,6 +16,8 @@ const (
 	CompletionContextFrontmatterTags
 	CompletionContextBodyTag
 	CompletionContextWikilink
+	CompletionContextFrontmatterKey
+	CompletionContextFrontmatterType
 )
 
 func DetectCompletionContext(text string, line, char int) (CompletionContext, string) {
@@ -35,6 +37,12 @@ func DetectCompletionContext(text string, line, char int) (CompletionContext, st
 
 	fmEnd := findFrontmatterEnd(text)
 	if line <= fmEnd {
+		if strings.HasPrefix(strings.TrimSpace(currentLine), "type:") {
+			return CompletionContextFrontmatterType, strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(currentLine[:char]), "type:"))
+		}
+		if !strings.Contains(currentLine[:char], ":") && strings.TrimSpace(currentLine[:char]) != "" {
+			return CompletionContextFrontmatterKey, strings.TrimSpace(currentLine[:char])
+		}
 		if ctx, p := detectFrontmatterTagContext(lines, line, char); ctx != CompletionContextNone {
 			return ctx, p
 		}
@@ -162,9 +170,40 @@ func GetCompletions(ctx context.Context, c *cache.Cache, compCtx CompletionConte
 		return getLinkCompletions(ctx, c, prefix)
 	case CompletionContextFrontmatterTags, CompletionContextBodyTag:
 		return getTagCompletions(ctx, c, prefix)
+	case CompletionContextFrontmatterKey:
+		return getFrontmatterKeyCompletions(prefix), nil
+	case CompletionContextFrontmatterType:
+		return getTypeCompletions(ctx, c, prefix)
 	default:
 		return nil, nil
 	}
+}
+
+func getFrontmatterKeyCompletions(prefix string) []protocol.CompletionItem {
+	keys := []string{"id", "type", "title", "tags", "created", "updated", "aliases"}
+	items := make([]protocol.CompletionItem, 0, len(keys))
+	for _, key := range keys {
+		if strings.HasPrefix(key, strings.ToLower(prefix)) {
+			items = append(items, protocol.CompletionItem{Label: key, Kind: protocol.CompletionItemKindProperty})
+		}
+	}
+	return items
+}
+
+func getTypeCompletions(ctx context.Context, c *cache.Cache, prefix string) ([]protocol.CompletionItem, error) {
+	items, err := c.All()
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	result := []protocol.CompletionItem{}
+	for _, item := range items {
+		if item.Type != "" && !seen[item.Type] && strings.HasPrefix(strings.ToLower(item.Type), strings.ToLower(prefix)) {
+			seen[item.Type] = true
+			result = append(result, protocol.CompletionItem{Label: item.Type, Kind: protocol.CompletionItemKindClass})
+		}
+	}
+	return result, nil
 }
 
 func getLinkCompletions(ctx context.Context, c *cache.Cache, prefix string) ([]protocol.CompletionItem, error) {

@@ -14,7 +14,10 @@ func GetReferences(ctx context.Context, c *cache.Cache, text string, line, char 
 		return nil, nil
 	}
 
-	targetID := strings.ToLower(link.ID)
+	target := findNoteByIDOrTitle(c, link.ID)
+	if target == nil {
+		return nil, nil
+	}
 
 	items, err := c.All()
 	if err != nil {
@@ -26,7 +29,8 @@ func GetReferences(ctx context.Context, c *cache.Cache, text string, line, char 
 	for _, item := range items {
 		itemLinks := ParseWikilinks(item.Body)
 		for _, l := range itemLinks {
-			if strings.ToLower(l.ID) == targetID {
+			linked := findNoteByIDOrTitle(c, l.ID)
+			if linked != nil && strings.EqualFold(linked.ID, target.ID) {
 				locations = append(locations, protocol.Location{
 					URI: pathToURI(item.Path),
 					Range: protocol.Range{

@@ -7,6 +7,8 @@ import (
 	"sync"
 
 	"github.com/gnur/exokephalos/internal/cache"
+	"github.com/gnur/exokephalos/internal/config"
+	"github.com/gnur/exokephalos/internal/repo"
 	"go.lsp.dev/jsonrpc2"
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
@@ -25,12 +27,15 @@ type Server struct {
 	protocol.UnimplementedServer
 	client    protocol.Client
 	cache     *cache.Cache
+	config    *config.Config
+	repo      *repo.Repo
+	baseDir   string
 	documents map[uri.URI]string
 	mu        sync.RWMutex
 }
 
-func NewServer(c *cache.Cache) *Server {
-	return &Server{cache: c, documents: make(map[uri.URI]string)}
+func NewServer(c *cache.Cache, cfg *config.Config, baseDir string) *Server {
+	return &Server{cache: c, config: cfg, repo: repo.New(baseDir, c), baseDir: baseDir, documents: make(map[uri.URI]string)}
 }
 
 func (s *Server) Initialize(ctx context.Context, params *protocol.InitializeParams) (*protocol.InitializeResult, error) {
@@ -53,8 +58,11 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 				Legend: SemanticTokenLegend,
 				Full:   protocol.Boolean(true),
 			},
-			ReferencesProvider: protocol.Boolean(true),
-			RenameProvider:     &protocol.RenameOptions{PrepareProvider: &prepareProvider},
+			ReferencesProvider:      protocol.Boolean(true),
+			RenameProvider:          &protocol.RenameOptions{PrepareProvider: &prepareProvider},
+			DocumentSymbolProvider:  protocol.Boolean(true),
+			DocumentLinkProvider:    &protocol.DocumentLinkOptions{},
+			WorkspaceSymbolProvider: protocol.Boolean(true),
 		},
 		ServerInfo: protocol.ServerInfo{Name: "exokephalos-lsp", Version: protocol.NewOptional(version)},
 	}, nil
@@ -153,6 +161,12 @@ func (s *Server) CodeAction(ctx context.Context, params *protocol.CodeActionPara
 	if err != nil {
 		return nil, err
 	}
+	if action := s.missingNoteAction(text, int(params.Range.Start.Line), int(params.Range.Start.Character)); action != nil {
+		actions = append(actions, *action)
+	}
+	if action := s.frontmatterAction(text, params.TextDocument.URI); action != nil {
+		actions = append(actions, *action)
+	}
 	result := make([]protocol.CommandOrCodeAction, len(actions))
 	for i := range actions {
 		result[i] = &actions[i]
@@ -161,7 +175,7 @@ func (s *Server) CodeAction(ctx context.Context, params *protocol.CodeActionPara
 }
 
 func (s *Server) CodeActionResolve(ctx context.Context, params *protocol.CodeAction) (*protocol.CodeAction, error) {
-	return ResolveCodeAction(ctx, params)
+	return s.resolveCodeAction(ctx, params)
 }
 
 func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams) ([]protocol.InlayHint, error) {
@@ -204,6 +218,26 @@ func (s *Server) SemanticTokensFull(ctx context.Context, params *protocol.Semant
 	return &protocol.SemanticTokens{Data: GetSemanticTokens(text)}, nil
 }
 
+func (s *Server) DocumentSymbol(ctx context.Context, params *protocol.DocumentSymbolParams) (protocol.DocumentSymbolResult, error) {
+	text, ok := s.document(params.TextDocument.URI)
+	if !ok {
+		return nil, nil
+	}
+	return protocol.DocumentSymbolSlice(documentSymbols(text)), nil
+}
+
+func (s *Server) DocumentLink(ctx context.Context, params *protocol.DocumentLinkParams) ([]protocol.DocumentLink, error) {
+	text, ok := s.document(params.TextDocument.URI)
+	if !ok {
+		return nil, nil
+	}
+	return s.documentLinks(text, params.TextDocument.URI), nil
+}
+
+func (s *Server) Symbols(ctx context.Context, params *protocol.WorkspaceSymbolParams) (protocol.WorkspaceSymbolResult, error) {
+	return s.workspaceSymbols(params.Query)
+}
+
 func (s *Server) document(documentURI uri.URI) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -211,8 +245,8 @@ func (s *Server) document(documentURI uri.URI) (string, bool) {
 	return text, ok
 }
 
-func RunServer(c *cache.Cache) error {
-	server := NewServer(c)
+func RunServer(c *cache.Cache, cfg *config.Config, baseDir string) error {
+	server := NewServer(c, cfg, baseDir)
 	stream := jsonrpc2.NewStream(&stdioReadWriteCloser{reader: os.Stdin, writer: os.Stdout})
 	_, conn, client := protocol.NewServer(context.Background(), server, stream)
 	server.client = client

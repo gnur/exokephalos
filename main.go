@@ -92,7 +92,7 @@ func main() {
 	defer c.Close()
 
 	if len(os.Args) > 1 && os.Args[1] == "lsp" {
-		runLSP(c)
+		runLSP(c, cfg, dir)
 	} else {
 		if err := tui.Run(cfg, dir, c, appCfg); err != nil {
 			log.Fatalf("TUI error: %v", err)
@@ -272,8 +272,8 @@ func requestLoggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func runLSP(c *cache.Cache) {
-	if err := lsp.RunServer(c); err != nil {
+func runLSP(c *cache.Cache, cfg *config.Config, dir string) {
+	if err := lsp.RunServer(c, cfg, dir); err != nil {
 		log.Fatalf("LSP error: %v", err)
 	}
 }

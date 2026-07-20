@@ -20,7 +20,7 @@ func PrepareRename(ctx context.Context, c *cache.Cache, text string, line, char 
 
 	link := WikilinkAtPosition(text, line, char)
 	if link != nil && link.ID != "" {
-		note := findNoteByID(c, link.ID)
+		note := findNoteByIDOrTitle(c, link.ID)
 		if note != nil {
 			title := note.Title("title")
 			result := protocol.PrepareRenameResult(&protocol.PrepareRenamePlaceholder{
@@ -63,7 +63,7 @@ func ReworkEdits(ctx context.Context, c *cache.Cache, text string, line, char in
 
 	link := WikilinkAtPosition(text, line, char)
 	if link != nil && link.ID != "" {
-		note := findNoteByID(c, link.ID)
+		note := findNoteByIDOrTitle(c, link.ID)
 		if note == nil {
 			return nil, fmt.Errorf("linked note not found: %s", link.ID)
 		}

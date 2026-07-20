@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/gnur/exokephalos/internal/cache"
 	"go.lsp.dev/protocol"
@@ -36,7 +37,21 @@ func GetHover(ctx context.Context, c *cache.Cache, text string, line, char int) 
 		body = body[:300] + "..."
 	}
 
-	content := fmt.Sprintf("## %s\n\n**Tags:** %s\n\n---\n\n%s", title, tags, body)
+	backlinks := 0
+	if items, err := c.All(); err == nil {
+		for _, candidate := range items {
+			for _, candidateLink := range ParseWikilinks(candidate.Body) {
+				if strings.EqualFold(candidateLink.ID, item.ID) || strings.EqualFold(candidateLink.ID, title) {
+					backlinks++
+				}
+			}
+		}
+	}
+	created := "unknown"
+	if !item.Created.IsZero() {
+		created = item.Created.Format(time.DateOnly)
+	}
+	content := fmt.Sprintf("## %s\n\n**Type:** %s  \n**Tags:** %s  \n**Created:** %s  \n**Backlinks:** %d\n\n---\n\n%s", title, item.Type, tags, created, backlinks, body)
 
 	return &protocol.Hover{
 		Contents: &protocol.MarkupContent{

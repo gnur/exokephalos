@@ -11,7 +11,31 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/gnur/exokephalos/internal/version"
 )
+
+func TestVersionEndpoint(t *testing.T) {
+	server, err := NewServer(filepath.Join(t.TempDir(), "server.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	mux := http.NewServeMux()
+	server.Register(mux)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/sync/version", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	var response map[string]string
+	if err := json.NewDecoder(rr.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["version"] != version.Version {
+		t.Errorf("version = %q, want %q", response["version"], version.Version)
+	}
+}
 
 func TestSignedSyncFlow(t *testing.T) {
 	server, err := NewServer(filepath.Join(t.TempDir(), "server.sqlite"))

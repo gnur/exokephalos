@@ -15,7 +15,28 @@ import (
 	"github.com/gnur/exokephalos/internal/cache"
 	"github.com/gnur/exokephalos/internal/markdown"
 	"github.com/gnur/exokephalos/internal/syncsvc"
+	"github.com/gnur/exokephalos/internal/version"
 )
+
+func TestCheckServerVersion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"version": version.Version})
+	}))
+	defer server.Close()
+	if err := checkServerVersion(server.URL); err != nil {
+		t.Fatalf("matching versions: %v", err)
+	}
+}
+
+func TestCheckServerVersionMismatch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"version": "other"})
+	}))
+	defer server.Close()
+	if err := checkServerVersion(server.URL); err == nil {
+		t.Fatal("expected version mismatch")
+	}
+}
 
 func TestSync_Deletions(t *testing.T) {
 	// 1. Setup sync server

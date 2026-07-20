@@ -19,6 +19,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gnur/exokephalos/internal/version"
+
 	"github.com/gnur/exokephalos/internal/cache"
 	"github.com/gnur/exokephalos/internal/config"
 	"github.com/gnur/exokephalos/internal/markdown"
@@ -112,11 +114,17 @@ func (s *Server) Register(mux *http.ServeMux) {
 }
 
 func (s *Server) RegisterAPI(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/sync/version", s.handleVersion)
 	mux.HandleFunc("POST /api/sync/enroll", s.handleEnroll)
 	mux.HandleFunc("GET /api/sync/enroll/status", s.handleEnrollStatus)
 	mux.HandleFunc("POST /api/sync/changes", s.requireSignature(s.handleChanges))
 	mux.HandleFunc("GET /api/sync/snapshot", s.requireSignature(s.handleSnapshot))
 	mux.HandleFunc("GET /api/sync/events", s.requireSignature(s.handleEvents))
+}
+
+func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"version": version.Version})
 }
 
 func (s *Server) RegisterWebEvents(mux *http.ServeMux) {

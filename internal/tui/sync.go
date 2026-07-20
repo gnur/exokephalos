@@ -20,12 +20,16 @@ import (
 	"github.com/gnur/exokephalos/internal/config"
 	"github.com/gnur/exokephalos/internal/markdown"
 	"github.com/gnur/exokephalos/internal/syncsvc"
+	"github.com/gnur/exokephalos/internal/version"
 )
 
 func startSyncCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) tea.Cmd {
 	return func() tea.Msg {
 		if c == nil || appCfg == nil || appCfg.Sync.ServerURL == "" {
 			return syncMsg{status: "error", err: fmt.Errorf("sync is not configured")}
+		}
+		if err := checkServerVersion(appCfg.Sync.ServerURL); err != nil {
+			return syncMsg{status: "version mismatch", err: err}
 		}
 		pub, priv, err := syncsvc.EnsureKeypair(appCfg.Sync.KeyPath)
 		if err != nil {
@@ -69,6 +73,9 @@ func syncStartupCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) te
 		if c == nil || appCfg == nil || appCfg.Sync.ServerURL == "" || !c.IsSyncStarted() {
 			return nil
 		}
+		if err := checkServerVersion(appCfg.Sync.ServerURL); err != nil {
+			return syncMsg{status: "version mismatch", err: err}
+		}
 		_, priv, err := syncsvc.EnsureKeypair(appCfg.Sync.KeyPath)
 		if err != nil {
 			return syncMsg{status: "error", err: err, retrySync: true}
@@ -97,6 +104,9 @@ func reconcileSyncCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) 
 		if c == nil || appCfg == nil || appCfg.Sync.ServerURL == "" || !c.IsSyncStarted() {
 			return nil
 		}
+		if err := checkServerVersion(appCfg.Sync.ServerURL); err != nil {
+			return syncMsg{status: "version mismatch", err: err}
+		}
 		_, priv, err := syncsvc.EnsureKeypair(appCfg.Sync.KeyPath)
 		if err != nil {
 			return syncMsg{status: "error", err: err, retrySync: true}
@@ -121,6 +131,34 @@ func reconcileSyncCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) 
 		}
 		return syncMsg{status: "connected", retrySync: true, configChanged: cfgChanged}
 	}
+}
+
+func checkServerVersion(serverURL string) error {
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(serverURL, "/")+"/api/sync/version", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("checking sync server version: %s", resp.Status)
+	}
+	var payload struct {
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return fmt.Errorf("decoding sync server version: %w", err)
+	}
+	if payload.Version == "" {
+		return fmt.Errorf("sync server did not report a version")
+	}
+	if payload.Version != version.Version {
+		return fmt.Errorf("sync server version %s does not match local version %s", payload.Version, version.Version)
+	}
+	return nil
 }
 
 func syncTickCmd(after time.Duration) tea.Cmd {

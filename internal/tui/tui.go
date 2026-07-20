@@ -21,6 +21,7 @@ import (
 	"github.com/gnur/exokephalos/internal/assets"
 	"github.com/gnur/exokephalos/internal/cache"
 	"github.com/gnur/exokephalos/internal/config"
+	"github.com/gnur/exokephalos/internal/encryption"
 	"github.com/gnur/exokephalos/internal/filter"
 	"github.com/gnur/exokephalos/internal/goodreads"
 	"github.com/gnur/exokephalos/internal/hardcover"
@@ -47,6 +48,7 @@ const (
 	modeURLImport
 	modeSyncOutbox
 	modeAttachImage
+	modeEncryptedEdit
 )
 
 // Pane focus for views with tags enabled
@@ -108,6 +110,9 @@ type Model struct {
 	hardcoverInput  textinput.Model
 	urlInput        textinput.Model
 	attachInput     textinput.Model
+	encryptedEdit   *scanner.Item
+	encryptedTemp   string
+	encryptedPass   string
 	actionInput     textinput.Model
 	viewMenuInput   string
 
@@ -142,6 +147,7 @@ type Model struct {
 }
 
 type refreshMsg struct{}
+type encryptedEditMsg struct{ err error }
 
 type dataLoadedMsg struct {
 	allItems []scanner.Item
@@ -358,6 +364,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case refreshMsg:
 		return m, tea.Batch(m.loadData(), m.reconcileIfStartedCmd())
+	case encryptedEditMsg:
+		defer func() {
+			if m.encryptedTemp != "" {
+				_ = os.Remove(m.encryptedTemp)
+			}
+			m.encryptedTemp = ""
+			m.encryptedPass = ""
+			m.encryptedEdit = nil
+		}()
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Editor error: %v", msg.err)
+			return m, nil
+		}
+		if m.encryptedEdit == nil {
+			return m, nil
+		}
+		plain, err := os.ReadFile(m.encryptedTemp)
+		if err != nil {
+			m.status = fmt.Sprintf("Read encrypted edit: %v", err)
+			return m, nil
+		}
+		body, err := encryption.Encrypt(m.encryptedEdit.ID, m.encryptedPass, string(plain))
+		if err != nil {
+			m.status = fmt.Sprintf("Encrypt edit: %v", err)
+			return m, nil
+		}
+		if err := markdown.WriteFrontmatter(m.encryptedEdit.Path, m.encryptedEdit.Frontmatter, body); err != nil {
+			m.status = fmt.Sprintf("Save encrypted edit: %v", err)
+			return m, nil
+		}
+		m.status = "Encrypted note saved"
+		return m, tea.Batch(m.loadData(), m.reconcileIfStartedCmd())
 
 	case dataLoadedMsg:
 		m.invalidateAllTagCounts()
@@ -473,6 +511,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleSyncOutboxKey(msg)
 	case modeAttachImage:
 		return m.handleAttachImageKey(msg)
+	case modeEncryptedEdit:
+		return m.handleEncryptedEditKey(msg)
 	case modeSearchTags:
 		return m.handleSearchTagsKey(msg)
 	case modeSearchItems:
@@ -1724,6 +1764,15 @@ func (m Model) editSelected() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	item := items[vs.cursor]
+	if item.Frontmatter["encrypted"] == true {
+		m.mode = modeEncryptedEdit
+		m.encryptedEdit = &item
+		m.attachInput.SetValue("")
+		m.attachInput.Prompt = "Passphrase: "
+		m.attachInput.EchoMode = textinput.EchoPassword
+		m.attachInput.Focus()
+		return m, textinput.Blink
+	}
 	if item.Path == "" {
 		return m, nil
 	}
@@ -1740,6 +1789,52 @@ func (m Model) editSelected() (tea.Model, tea.Cmd) {
 	return m, tea.ExecProcess(c, func(err error) tea.Msg {
 		return refreshMsg{}
 	})
+}
+
+func (m Model) handleEncryptedEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "esc" {
+		m.mode = modeNormal
+		m.encryptedEdit = nil
+		m.attachInput.Blur()
+		return m, nil
+	}
+	if msg.String() != "enter" {
+		var cmd tea.Cmd
+		m.attachInput, cmd = m.attachInput.Update(msg)
+		return m, cmd
+	}
+	if m.encryptedEdit == nil {
+		m.mode = modeNormal
+		return m, nil
+	}
+	pass := m.attachInput.Value()
+	plain, err := encryption.Decrypt(m.encryptedEdit.ID, pass, m.encryptedEdit.Body)
+	if err != nil {
+		m.status = "Unable to decrypt note"
+		return m, nil
+	}
+	f, err := os.CreateTemp("", "exokephalos-encrypted-*.md")
+	if err != nil {
+		m.status = fmt.Sprintf("Create temp edit: %v", err)
+		return m, nil
+	}
+	_ = f.Chmod(0600)
+	if _, err = f.WriteString(plain); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		m.status = fmt.Sprintf("Write temp edit: %v", err)
+		return m, nil
+	}
+	_ = f.Close()
+	m.encryptedTemp, m.encryptedPass, m.mode = f.Name(), pass, modeNormal
+	m.attachInput.Blur()
+	m.attachInput.EchoMode = textinput.EchoNormal
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vim"
+	}
+	c := exec.Command(editor, f.Name())
+	return m, tea.ExecProcess(c, func(err error) tea.Msg { return encryptedEditMsg{err} })
 }
 
 func (m Model) importBook(url string) (tea.Model, tea.Cmd) {

@@ -7,6 +7,7 @@ import { Check, CloudOff, Menu, Plus, RefreshCw, Search, Settings, Tags, Trash2,
 import { parse as parseYAML, stringify as stringifyYAML } from 'yaml';
 import { approveSyncClient, changePassword, createAPIKey, importURL, listAPIKeys, listConfigs, listItemActions, listSyncClients, revokeAPIKey, revokeSyncClient, runAction, updateConfig, uploadAsset } from './api';
 import { db } from './db';
+import { decryptBody, encryptBody, isEncrypted } from './encryption';
 import { refreshFromServer, startSyncRuntime, syncOutbox } from './sync';
 import type { Action, APIKey, ConfigFile, Frontmatter, Item, OutboxEntry, SyncClient, View } from './types';
 import './styles.css';
@@ -481,27 +482,53 @@ function ItemsView({ items, views, actions, selected, onSelect, viewID, subviewN
 function ItemDetail({ item, editRequest }: { item?: Item; editRequest: number }) {
   const [editing, setEditing] = useState(false);
   const [raw, setRaw] = useState('');
+  const [decryptedBody, setDecryptedBody] = useState<string | undefined>();
   const [uploadError, setUploadError] = useState('');
   const editorRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     setRaw(item ? item.raw || rawFromParts(item.frontmatter, item.body) : '');
+    setDecryptedBody(undefined);
     setEditing(false);
   }, [item?.id]);
   useEffect(() => {
-    if (item && editRequest > 0) setEditing(true);
-  }, [editRequest, item]);
+    if (!item || editRequest <= 0) return;
+    if (item.frontmatter.encrypted === true && decryptedBody === undefined) {
+      void unlock();
+      return;
+    }
+    setEditing(true);
+  }, [editRequest, item, decryptedBody]);
 
   if (!item) return <div className="empty-state">No items cached yet.</div>;
 
   async function save() {
     if (!item) return;
-    const { frontmatter, body } = parseRaw(raw);
+    const { frontmatter } = parseRaw(raw);
+    let { body } = parseRaw(raw);
     const title = String(frontmatter.title ?? item.id);
-    const updated = { ...item, title, frontmatter, body, raw, updated_at: new Date().toISOString() };
+    if (frontmatter.encrypted === true && !isEncrypted(body)) {
+      const passphrase = window.prompt('Passphrase for this note');
+      if (!passphrase) return;
+      body = await encryptBody(item.id, passphrase, body);
+    }
+    const updated = { ...item, title, frontmatter, body, raw: rawFromParts(frontmatter, body), updated_at: new Date().toISOString() };
     await db.items.put(updated);
     await enqueue({ id: crypto.randomUUID(), op: 'upsert_item', item_id: item.id, path: item.path, frontmatter, body });
     setEditing(false);
+    setDecryptedBody(undefined);
+  }
+
+  async function unlock() {
+    const passphrase = window.prompt('Passphrase for this note');
+    if (!passphrase) return;
+    try {
+      const plain = await decryptBody(item.id, passphrase, item.body);
+      setDecryptedBody(plain);
+      setRaw(rawFromParts(item.frontmatter, plain));
+    } catch {
+      setUploadError('Unable to decrypt note: incorrect passphrase or damaged body.');
+    }
   }
 
   async function remove() {
@@ -545,7 +572,7 @@ function ItemDetail({ item, editRequest }: { item?: Item; editRequest: number })
           {uploadError ? <p className="error-message" role="alert">{uploadError}</p> : null}
           <div className="button-row">
             <label className="button">Upload image<input hidden type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={(event) => void attach(event.target.files)} /></label>
-            <button className="button" onClick={() => setEditing(false)}>Cancel</button>
+            <button className="button" onClick={() => { setEditing(false); setDecryptedBody(undefined); }}>Cancel</button>
             <button className="button primary" onClick={() => void save()}>Save</button>
           </div>
         </div>
@@ -558,10 +585,10 @@ function ItemDetail({ item, editRequest }: { item?: Item; editRequest: number })
             </div>
             <button className="icon-button danger" onClick={() => void remove()} aria-label="Delete"><Trash2 size={19} /></button>
           </div>
-          <div className="markdown-view">
+          {item.frontmatter.encrypted === true && decryptedBody === undefined ? <div className="empty-state"><p>This note body is encrypted.</p><button className="button primary" onClick={() => void unlock()}>Unlock</button>{uploadError ? <p className="error-message" role="alert">{uploadError}</p> : null}</div> : <div className="markdown-view">
             <pre className="frontmatter-view">---{'\n'}{frontmatterText}{'\n'}---</pre>
-            <div className="markdown-body" dangerouslySetInnerHTML={{ __html: html }} />
-          </div>
+            <div className="markdown-body" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize((marked.parse(decryptedBody ?? parsed.body, { async: false }) as string).replaceAll('src="assets/', 'src="/assets/')) }} />
+          </div>}
         </>
       )}
     </article>

@@ -724,7 +724,7 @@ Each markdown file uses YAML frontmatter for metadata. An `id` field is auto-inj
 ## Deploy
 
 ```bash
-task deploy        # Build locally + deploy to remote servers
+task deploy        # Push the container image and install locally
 task deploy-local  # Build and install to ~/.local/bin/
 ```
 

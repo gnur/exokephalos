@@ -211,11 +211,10 @@ tasks:
       - go test -bench=Benchmark -benchtime=1000x -cpu=1,2,4,8 -v -run='^$' -count=1 -timeout=600s
 
   deploy:
-    desc: Deploy to both fedora and imp, and install locally
+    desc: Push the container image and install locally
     cmds:
+      - task: container:push
       - task: deploy-local
-      - task: deploy-fedora
-      - task: deploy-imp
 
   deploy-local:
     desc: Build native binary and install to ~/.local/bin/
@@ -233,32 +232,4 @@ tasks:
       - go build -ldflags="{{.LDFLAGS}}" -o xo .
       - mkdir -p ~/prive/exo-staging/bin
       - cp xo ~/prive/exo-staging/bin/xo
-      - rm xo
-
-  deploy-fedora:
-    desc: Build linux/amd64 binary and deploy to fedora
-    deps: [css, vendor-js]
-    cmds:
-      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="{{.LDFLAGS}}" -o xo .
-      - ssh fedora "mkdir -p ~/.local/bin ~/.config/systemd/user"
-      - ssh fedora "systemctl --user stop exo || true"
-      - scp xo fedora:/home/erwin/.local/bin/xo
-      - ssh fedora "chmod +x ~/.local/bin/xo"
-      - scp deploy/exo.service fedora:/home/erwin/.config/systemd/user/exo.service
-      - ssh fedora "systemctl --user daemon-reload && systemctl --user enable exo && systemctl --user start exo"
-      - ssh fedora "tailscale serve --service=svc:exo http://localhost:8293"
-      - rm xo
-
-  deploy-imp:
-    desc: Build linux/amd64 binary and deploy to imp
-    deps: [css, vendor-js]
-    cmds:
-      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="{{.LDFLAGS}}" -o xo .
-      - ssh imp "mkdir -p ~/.local/bin ~/.config/systemd/user"
-      - ssh imp "systemctl --user stop exo || true"
-      - scp xo imp:/home/erwin/.local/bin/xo
-      - ssh imp "chmod +x ~/.local/bin/xo"
-      - scp deploy/exo.service imp:/home/erwin/.config/systemd/user/exo.service
-      - ssh imp "systemctl --user daemon-reload && systemctl --user enable exo && systemctl --user start exo"
-      - ssh imp "sudo tailscale serve --service=svc:exo http://localhost:8293"
       - rm xo

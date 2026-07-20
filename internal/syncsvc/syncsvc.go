@@ -21,6 +21,7 @@ import (
 
 	"github.com/gnur/exokephalos/internal/version"
 
+	"github.com/gnur/exokephalos/internal/assets"
 	"github.com/gnur/exokephalos/internal/cache"
 	"github.com/gnur/exokephalos/internal/config"
 	"github.com/gnur/exokephalos/internal/markdown"
@@ -43,6 +44,10 @@ type Change struct {
 	Frontmatter map[string]interface{} `json:"frontmatter,omitempty"`
 	Body        string                 `json:"body,omitempty"`
 	Content     string                 `json:"content,omitempty"`
+	Hash        string                 `json:"hash,omitempty"`
+	MIME        string                 `json:"mime,omitempty"`
+	Size        int64                  `json:"size,omitempty"`
+	Deleted     bool                   `json:"deleted,omitempty"`
 }
 
 type ChangeResponse struct {
@@ -120,6 +125,8 @@ func (s *Server) RegisterAPI(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sync/changes", s.requireSignature(s.handleChanges))
 	mux.HandleFunc("GET /api/sync/snapshot", s.requireSignature(s.handleSnapshot))
 	mux.HandleFunc("GET /api/sync/events", s.requireSignature(s.handleEvents))
+	mux.HandleFunc("PUT /api/sync/assets/{path...}", s.requireSignature(s.handleAssetUpload))
+	mux.HandleFunc("GET /api/sync/assets/{path...}", s.requireSignature(s.handleAssetDownload))
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
@@ -149,6 +156,15 @@ func (s *Server) migrate() error {
 		`CREATE TABLE IF NOT EXISTS configs (
 			path TEXT PRIMARY KEY,
 			content TEXT NOT NULL,
+			revision INTEGER NOT NULL,
+			updated_at TEXT NOT NULL,
+			deleted_at TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE TABLE IF NOT EXISTS assets (
+			path TEXT PRIMARY KEY,
+			hash TEXT NOT NULL,
+			mime TEXT NOT NULL,
+			size INTEGER NOT NULL,
 			revision INTEGER NOT NULL,
 			updated_at TEXT NOT NULL,
 			deleted_at TEXT NOT NULL DEFAULT ''
@@ -276,6 +292,19 @@ func (s *Server) applyChange(ch Change) (int64, error) {
 	var createdNoteType string
 	var createdNotePath string
 	switch ch.TargetKind {
+	case "asset":
+		if _, err := assets.Path(s.baseDir, ch.Path); err != nil {
+			return 0, err
+		}
+		if ch.Op == "delete_asset" || ch.Op == "delete" {
+			_, err = tx.Exec(`UPDATE assets SET deleted_at = ?, revision = ?, updated_at = ? WHERE path = ?`, now, rev, now, ch.Path)
+		} else {
+			if ch.Hash == "" || ch.MIME == "" || ch.Size < 0 {
+				return 0, fmt.Errorf("invalid asset metadata")
+			}
+			_, err = tx.Exec(`INSERT INTO assets(path, hash, mime, size, revision, updated_at, deleted_at) VALUES(?, ?, ?, ?, ?, ?, '')
+				ON CONFLICT(path) DO UPDATE SET hash=excluded.hash, mime=excluded.mime, size=excluded.size, revision=excluded.revision, updated_at=excluded.updated_at, deleted_at=''`, ch.Path, ch.Hash, ch.MIME, ch.Size, rev, now)
+		}
 	case "config":
 		if ch.Op == "delete_config" || ch.Op == "delete" {
 			_, err = tx.Exec(`UPDATE configs SET deleted_at = ?, revision = ? WHERE path = ?`, now, rev, ch.Path)
@@ -333,8 +362,40 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	slog.Info("outgoing sync snapshot", "client_id", r.Header.Get("X-Exo-Client-ID"), "items", len(items), "configs", len(configs))
-	writeJSON(w, map[string]interface{}{"items": items, "configs": configs})
+	assetRows, err := s.assets()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	slog.Info("outgoing sync snapshot", "client_id", r.Header.Get("X-Exo-Client-ID"), "items", len(items), "configs", len(configs), "assets", len(assetRows))
+	writeJSON(w, map[string]interface{}{"items": items, "configs": configs, "assets": assetRows})
+}
+
+func (s *Server) handleAssetUpload(w http.ResponseWriter, r *http.Request) {
+	rel := filepath.ToSlash("assets/" + r.PathValue("path"))
+	asset, err := assets.Store(s.baseDir, rel, r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, asset)
+}
+
+func (s *Server) handleAssetDownload(w http.ResponseWriter, r *http.Request) {
+	rel := filepath.ToSlash("assets/" + r.PathValue("path"))
+	path, err := assets.Path(s.baseDir, rel)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	asset, err := assets.Inspect(s.baseDir, rel)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", asset.MIME)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeFile(w, r, path)
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
@@ -518,6 +579,30 @@ func (s *Server) items() ([]Change, error) {
 		ch.Op = "upsert_item"
 		ch.TargetKind = "item"
 		_ = json.Unmarshal([]byte(fmJSON), &ch.Frontmatter)
+		changes = append(changes, ch)
+	}
+	return changes, rows.Err()
+}
+
+func (s *Server) assets() ([]Change, error) {
+	rows, err := s.db.Query(`SELECT path, hash, mime, size, deleted_at FROM assets ORDER BY path`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var changes []Change
+	for rows.Next() {
+		var ch Change
+		var deleted string
+		if err := rows.Scan(&ch.Path, &ch.Hash, &ch.MIME, &ch.Size, &deleted); err != nil {
+			return nil, err
+		}
+		ch.TargetKind = "asset"
+		ch.Deleted = deleted != ""
+		ch.Op = "upsert_asset"
+		if ch.Deleted {
+			ch.Op = "delete_asset"
+		}
 		changes = append(changes, ch)
 	}
 	return changes, rows.Err()
@@ -743,6 +828,16 @@ func BuildLocalChanges(baseDir string, c *cache.Cache, includeAll bool) ([]Chang
 			Frontmatter: item.Frontmatter,
 			Body:        item.Body,
 		})
+	}
+	assetRows, err := c.Assets()
+	if err != nil {
+		return nil, err
+	}
+	for _, asset := range assetRows {
+		if asset.Deleted {
+			continue
+		}
+		changes = append(changes, Change{Op: "upsert_asset", TargetKind: "asset", Path: asset.Path, Hash: asset.Hash, MIME: asset.MIME, Size: asset.Size})
 	}
 	configs, err := filepath.Glob(filepath.Join(baseDir, "*.toml"))
 	if err == nil {

@@ -1,11 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { useLiveQuery } from 'dexie-react-hooks';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { Check, CloudOff, Menu, Plus, RefreshCw, Search, Settings, Tags, Trash2, X } from 'lucide-react';
 import { parse as parseYAML, stringify as stringifyYAML } from 'yaml';
-import { approveSyncClient, changePassword, createAPIKey, importURL, listAPIKeys, listConfigs, listItemActions, listSyncClients, revokeAPIKey, revokeSyncClient, runAction, updateConfig } from './api';
+import { approveSyncClient, changePassword, createAPIKey, importURL, listAPIKeys, listConfigs, listItemActions, listSyncClients, revokeAPIKey, revokeSyncClient, runAction, updateConfig, uploadAsset } from './api';
 import { db } from './db';
 import { refreshFromServer, startSyncRuntime, syncOutbox } from './sync';
 import type { Action, APIKey, ConfigFile, Frontmatter, Item, OutboxEntry, SyncClient, View } from './types';
@@ -481,6 +481,8 @@ function ItemsView({ items, views, actions, selected, onSelect, viewID, subviewN
 function ItemDetail({ item, editRequest }: { item?: Item; editRequest: number }) {
   const [editing, setEditing] = useState(false);
   const [raw, setRaw] = useState('');
+  const [uploadError, setUploadError] = useState('');
+  const editorRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     setRaw(item ? item.raw || rawFromParts(item.frontmatter, item.body) : '');
@@ -508,16 +510,41 @@ function ItemDetail({ item, editRequest }: { item?: Item; editRequest: number })
     await enqueue({ id: crypto.randomUUID(), op: 'delete_item', item_id: item.id, path: item.path });
   }
 
+  async function attach(files?: FileList | null) {
+    const file = files?.[0];
+    if (!file) return;
+    try {
+      setUploadError('');
+      const uploaded = await uploadAsset(file);
+      const editor = editorRef.current;
+      const start = editor?.selectionStart ?? raw.length;
+      const end = editor?.selectionEnd ?? start;
+      setRaw((value) => `${value.slice(0, start)}${uploaded.markdown}${value.slice(end)}`);
+      requestAnimationFrame(() => {
+        if (editor) {
+          const pos = start + uploaded.markdown.length;
+          editor.focus(); editor.setSelectionRange(pos, pos);
+        }
+      });
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Image upload failed');
+    }
+  }
+
   const parsed = parseRaw(item.raw || rawFromParts(item.frontmatter, item.body));
   const frontmatterText = stringifyYAML(parsed.frontmatter).trimEnd();
-  const html = DOMPurify.sanitize(marked.parse(parsed.body, { async: false }) as string);
+  // Asset references are workspace-relative Markdown paths. Make rendered
+  // images root-relative so a note opened under /views/... still resolves it.
+  const html = DOMPurify.sanitize((marked.parse(parsed.body, { async: false }) as string).replaceAll('src="assets/', 'src="/assets/'));
 
   return (
     <article className="detail-pane">
       {editing ? (
-        <div className="editor">
-          <textarea className="raw-editor" value={raw} onChange={(event) => setRaw(event.target.value)} aria-label="Raw markdown" />
+        <div className="editor" onDrop={(event) => { event.preventDefault(); void attach(event.dataTransfer.files); }} onDragOver={(event) => event.preventDefault()}>
+          <textarea ref={editorRef} className="raw-editor" value={raw} onChange={(event) => setRaw(event.target.value)} onPaste={(event) => { if (event.clipboardData.files?.length) { event.preventDefault(); void attach(event.clipboardData.files); } }} aria-label="Raw markdown" />
+          {uploadError ? <p className="error-message" role="alert">{uploadError}</p> : null}
           <div className="button-row">
+            <label className="button">Upload image<input hidden type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={(event) => void attach(event.target.files)} /></label>
             <button className="button" onClick={() => setEditing(false)}>Cancel</button>
             <button className="button primary" onClick={() => void save()}>Save</button>
           </div>

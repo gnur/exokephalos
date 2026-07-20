@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gnur/exokephalos/internal/assets"
 	"github.com/gnur/exokephalos/internal/id"
 	"github.com/gnur/exokephalos/internal/markdown"
 	"github.com/gnur/exokephalos/internal/scanner"
@@ -41,6 +42,13 @@ type Cache struct {
 	mu      sync.Mutex
 	db      *sql.DB
 	baseDir string
+}
+
+// AssetMetadata is the local, syncable description of an image asset.
+type AssetMetadata struct {
+	Path, Hash, MIME string
+	Size             int64
+	Deleted          bool
 }
 
 // New creates a SQLite-backed cache in baseDir/.exo/cache.sqlite and scans the
@@ -111,6 +119,15 @@ func (c *Cache) migrate() error {
 			last_attempt_at TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status, id)`,
+		`CREATE TABLE IF NOT EXISTS assets (
+			path TEXT PRIMARY KEY,
+			hash TEXT NOT NULL,
+			mime TEXT NOT NULL,
+			size INTEGER NOT NULL,
+			revision INTEGER NOT NULL DEFAULT 0,
+			updated_at TEXT NOT NULL,
+			deleted_at TEXT NOT NULL DEFAULT ''
+		)`,
 		`CREATE TABLE IF NOT EXISTS meta (
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
@@ -212,8 +229,89 @@ func (c *Cache) Sync() error {
 			}
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return c.syncAssetsLocked()
+}
+
+func (c *Cache) syncAssetsLocked() error {
+	seen := make(map[string]bool)
+	root := filepath.Join(c.baseDir, "assets")
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !d.Type().IsRegular() {
+			return nil
+		}
+		rel, err := filepath.Rel(c.baseDir, path)
+		if err != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		asset, err := assets.Inspect(c.baseDir, rel)
+		if err != nil {
+			return nil
+		}
+		seen[rel] = true
+		var oldHash string
+		err = c.db.QueryRow(`SELECT hash FROM assets WHERE path = ? AND deleted_at = ''`, rel).Scan(&oldHash)
+		if c.isSyncStartedLocked() && (err == sql.ErrNoRows || oldHash != asset.Hash) {
+			_ = c.enqueueAssetLocked("upsert_asset", asset)
+		}
+		_, _ = c.db.Exec(`INSERT INTO assets(path, hash, mime, size, updated_at, deleted_at) VALUES(?, ?, ?, ?, ?, '')
+			ON CONFLICT(path) DO UPDATE SET hash=excluded.hash, mime=excluded.mime, size=excluded.size, updated_at=excluded.updated_at, deleted_at=''`, rel, asset.Hash, asset.MIME, asset.Size, time.Now().UTC().Format(time.RFC3339Nano))
+		return nil
+	})
+	rows, err := c.db.Query(`SELECT path FROM assets WHERE deleted_at = ''`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var rel string
+		if err := rows.Scan(&rel); err != nil {
+			return err
+		}
+		if !seen[rel] {
+			if c.isSyncStartedLocked() {
+				_ = c.enqueueAssetDeleteLocked(rel)
+			}
+			_, _ = c.db.Exec(`UPDATE assets SET deleted_at = ?, updated_at = ? WHERE path = ?`, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), rel)
+		}
+	}
 	return rows.Err()
 }
+
+func (c *Cache) enqueueAssetLocked(op string, asset assets.Asset) error {
+	payload, _ := json.Marshal(map[string]interface{}{"op": op, "target_kind": "asset", "path": asset.Path, "hash": asset.Hash, "mime": asset.MIME, "size": asset.Size})
+	return c.EnqueueOutbox(op, "asset", asset.Path, asset.Path, string(payload))
+}
+
+func (c *Cache) enqueueAssetDeleteLocked(rel string) error {
+	payload, _ := json.Marshal(map[string]interface{}{"op": "delete_asset", "target_kind": "asset", "path": rel})
+	return c.EnqueueOutbox("delete_asset", "asset", rel, rel, string(payload))
+}
+
+// Assets returns both live rows and tombstones for sync snapshot reconciliation.
+func (c *Cache) Assets() ([]AssetMetadata, error) {
+	rows, err := c.db.Query(`SELECT path, hash, mime, size, deleted_at FROM assets ORDER BY path`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []AssetMetadata
+	for rows.Next() {
+		var a AssetMetadata
+		var deleted string
+		if err := rows.Scan(&a.Path, &a.Hash, &a.MIME, &a.Size, &deleted); err != nil {
+			return nil, err
+		}
+		a.Deleted = deleted != ""
+		result = append(result, a)
+	}
+	return result, rows.Err()
+}
+
+func (c *Cache) BaseDir() string { return c.baseDir }
 
 func (c *Cache) All() ([]scanner.Item, error) {
 	_ = c.Sync()

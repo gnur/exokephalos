@@ -158,6 +158,8 @@ func runServer(appCfg *config.AppConfig, dir string) {
 	mux.HandleFunc("GET /api/app/api-keys", h.AppAPIKeys)
 	mux.HandleFunc("POST /api/app/api-keys", h.AppAPIKeyCreate)
 	mux.HandleFunc("POST /api/app/api-keys/{id}/revoke", h.AppAPIKeyRevoke)
+	mux.HandleFunc("POST /api/app/assets", h.AppAssetUpload)
+	mux.HandleFunc("GET /assets/{path...}", h.Asset)
 
 	mux.HandleFunc("POST /webhook/{source}", h.WebhookReceive)
 	mux.HandleFunc("GET /ping", func(w http.ResponseWriter, r *http.Request) {

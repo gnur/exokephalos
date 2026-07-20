@@ -136,6 +136,83 @@ func TestSync_Deletions(t *testing.T) {
 	}
 }
 
+func TestSync_Assets(t *testing.T) {
+	serverDir := t.TempDir()
+	server, err := syncsvc.NewServer(filepath.Join(serverDir, "server.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	server.SetBaseDir(serverDir)
+	mux := http.NewServeMux()
+	server.Register(mux)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	dirA, dirB := t.TempDir(), t.TempDir()
+	pubA, privA, _ := ed25519.GenerateKey(rand.Reader)
+	pubB, privB, _ := ed25519.GenerateKey(rand.Reader)
+	cA, err := cache.New(dirA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cA.Close()
+	cB, err := cache.New(dirB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cB.Close()
+	if err := cA.SetSyncStarted(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := cB.SetSyncStarted(true); err != nil {
+		t.Fatal(err)
+	}
+	enrollClient(t, ts.URL, "asset-a", pubA, server)
+	enrollClient(t, ts.URL, "asset-b", pubB, server)
+
+	// A minimal valid PNG, sufficient for content-type validation.
+	png := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0}
+	if err := os.MkdirAll(filepath.Join(dirA, "assets"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dirA, "assets", "photo.png"), png, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := cA.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := pushOutbox(ts.URL, "asset-a", privA, cA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pullSnapshot(dirB, ts.URL, "asset-b", privB, cB); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dirB, "assets", "photo.png"))
+	if err != nil {
+		t.Fatalf("asset not downloaded: %v", err)
+	}
+	if !bytes.Equal(got, png) {
+		t.Fatalf("asset content = %x, want %x", got, png)
+	}
+
+	if err := os.Remove(filepath.Join(dirA, "assets", "photo.png")); err != nil {
+		t.Fatal(err)
+	}
+	if err := cA.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := pushOutbox(ts.URL, "asset-a", privA, cA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pullSnapshot(dirB, ts.URL, "asset-b", privB, cB); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dirB, "assets", "photo.png")); !os.IsNotExist(err) {
+		t.Fatalf("asset was not deleted: %v", err)
+	}
+}
+
 func enrollClient(t *testing.T, url, clientID string, pub ed25519.PublicKey, server *syncsvc.Server) {
 	t.Helper()
 	enrollBody, _ := json.Marshal(map[string]string{

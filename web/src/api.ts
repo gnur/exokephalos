@@ -109,3 +109,11 @@ export function importURL(url: string) {
     body: JSON.stringify({ url }),
   });
 }
+
+export async function uploadAsset(file: File) {
+  const body = new FormData();
+  body.append('image', file);
+  const res = await fetch('/api/app/assets', { method: 'POST', body, headers: { Accept: 'application/json' } });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json() as Promise<{ path: string; markdown: string }>;
+}

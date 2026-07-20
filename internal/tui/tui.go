@@ -18,11 +18,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/gnur/exokephalos/internal/action"
+	"github.com/gnur/exokephalos/internal/assets"
 	"github.com/gnur/exokephalos/internal/cache"
 	"github.com/gnur/exokephalos/internal/config"
 	"github.com/gnur/exokephalos/internal/filter"
 	"github.com/gnur/exokephalos/internal/goodreads"
 	"github.com/gnur/exokephalos/internal/hardcover"
+	"github.com/gnur/exokephalos/internal/markdown"
 	"github.com/gnur/exokephalos/internal/repo"
 	"github.com/gnur/exokephalos/internal/scanner"
 	"github.com/gnur/exokephalos/internal/urlimport"
@@ -44,6 +46,7 @@ const (
 	modeHardcoverResults
 	modeURLImport
 	modeSyncOutbox
+	modeAttachImage
 )
 
 // Pane focus for views with tags enabled
@@ -104,6 +107,7 @@ type Model struct {
 	importInput     textinput.Model
 	hardcoverInput  textinput.Model
 	urlInput        textinput.Model
+	attachInput     textinput.Model
 	actionInput     textinput.Model
 	viewMenuInput   string
 
@@ -172,6 +176,7 @@ const (
 	actionEntryURL
 	actionEntryStartSync
 	actionEntrySyncOutbox
+	actionEntryAttachImage
 )
 
 type actionEntry struct {
@@ -233,6 +238,10 @@ func New(cfg *config.Config, baseDir string, c *cache.Cache, appCfg ...*config.A
 	actionTi := textinput.New()
 	actionTi.Prompt = ":"
 	actionTi.CharLimit = 256
+
+	attachTi := textinput.New()
+	attachTi.Prompt = "Image path: "
+	attachTi.CharLimit = 2048
 
 	// Initialize view states from config
 	orderedViews := cfg.OrderedViews()
@@ -312,6 +321,7 @@ func New(cfg *config.Config, baseDir string, c *cache.Cache, appCfg ...*config.A
 		hardcoverInput:  hardcoverTi,
 		urlInput:        urlTi,
 		actionInput:     actionTi,
+		attachInput:     attachTi,
 		actions:         actions,
 		mode:            modeNormal,
 		syncStatus:      syncStatus,
@@ -461,6 +471,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleURLImportKey(msg)
 	case modeSyncOutbox:
 		return m.handleSyncOutboxKey(msg)
+	case modeAttachImage:
+		return m.handleAttachImageKey(msg)
 	case modeSearchTags:
 		return m.handleSearchTagsKey(msg)
 	case modeSearchItems:
@@ -834,6 +846,7 @@ func (m Model) actionEntries() []actionEntry {
 		Description: "Import URL as note",
 		Enabled:     true,
 	})
+	entries = append(entries, actionEntry{Kind: actionEntryAttachImage, Name: "attach-image", Description: "Attach an image to the selected note", Enabled: hasItem})
 	if m.appCfg != nil && m.appCfg.Sync.ServerURL != "" {
 		entries = append(entries, actionEntry{
 			Kind:        actionEntryStartSync,
@@ -909,6 +922,11 @@ func (m Model) executeActionEntry(entry actionEntry) (tea.Model, tea.Cmd) {
 	case actionEntrySyncOutbox:
 		m.mode = modeSyncOutbox
 		return m, nil
+	case actionEntryAttachImage:
+		m.mode = modeAttachImage
+		m.attachInput.SetValue("")
+		m.attachInput.Focus()
+		return m, textinput.Blink
 	default:
 		m.status = "Action not found"
 		return m, nil
@@ -922,6 +940,57 @@ func (m Model) selectedItem() (scanner.Item, bool) {
 		return scanner.Item{}, false
 	}
 	return items[vs.cursor], true
+}
+
+func (m Model) handleAttachImageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = modeNormal
+		m.attachInput.Blur()
+		return m, nil
+	case "enter":
+		source := strings.TrimSpace(m.attachInput.Value())
+		m.attachInput.Blur()
+		m.mode = modeNormal
+		if source == "" {
+			return m, nil
+		}
+		item, ok := m.selectedItem()
+		if !ok {
+			m.status = "No item selected"
+			return m, nil
+		}
+		file, err := os.Open(source)
+		if err != nil {
+			m.status = fmt.Sprintf("Open image: %v", err)
+			return m, nil
+		}
+		asset, err := assets.Import(m.baseDir, filepath.Base(source), file)
+		_ = file.Close()
+		if err != nil {
+			m.status = fmt.Sprintf("Attach image: %v", err)
+			return m, nil
+		}
+		item.Body = strings.TrimRight(item.Body, "\n") + "\n\n![" + filepath.Base(asset.Path) + "](" + asset.Path + ")\n"
+		if err := markdown.WriteFrontmatter(item.Path, item.Frontmatter, item.Body); err != nil {
+			m.status = fmt.Sprintf("Save note: %v", err)
+			return m, nil
+		}
+		if err := m.cache.NotifyWrite(item.Path); err != nil {
+			m.status = fmt.Sprintf("Update cache: %v", err)
+			return m, nil
+		}
+		if err := m.cache.Sync(); err != nil {
+			m.status = fmt.Sprintf("Update assets: %v", err)
+			return m, nil
+		}
+		m.status = "Attached " + asset.Path
+		return m, tea.Batch(m.loadData(), m.reconcileIfStartedCmd())
+	default:
+		var cmd tea.Cmd
+		m.attachInput, cmd = m.attachInput.Update(msg)
+		return m, cmd
+	}
 }
 
 func (m Model) canSearchHardcover() bool {

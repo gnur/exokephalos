@@ -366,6 +366,9 @@ func (m Model) renderFooter() string {
 	if m.mode == modeActionPicker {
 		return searchPromptStyle.Render(m.actionInput.View())
 	}
+	if m.mode == modeAttachImage {
+		return searchPromptStyle.Render(m.attachInput.View())
+	}
 	if m.mode == modeSearchTags {
 		return searchPromptStyle.Render(m.tagFilterInput.View())
 	}

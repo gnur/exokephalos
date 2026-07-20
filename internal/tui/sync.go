@@ -16,6 +16,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/gnur/exokephalos/internal/assets"
 	"github.com/gnur/exokephalos/internal/cache"
 	"github.com/gnur/exokephalos/internal/config"
 	"github.com/gnur/exokephalos/internal/markdown"
@@ -277,12 +278,39 @@ func pushOutbox(serverURL, clientID string, priv ed25519.PrivateKey, c *cache.Ca
 			_ = c.MarkOutboxFailed(entry.ID, err.Error())
 			continue
 		}
+		if ch.TargetKind == "asset" {
+			if ch.Op != "delete_asset" && ch.Op != "delete" {
+				if err := uploadSyncAsset(serverURL, clientID, priv, c.BaseDir(), ch.Path); err != nil {
+					_ = c.MarkOutboxFailed(entry.ID, err.Error())
+					continue
+				}
+			}
+			if err := pushChanges(serverURL, clientID, priv, []syncsvc.Change{ch}); err != nil {
+				_ = c.MarkOutboxFailed(entry.ID, err.Error())
+				continue
+			}
+			_ = c.MarkOutboxSynced(entry.ID)
+			continue
+		}
 		changes = append(changes, ch)
 		ids = append(ids, entry.ID)
 	}
 	if len(changes) == 0 {
 		return nil
 	}
+	if err := pushChanges(serverURL, clientID, priv, changes); err != nil {
+		for _, id := range ids {
+			_ = c.MarkOutboxFailed(id, err.Error())
+		}
+		return err
+	}
+	for _, id := range ids {
+		_ = c.MarkOutboxSynced(id)
+	}
+	return nil
+}
+
+func pushChanges(serverURL, clientID string, priv ed25519.PrivateKey, changes []syncsvc.Change) error {
 	body, _ := json.Marshal(map[string]interface{}{"changes": changes})
 	url := strings.TrimRight(serverURL, "/") + "/api/sync/changes"
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
@@ -294,21 +322,37 @@ func pushOutbox(serverURL, clientID string, priv ed25519.PrivateKey, c *cache.Ca
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		for _, id := range ids {
-			_ = c.MarkOutboxFailed(id, err.Error())
-		}
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		err := fmt.Errorf("push failed: %s", resp.Status)
-		for _, id := range ids {
-			_ = c.MarkOutboxFailed(id, err.Error())
-		}
+		return fmt.Errorf("push failed: %s", resp.Status)
+	}
+	return nil
+}
+
+func uploadSyncAsset(serverURL, clientID string, priv ed25519.PrivateKey, baseDir, rel string) error {
+	path, err := assets.Path(baseDir, rel)
+	if err != nil {
 		return err
 	}
-	for _, id := range ids {
-		_ = c.MarkOutboxSynced(id)
+	url := strings.TrimRight(serverURL, "/") + "/api/sync/assets/" + strings.TrimPrefix(filepath.ToSlash(rel), "assets/")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	syncsvc.SignRequest(req, data, clientID, priv)
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("asset upload failed: %s", resp.Status)
 	}
 	return nil
 }
@@ -333,6 +377,7 @@ func pullSnapshot(baseDir, serverURL, clientID string, priv ed25519.PrivateKey, 
 	var snapshot struct {
 		Items   []syncsvc.Change `json:"items"`
 		Configs []syncsvc.Change `json:"configs"`
+		Assets  []syncsvc.Change `json:"assets"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
 		return false, err
@@ -380,6 +425,26 @@ func pullSnapshot(baseDir, serverURL, clientID string, priv ed25519.PrivateKey, 
 			return false, err
 		}
 		_ = c.NotifyWriteNoOutbox(path)
+	}
+	for _, ch := range snapshot.Assets {
+		if ch.Path == "" {
+			continue
+		}
+		if _, err := assets.Path(baseDir, ch.Path); err != nil {
+			continue
+		}
+		if ch.Deleted || ch.Op == "delete_asset" {
+			path, _ := assets.Path(baseDir, ch.Path)
+			_ = os.Remove(path)
+			continue
+		}
+		local, err := assets.Inspect(baseDir, ch.Path)
+		if err == nil && local.Hash == ch.Hash {
+			continue
+		}
+		if err := downloadSyncAsset(serverURL, clientID, priv, baseDir, ch.Path); err != nil {
+			return false, err
+		}
 	}
 
 	// Retrieve all paths currently in the local outbox to avoid deleting local unsynced files.
@@ -438,6 +503,25 @@ func pullSnapshot(baseDir, serverURL, clientID string, priv ed25519.PrivateKey, 
 	}
 
 	return configChanged, nil
+}
+
+func downloadSyncAsset(serverURL, clientID string, priv ed25519.PrivateKey, baseDir, rel string) error {
+	url := strings.TrimRight(serverURL, "/") + "/api/sync/assets/" + strings.TrimPrefix(filepath.ToSlash(rel), "assets/")
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	syncsvc.SignRequest(req, nil, clientID, priv)
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("asset download failed: %s", resp.Status)
+	}
+	_, err = assets.Store(baseDir, rel, resp.Body)
+	return err
 }
 
 func listenForServerEvent(serverURL, clientID string, priv ed25519.PrivateKey, c *cache.Cache) (int64, error) {

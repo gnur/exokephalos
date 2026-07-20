@@ -252,7 +252,6 @@ func (m *Manager) Exempt(r *http.Request) bool {
 		r.URL.Path == "/ping" ||
 		r.URL.Path == "/healthz" ||
 		strings.HasPrefix(r.URL.Path, "/static/") ||
-		strings.HasPrefix(r.URL.Path, "/assets/") ||
 		strings.HasPrefix(r.URL.Path, "/icons/") ||
 		r.URL.Path == "/manifest.webmanifest" ||
 		r.URL.Path == "/registerSW.js" ||

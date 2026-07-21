@@ -15,6 +15,24 @@ Custom actions are defined in the synced `exo.fnl` workspace configuration and r
 
 `:when` is optional and must return a boolean. `:run` receives a flat note table and must return its replacement. Frontmatter fields are direct keys (`:id`, `:type`, `:tags`, `:title`, and custom fields), alongside `:path` and `:body`; there is no `:frontmatter` key. Actions can change frontmatter fields and body.
 
+Lua modules use the same flat note object and the underscore tag helper names. This module removes `todo`, adds `done`, and writes a UTC completion timestamp:
+
+```lua
+return {
+  ["mark-done"] = {
+    description = "Mark item as done",
+    when = function(note)
+      return has_tag(note.tags, "todo") and not has_tag(note.tags, "done")
+    end,
+    run = function(note)
+      note.tags = add_tag(remove_tag(note.tags, "todo"), "done")
+      note.completed_at = now()
+      return note
+    end,
+  },
+}
+```
+
 Actions never receive unrestricted filesystem, shell, environment, or network access. They may request capabilities with `:permissions`; the executing host must grant the same action in local-only `.exo/permissions.fnl`. The browser never executes configuration code.
 
 For example, an action that declares `:permissions [:filesystem :network]` can be granted only the paths and HTTPS origins needed on this machine:

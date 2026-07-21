@@ -129,8 +129,10 @@ func (h *harness) seedWorkspaces() {
 	mustMkdir(h.t, filepath.Join(h.serverDir, ".exo"))
 	mustMkdir(h.t, filepath.Join(h.clientDir, ".exo"))
 
-	copyFile(h.t, filepath.Join(h.root, "example-repo", "exo.fnl"), filepath.Join(h.serverDir, "exo.fnl"))
-	copyFile(h.t, filepath.Join(h.root, "example-repo", "exo.fnl"), filepath.Join(h.clientDir, "exo.fnl"))
+	for _, dir := range []string{h.serverDir, h.clientDir} {
+		writeFile(h.t, filepath.Join(dir, "exo.fnl"), luaWorkspaceConfig)
+		writeFile(h.t, filepath.Join(dir, "modules", "actions.lua"), luaActionsModule)
+	}
 	writeFile(h.t, filepath.Join(h.clientDir, "note", "2026", "06", "test.md"), `---
 id: e2enote
 type: note
@@ -161,6 +163,31 @@ This doc verifies config-backed view sync.
 	writeFile(h.t, filepath.Join(h.serverDir, ".exo", "serve.fnl"), fmt.Sprintf(`{:server {:db-path ".exo/server.sqlite" :listen "127.0.0.1:%d"}}`, port))
 	writeFile(h.t, filepath.Join(h.clientDir, ".exo", "tui.fnl"), fmt.Sprintf(`{:sync {:server-url %q :client-id %q}}`, h.baseURL, clientID))
 }
+
+const luaWorkspaceConfig = `(local actions (require :modules.actions))
+{:default-view :notes
+ :views {:notes {:name "Notes" :key "n" :show-tags true
+                 :when (fn [note] (= note.type "note"))
+                 :subviews [{:name "All" :when (fn [_] true)}]}
+         :docs {:name "Docs" :key "d" :show-tags true
+                :when (fn [note] (= note.type "doc"))
+                :subviews [{:name "All" :when (fn [_] true)}]}}
+ :actions actions}`
+
+const luaActionsModule = `return {
+  ["mark-done"] = {
+    description = "Mark item as done",
+    when = function(note)
+      return has_tag(note.tags, "todo") and not has_tag(note.tags, "done")
+    end,
+    run = function(note)
+      note.tags = add_tag(remove_tag(note.tags, "todo"), "done")
+      note.status = "done"
+      note.completed_at = now()
+      return note
+    end,
+  },
+}`
 
 func (h *harness) startServer() {
 	h.t.Helper()

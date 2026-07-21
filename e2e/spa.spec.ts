@@ -36,6 +36,20 @@ test('SPA login, mobile shell, editor, approval, and browser outbox', async ({ p
   await expect(page.getByRole('button', { name: 'Edit', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Mark item as done' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Start reading this book' })).toHaveCount(0);
+
+  const luaActionResult = await page.evaluate(async () => {
+    const response = await fetch('/api/app/actions/mark-done', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item_id: 'e2enote' }),
+    });
+    return { status: response.status, item: await response.json() };
+  });
+  expect(luaActionResult.status).toBe(200);
+  expect(luaActionResult.item.tags).toEqual(['done']);
+  expect(luaActionResult.item.frontmatter.status).toBe('done');
+  expect(luaActionResult.item.frontmatter.completed_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+
   await page.getByRole('button', { name: 'Edit', exact: true }).click();
   await expect(page.getByLabel('Raw markdown')).toContainText('---');
   await page.getByRole('button', { name: 'Cancel' }).click();

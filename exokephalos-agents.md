@@ -6,7 +6,7 @@ Set `EXO_DIR` to a workspace directory. It must contain a root-level `exo.fnl`; 
 
 ## Workspace views and actions
 
-`exo.fnl` is Fennel. Views select notes with `:when`; predicates receive a note with fields such as `type`, `tags`, `frontmatter`, and `body`.
+`exo.fnl` is Fennel. Views select notes with `:when`; predicates receive a flat note table. Every frontmatter field is a direct field—such as `note.type`, `note.tags`, `note.created`, or `note.title`—alongside `note.path` and `note.body`. There is no `note.frontmatter` table.
 
 ```fennel
 {:default-view :notes

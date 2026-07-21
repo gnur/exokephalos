@@ -574,7 +574,9 @@ func declared(items []string, name string) bool {
 }
 
 func noteTable(L *lua.LState, note Note) *lua.LTable {
-	t := L.NewTable()
+	// Workspace code receives one flat note table. Frontmatter fields are direct
+	// children, while path and body are runtime fields rather than frontmatter.
+	t := goTable(L, note.Frontmatter)
 	t.RawSetString("id", lua.LString(note.ID))
 	t.RawSetString("path", lua.LString(note.Path))
 	t.RawSetString("type", lua.LString(note.Type))
@@ -584,7 +586,6 @@ func noteTable(L *lua.LState, note Note) *lua.LTable {
 		tags.Append(lua.LString(tag))
 	}
 	t.RawSetString("tags", tags)
-	t.RawSetString("frontmatter", goTable(L, note.Frontmatter))
 	return t
 }
 func goTable(L *lua.LState, m map[string]interface{}) *lua.LTable {
@@ -627,6 +628,9 @@ func goValue(L *lua.LState, v interface{}) lua.LValue {
 	}
 }
 func noteFromTable(t *lua.LTable) (Note, error) {
+	if t.RawGetString("frontmatter") != lua.LNil {
+		return Note{}, fmt.Errorf("action result cannot contain :frontmatter; access fields directly on the note")
+	}
 	n := Note{ID: luaString(t.RawGetString("id")), Path: luaString(t.RawGetString("path")), Type: luaString(t.RawGetString("type")), Body: luaString(t.RawGetString("body"))}
 	if n.Path == "" || n.Type == "" {
 		return Note{}, fmt.Errorf("action result requires :path and :type")
@@ -636,11 +640,9 @@ func noteFromTable(t *lua.LTable) (Note, error) {
 		return Note{}, fmt.Errorf("action result requires :tags table")
 	}
 	tags.ForEach(func(_ lua.LValue, v lua.LValue) { n.Tags = append(n.Tags, luaString(v)) })
-	fm, ok := t.RawGetString("frontmatter").(*lua.LTable)
-	if !ok {
-		return Note{}, fmt.Errorf("action result requires :frontmatter table")
-	}
-	n.Frontmatter = tableMap(fm)
+	n.Frontmatter = tableMap(t)
+	delete(n.Frontmatter, "path")
+	delete(n.Frontmatter, "body")
 	return n, nil
 }
 func tableMap(t *lua.LTable) map[string]interface{} {

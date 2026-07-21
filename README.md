@@ -150,6 +150,8 @@ The `.exo/` directory is local-only. It is used for `.exo/tui.fnl`, `.exo/serve.
 
 Workspace code provides `has-tag`, `add-tag`, `remove-tag`, and `now`. The tag helpers return a new list; `now` returns an RFC 3339 UTC timestamp. Lua modules use `has_tag`, `add_tag`, and `remove_tag`.
 
+Fennel and Lua view predicates and actions receive a flat note table: frontmatter is accessed directly (`note.title`, `note.tags`, `note.status`, and so on), together with `note.path` and `note.body`. There is no `note.frontmatter` table. Return the updated note table from an action.
+
 ### Config reference
 
 #### Top-level
@@ -180,10 +182,9 @@ Subviews use `:name` and a boolean Fennel `:when` predicate. Actions have `:desc
 ```fennel
 {:actions
  {:mark-done {:description "Mark item as done"
-              :when (fn [note] (= note.frontmatter.status "todo"))
+              :when (fn [note] (= note.status "todo"))
               :run (fn [note]
-                     (assoc note :frontmatter
-                            (assoc note.frontmatter :status "done")))}}}
+                     (assoc note :status "done"))}}}
 ```
 
 Workspace views/actions no longer use CEL or yq. CEL remains only for API-key authorization and `POST /api/query/ids`.

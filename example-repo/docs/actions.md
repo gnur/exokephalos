@@ -8,13 +8,12 @@ Custom actions are defined in the synced `exo.fnl` workspace configuration and r
   {:description "Mark item as done"
    :when (fn [note]
            (and (= note.type "note")
-                (not= note.frontmatter.status "done")))
+                (not= note.status "done")))
    :run (fn [note]
-          (assoc note :frontmatter
-                 (assoc note.frontmatter :status "done")))}}}
+          (assoc note :status "done"))}}}
 ```
 
-`:when` is optional and must return a boolean. `:run` receives the complete note (`:id`, `:path`, `:type`, `:tags`, `:frontmatter`, and `:body`) and must return its replacement. Actions can change both frontmatter and body.
+`:when` is optional and must return a boolean. `:run` receives a flat note table and must return its replacement. Frontmatter fields are direct keys (`:id`, `:type`, `:tags`, `:title`, and custom fields), alongside `:path` and `:body`; there is no `:frontmatter` key. Actions can change frontmatter fields and body.
 
 Actions never receive unrestricted filesystem, shell, environment, or network access. They may request capabilities with `:permissions`; the executing host must grant the same action in local-only `.exo/permissions.fnl`. The browser never executes configuration code.
 

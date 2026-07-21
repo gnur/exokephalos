@@ -18,6 +18,6 @@
              :when (fn [note] (or (= note.type "webhook") (= note.type "alert")))
              :subviews [{:name "All" :when (fn [_] true)}]}}
  :actions
- {:finish-book {:description "Mark book as finished reading" :when (fn [note] (has-tag note.tags "reading")) :run (fn [note] (assoc note :frontmatter (assoc note.frontmatter :tags (add-tag (remove-tag note.tags "reading") "read"))))}
-  :start-book {:description "Start reading this book" :when (fn [note] (has-tag note.tags "to-read")) :run (fn [note] (assoc note :frontmatter (assoc note.frontmatter :tags (add-tag (remove-tag note.tags "to-read") "reading"))))}
-  :mark-done {:description "Mark item as done" :when (fn [note] (and (has-tag note.tags "todo") (not (has-tag note.tags "done")))) :run (fn [note] (assoc note :frontmatter (assoc note.frontmatter :tags (add-tag note.tags "done"))))}}}
+ {:finish-book {:description "Mark book as finished reading" :when (fn [note] (has-tag note.tags "reading")) :run (fn [note] (assoc note :tags (add-tag (remove-tag note.tags "reading") "read")))}
+  :start-book {:description "Start reading this book" :when (fn [note] (has-tag note.tags "to-read")) :run (fn [note] (assoc note :tags (add-tag (remove-tag note.tags "to-read") "reading")))}
+  :mark-done {:description "Mark item as done" :when (fn [note] (and (has-tag note.tags "todo") (not (has-tag note.tags "done")))) :run (fn [note] (assoc note :tags (add-tag note.tags "done")))}}}

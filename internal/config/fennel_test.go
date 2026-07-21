@@ -29,8 +29,8 @@ func TestFennelWorkspacePredicatesAndActions(t *testing.T) {
 func TestWorkspaceTagHelpersAndNow(t *testing.T) {
 	cfg, err := LoadContents([]NamedContent{{Name: "exo.fnl", Content: []byte(`
 {:views {:todos {:name "Todos" :key "t" :when (fn [note] (has-tag note.tags "todo"))}}
- :actions {:complete {:description "Complete" :run (fn [note] (assoc note :frontmatter (assoc (assoc note.frontmatter :tags (add-tag (remove-tag note.tags "todo") "done")) :updated (now))))}
-           :keep-existing {:description "Keep existing" :run (fn [note] (assoc note :frontmatter (assoc note.frontmatter :tags (add-tag note.tags "todo"))))}}}
+ :actions {:complete {:description "Complete" :run (fn [note] (assoc (assoc note :tags (add-tag (remove-tag note.tags "todo") "done")) :updated (now)))}
+           :keep-existing {:description "Keep existing" :run (fn [note] (assoc note :tags (add-tag note.tags "todo")))}}}
 `)}})
 	if err != nil {
 		t.Fatal(err)
@@ -75,11 +75,12 @@ func TestLuaWorkspaceTagHelpers(t *testing.T) {
 return {
   views = { todos = { name = "Todos", key = "t", when = function(note) return has_tag(note.tags, "todo") end } },
   actions = { complete = { description = "Complete", run = function(note)
-    note.frontmatter.tags = add_tag(remove_tag(note.tags, "todo"), "done")
-    note.frontmatter.updated = now()
+    note.tags = add_tag(remove_tag(note.tags, "todo"), "done")
+    note.updated = now()
     return note
   end } }
 }
+
 `)},
 	})
 	if err != nil {
@@ -97,6 +98,25 @@ return {
 	tags, ok := updated.Frontmatter["tags"].([]interface{})
 	if !ok || len(tags) != 2 || tags[0] != "keep" || tags[1] != "done" {
 		t.Fatalf("updated tags = %#v", updated.Frontmatter["tags"])
+	}
+}
+
+func TestWorkspaceNotesExposeFrontmatterFieldsDirectly(t *testing.T) {
+	cfg, err := LoadContents([]NamedContent{{Name: "exo.fnl", Content: []byte(`
+{:views {:todos {:name "Todos" :key "t" :when (fn [note] (= note.status "todo"))}}
+ :actions {:complete {:description "Complete" :run (fn [note] (assoc note :status "done"))}}}
+`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := Note{Type: "note", Path: "note.md", Tags: []string{}, Frontmatter: map[string]interface{}{"id": "note", "type": "note", "status": "todo"}}
+	matched, err := cfg.MatchView("todos", original)
+	if err != nil || !matched {
+		t.Fatalf("MatchView = %v, %v", matched, err)
+	}
+	updated, err := cfg.RunAction("complete", original)
+	if err != nil || updated.Frontmatter["status"] != "done" {
+		t.Fatalf("RunAction = %#v, %v", updated, err)
 	}
 }
 

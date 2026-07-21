@@ -10,7 +10,7 @@ To start the TUI mode, run the `xo` command with no arguments:
 EXO_DIR=/path/to/your/notes xo
 ```
 
-`EXO_DIR` must point at the data directory containing root-level workspace `*.toml` config files. If it is not set, exo uses `./example-repo`.
+`EXO_DIR` must point at the data directory containing `exo.fnl` and optional workspace modules. If it is not set, exo uses `./example-repo`.
 
 ## Keybindings
 
@@ -34,12 +34,10 @@ The action picker includes configured actions plus built-ins like Goodreads impo
 
 ## Sync Actions
 
-When `.exo/tui.toml` contains a `[sync]` section, the TUI adds sync actions:
+When `.exo/tui.fnl` contains a `:sync` table, the TUI adds sync actions:
 
-```toml
-[sync]
-server_url = "http://localhost:8293"
-client_id = "laptop"
+```fennel
+{:sync {:server-url "http://localhost:8293" :client-id "laptop"}}
 ```
 
 Use `start-sync` to generate a local ed25519 keypair and register this client with `xo serve`. Approve the client in the web UI under the `sync clients` tab. The TUI keeps polling while it waits; after approval it continues automatically and pushes local markdown files plus root-level workspace config. You do not need to run `start-sync` a second time.

@@ -78,8 +78,8 @@ func main() {
 	cfg, err := config.Load(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading configuration from %s: %v\n", dir, err)
-		fmt.Fprintf(os.Stderr, "\nCreate a .exo/ directory or a .exo.toml file in your EXO_DIR to configure views.\n")
-		fmt.Fprintf(os.Stderr, "See the example-repo/.exo/ for reference.\n")
+		fmt.Fprintf(os.Stderr, "\nCreate exo.fnl in your EXO_DIR to configure views.\n")
+		fmt.Fprintf(os.Stderr, "See the example-repo/exo.fnl for reference.\n")
 		os.Exit(1)
 	}
 

@@ -181,7 +181,7 @@ func (h *Handlers) AppConfigUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := strings.TrimSpace(r.PathValue("path"))
-	if path == "" || strings.Contains(path, "..") || strings.HasPrefix(path, "/") || filepath.Ext(path) != ".toml" {
+	if !config.IsWorkspacePath(path) {
 		writeAPIError(w, "invalid config path", http.StatusBadRequest)
 		return
 	}
@@ -254,20 +254,20 @@ func (h *Handlers) AppAction(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, "item not found", http.StatusNotFound)
 		return
 	}
-	if !act.Match(item.Frontmatter) {
+	if !act.MatchNote(config.Note{ID: item.ID, Path: item.Path, Type: item.Type, Tags: item.Tags, Frontmatter: item.Frontmatter, Body: item.Body}) {
 		writeAPIError(w, "action does not apply to item", http.StatusBadRequest)
 		return
 	}
-	fm, err := act.Mutate(item.Frontmatter)
+	replacement, err := act.Run(config.Note{ID: item.ID, Path: item.Path, Type: item.Type, Tags: item.Tags, Frontmatter: item.Frontmatter, Body: item.Body})
 	if err != nil {
 		writeAPIError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := h.Store.UpdateItem(item.Path, fm, item.Body); err != nil {
+	if err := h.Store.UpdateItem(item.Path, replacement.Frontmatter, replacement.Body); err != nil {
 		writeAPIError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeAppJSON(w, h.appItem(scanner.Item{Path: item.Path, Frontmatter: fm, Body: item.Body, ID: item.ID, Type: item.Type, Tags: markdown.ExtractTags(fm)}))
+	writeAppJSON(w, h.appItem(scanner.Item{Path: replacement.Path, Frontmatter: replacement.Frontmatter, Body: replacement.Body, ID: replacement.ID, Type: replacement.Type, Tags: replacement.Tags}))
 }
 
 func (h *Handlers) AppItemActions(w http.ResponseWriter, r *http.Request) {
@@ -278,8 +278,8 @@ func (h *Handlers) AppItemActions(w http.ResponseWriter, r *http.Request) {
 	}
 	actions := make([]appAction, 0)
 	for name, act := range h.actions {
-		if act.Match(item.Frontmatter) {
-			actions = append(actions, appAction{Name: name, Description: act.Description, Filter: act.Filter})
+		if act.MatchNote(config.Note{ID: item.ID, Path: item.Path, Type: item.Type, Tags: item.Tags, Frontmatter: item.Frontmatter, Body: item.Body}) {
+			actions = append(actions, appAction{Name: name, Description: act.Description})
 		}
 	}
 	sort.Slice(actions, func(i, j int) bool { return actions[i].Name < actions[j].Name })
@@ -431,18 +431,12 @@ func (h *Handlers) appViews() []appView {
 			}
 		}
 		subviews := make([]appSubview, 0, len(view.Config.Subviews))
-		for _, subview := range view.Config.Subviews {
-			subviewIDs := itemIDs
-			if subview.Filter != "" && subview.Filter != "true" {
-				subviewIDs = nil
-				prog := h.subviewFilters[view.ID+"\x00"+subview.Name]
-				if prog != nil {
-					for _, item := range filtered {
-						if ok, _ := prog.Eval(item.Frontmatter); ok {
-							if id := markdown.FMString(item.Frontmatter, "id"); id != "" {
-								subviewIDs = append(subviewIDs, id)
-							}
-						}
+		for subviewIndex, subview := range view.Config.Subviews {
+			subviewIDs := make([]string, 0, len(filtered))
+			for _, item := range filtered {
+				if ok, err := h.Cfg.MatchSubview(view.ID, subviewIndex, config.Note{ID: item.ID, Path: item.Path, Type: item.Type, Tags: item.Tags, Frontmatter: item.Frontmatter, Body: item.Body}); err == nil && ok {
+					if id := markdown.FMString(item.Frontmatter, "id"); id != "" {
+						subviewIDs = append(subviewIDs, id)
 					}
 				}
 			}

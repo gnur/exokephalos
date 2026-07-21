@@ -47,21 +47,18 @@ func (h *Handlers) ViewList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if subviewIdx > 0 || r.URL.Query().Get("subview") != "" {
-		svFilter := viewCfg.Subviews[subviewIdx].Filter
-		if svFilter != "true" {
-			svName := viewCfg.Subviews[subviewIdx].Name
-			prog := h.subviewFilters[viewID+"\x00"+svName]
-			if prog != nil {
-				var filtered []scanner.Item
-				for _, item := range items {
-					ok, _ := prog.Eval(item.Frontmatter)
-					if ok {
-						filtered = append(filtered, item)
-					}
-				}
-				items = filtered
+		var filtered []scanner.Item
+		for _, item := range items {
+			ok, err := h.Cfg.MatchSubview(viewID, subviewIdx, config.Note{ID: item.ID, Path: item.Path, Type: item.Type, Tags: item.Tags, Frontmatter: item.Frontmatter, Body: item.Body})
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			if ok {
+				filtered = append(filtered, item)
 			}
 		}
+		items = filtered
 	}
 
 	// Apply tag filtering if view has show_tags and tags param present
@@ -252,12 +249,12 @@ func (h *Handlers) ViewAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newFm, err := act.Mutate(item.Frontmatter)
+	replacement, err := act.Run(config.Note{ID: item.ID, Path: item.Path, Type: item.Type, Tags: item.Tags, Frontmatter: item.Frontmatter, Body: item.Body})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("action failed: %v", err), 500)
 		return
 	}
-	if err := h.Store.UpdateItem(item.Path, newFm, item.Body); err != nil {
+	if err := h.Store.UpdateItem(item.Path, replacement.Frontmatter, replacement.Body); err != nil {
 		http.Error(w, fmt.Sprintf("action failed: %v", err), 500)
 		return
 	}

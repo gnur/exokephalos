@@ -200,27 +200,6 @@ func New(cfg *config.Config, baseDir string, r *repo.Repo, c *cache.Cache, templ
 		},
 	}
 
-	// Compile CEL filters for each view
-	for id, vc := range cfg.Views {
-		prog, err := filter.Compile(vc.Filter)
-		if err != nil {
-			return nil, fmt.Errorf("view %q: compiling filter: %w", id, err)
-		}
-		h.filters[id] = prog
-
-		// Pre-compile subview filters
-		for _, sv := range vc.Subviews {
-			if sv.Filter == "" || sv.Filter == "true" {
-				continue
-			}
-			svProg, err := filter.Compile(sv.Filter)
-			if err != nil {
-				return nil, fmt.Errorf("view %q subview %q: compiling filter: %w", id, sv.Name, err)
-			}
-			h.subviewFilters[id+"\x00"+sv.Name] = svProg
-		}
-	}
-
 	// Compile actions from config
 	h.actions = make(map[string]*action.Action)
 	for name, ac := range cfg.Actions {
@@ -361,14 +340,12 @@ func (h *Handlers) scanAndFilter(viewID string) ([]scanner.Item, error) {
 		return nil, err
 	}
 
-	prog := h.filters[viewID]
-	if prog == nil {
-		return nil, fmt.Errorf("no filter for view %q", viewID)
-	}
-
 	var result []scanner.Item
 	for _, item := range items {
-		ok, _ := prog.Eval(item.Frontmatter)
+		ok, matchErr := h.Cfg.MatchView(viewID, config.Note{ID: item.ID, Path: item.Path, Type: item.Type, Tags: item.Tags, Frontmatter: item.Frontmatter, Body: item.Body})
+		if matchErr != nil {
+			return nil, matchErr
+		}
 		if ok {
 			result = append(result, item)
 		}
@@ -519,78 +496,13 @@ func (h *Handlers) isConfigChanged() bool {
 func (h *Handlers) updateConfigFilesList() {
 	h.configChangedMu.Lock()
 	defer h.configChangedMu.Unlock()
-	files := make(map[string]time.Time)
-	entries, err := os.ReadDir(h.BaseDir)
-	if err == nil {
-		for _, entry := range entries {
-			if entry.IsDir() || filepath.Ext(entry.Name()) != ".toml" || entry.Name() == ".exo.toml" {
-				continue
-			}
-			path := filepath.Join(h.BaseDir, entry.Name())
-			if info, err := os.Stat(path); err == nil {
-				files[path] = info.ModTime()
-			}
-		}
-	}
-	exoDir := filepath.Join(h.BaseDir, ".exo")
-	if info, err := os.Stat(exoDir); err == nil && info.IsDir() {
-		entries, err := os.ReadDir(exoDir)
-		if err == nil && len(files) == 0 {
-			for _, entry := range entries {
-				if !entry.IsDir() && filepath.Ext(entry.Name()) == ".toml" && entry.Name() != "tui.toml" && entry.Name() != "serve.toml" {
-					path := filepath.Join(exoDir, entry.Name())
-					if info, err := os.Stat(path); err == nil {
-						files[path] = info.ModTime()
-					}
-				}
-			}
-		}
-	}
-	if len(files) == 0 {
-		path := filepath.Join(h.BaseDir, ".exo.toml")
-		if info, err := os.Stat(path); err == nil {
-			files[path] = info.ModTime()
-		}
-	}
-	h.configFiles = files
+	h.configFiles = workspaceConfigModTimes(h.BaseDir)
 }
 
 func (h *Handlers) detectConfigChanges() bool {
 	h.configChangedMu.Lock()
 	defer h.configChangedMu.Unlock()
-	files := make(map[string]time.Time)
-	entries, err := os.ReadDir(h.BaseDir)
-	if err == nil {
-		for _, entry := range entries {
-			if entry.IsDir() || filepath.Ext(entry.Name()) != ".toml" || entry.Name() == ".exo.toml" {
-				continue
-			}
-			path := filepath.Join(h.BaseDir, entry.Name())
-			if info, err := os.Stat(path); err == nil {
-				files[path] = info.ModTime()
-			}
-		}
-	}
-	exoDir := filepath.Join(h.BaseDir, ".exo")
-	if info, err := os.Stat(exoDir); err == nil && info.IsDir() {
-		entries, err := os.ReadDir(exoDir)
-		if err == nil && len(files) == 0 {
-			for _, entry := range entries {
-				if !entry.IsDir() && filepath.Ext(entry.Name()) == ".toml" && entry.Name() != "tui.toml" && entry.Name() != "serve.toml" {
-					path := filepath.Join(exoDir, entry.Name())
-					if info, err := os.Stat(path); err == nil {
-						files[path] = info.ModTime()
-					}
-				}
-			}
-		}
-	}
-	if len(files) == 0 {
-		path := filepath.Join(h.BaseDir, ".exo.toml")
-		if info, err := os.Stat(path); err == nil {
-			files[path] = info.ModTime()
-		}
-	}
+	files := workspaceConfigModTimes(h.BaseDir)
 
 	if len(files) != len(h.configFiles) {
 		return true
@@ -602,6 +514,24 @@ func (h *Handlers) detectConfigChanges() bool {
 		}
 	}
 	return false
+}
+
+func workspaceConfigModTimes(baseDir string) map[string]time.Time {
+	files := make(map[string]time.Time)
+	_ = filepath.WalkDir(baseDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(baseDir, path)
+		if err != nil || !config.IsWorkspacePath(rel) {
+			return nil
+		}
+		if info, err := d.Info(); err == nil {
+			files[path] = info.ModTime()
+		}
+		return nil
+	})
+	return files
 }
 
 func (h *Handlers) ensureConfigUpdated() {
@@ -642,27 +572,6 @@ func (h *Handlers) reloadConfig() error {
 		return err
 	}
 
-	filters := make(map[string]*filter.Program)
-	subviewFilters := make(map[string]*filter.Program)
-	for id, vc := range cfg.Views {
-		prog, err := filter.Compile(vc.Filter)
-		if err != nil {
-			return fmt.Errorf("view %q: compiling filter: %w", id, err)
-		}
-		filters[id] = prog
-
-		for _, sv := range vc.Subviews {
-			if sv.Filter == "" || sv.Filter == "true" {
-				continue
-			}
-			svProg, err := filter.Compile(sv.Filter)
-			if err != nil {
-				return fmt.Errorf("view %q subview %q: compiling filter: %w", id, sv.Name, err)
-			}
-			subviewFilters[id+"\x00"+sv.Name] = svProg
-		}
-	}
-
 	actions := make(map[string]*action.Action)
 	for name, ac := range cfg.Actions {
 		act, err := action.Compile(name, ac)
@@ -673,8 +582,8 @@ func (h *Handlers) reloadConfig() error {
 	}
 
 	h.Cfg = cfg
-	h.filters = filters
-	h.subviewFilters = subviewFilters
+	h.filters = make(map[string]*filter.Program)
+	h.subviewFilters = make(map[string]*filter.Program)
 	h.actions = actions
 
 	if h.SyncServer == nil {

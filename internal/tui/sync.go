@@ -484,20 +484,18 @@ func pullSnapshot(baseDir, serverURL, clientID string, priv ed25519.PrivateKey, 
 		}
 	}
 
-	// Delete local config (.toml) files that are not in the snapshot and not in the outbox.
-	if localConfigs, err := filepath.Glob(filepath.Join(baseDir, "*.toml")); err == nil {
-		for _, cfgPath := range localConfigs {
-			rel, err := filepath.Rel(baseDir, cfgPath)
-			if err != nil {
-				continue
-			}
-			if !snapshotPaths[rel] && !outboxPaths[rel] {
-				absPath := filepath.Clean(cfgPath)
-				if strings.HasPrefix(absPath, filepath.Clean(baseDir)+string(filepath.Separator)) {
-					_ = os.Remove(absPath)
-					_ = c.SetMeta(configHashMetaKey(rel), "")
-					configChanged = true
-				}
+	// Delete synced workspace config files that are absent from the snapshot.
+	for _, cfgPath := range workspaceConfigFiles(baseDir) {
+		rel, err := filepath.Rel(baseDir, cfgPath)
+		if err != nil {
+			continue
+		}
+		if !snapshotPaths[rel] && !outboxPaths[rel] {
+			absPath := filepath.Clean(cfgPath)
+			if strings.HasPrefix(absPath, filepath.Clean(baseDir)+string(filepath.Separator)) {
+				_ = os.Remove(absPath)
+				_ = c.SetMeta(configHashMetaKey(rel), "")
+				configChanged = true
 			}
 		}
 	}
@@ -577,11 +575,7 @@ func listenForServerEvent(serverURL, clientID string, priv ed25519.PrivateKey, c
 }
 
 func enqueueRootConfigs(baseDir string, c *cache.Cache) error {
-	matches, err := filepath.Glob(filepath.Join(baseDir, "*.toml"))
-	if err != nil {
-		return err
-	}
-	for _, path := range matches {
+	for _, path := range workspaceConfigFiles(baseDir) {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
@@ -603,6 +597,24 @@ func enqueueRootConfigs(baseDir string, c *cache.Cache) error {
 		_ = c.SetMeta(configHashMetaKey(rel), hash)
 	}
 	return nil
+}
+
+func workspaceConfigFiles(baseDir string) []string {
+	var files []string
+	_ = filepath.WalkDir(baseDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(baseDir, path)
+		if err != nil {
+			return nil
+		}
+		if config.IsWorkspacePath(rel) {
+			files = append(files, path)
+		}
+		return nil
+	})
+	return files
 }
 
 func configHashMetaKey(path string) string {

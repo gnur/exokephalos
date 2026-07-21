@@ -839,17 +839,23 @@ func BuildLocalChanges(baseDir string, c *cache.Cache, includeAll bool) ([]Chang
 		}
 		changes = append(changes, Change{Op: "upsert_asset", TargetKind: "asset", Path: asset.Path, Hash: asset.Hash, MIME: asset.MIME, Size: asset.Size})
 	}
-	configs, err := filepath.Glob(filepath.Join(baseDir, "*.toml"))
-	if err == nil {
-		for _, path := range configs {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				continue
-			}
-			rel, _ := filepath.Rel(baseDir, path)
-			changes = append(changes, Change{Op: "upsert_config", TargetKind: "config", Path: rel, Content: string(data)})
+	_ = filepath.WalkDir(baseDir, func(configPath string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() {
+			return nil
 		}
-	}
+		rel, err := filepath.Rel(baseDir, configPath)
+		if err != nil {
+			return nil
+		}
+		if !config.IsWorkspacePath(rel) {
+			return nil
+		}
+		data, err := os.ReadFile(configPath)
+		if err == nil {
+			changes = append(changes, Change{Op: "upsert_config", TargetKind: "config", Path: filepath.ToSlash(rel), Content: string(data)})
+		}
+		return nil
+	})
 	return changes, nil
 }
 

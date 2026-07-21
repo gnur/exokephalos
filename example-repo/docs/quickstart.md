@@ -43,33 +43,19 @@ export EXO_DIR=~/notes
 
 ## 2. Add a minimal workspace config file
 
-Create `~/notes/notes.toml`:
+Create `~/notes/exo.fnl`:
 
-```toml
-default_view = "notes"
-
-[views.notes]
-name = "Notes"
-key = "n"
-filter = 'type == "note"'
-show_tags = true
-title_field = "title"
-sort_field = "created"
-sort_order = "desc"
-template = """
----
-type: note
-tags: []
-id: {{.ID}}
-created: {{.Date}}
-title: "{{.Title}}"
----
-
-# {{.Title}}
-"""
+```fennel
+{:default-view :notes
+ :views {:notes {:name "Notes"
+                 :key "n"
+                 :show-tags true
+                 :when (fn [note] (= note.type "note"))
+                 :template "---\ntype: note\ntags: []\nid: {{.ID}}\ncreated: {{.Date}}\ntitle: \"{{.Title}}\"\n---\n\n# {{.Title}}\n"}}
+ :actions {}}
 ```
 
-Workspace config lives in root-level `*.toml` files in `EXO_DIR`, such as `notes.toml` and `actions.toml`. The `.exo/` directory is local-only and stores app state such as cache databases, sync keys, `.exo/tui.toml`, and `.exo/serve.toml`. Legacy `.exo/*.toml` and `.exo.toml` workspace configs are still loaded only when no root-level `*.toml` files exist.
+Workspace config lives in `exo.fnl` and optional `modules/**/*.fnl` or `modules/**/*.lua` files in `EXO_DIR`. The `.exo/` directory is local-only and stores app state such as cache databases, sync keys, `.exo/tui.fnl`, `.exo/serve.fnl`, and `.exo/permissions.fnl`.
 
 Each view requires:
 
@@ -77,7 +63,7 @@ Each view requires:
 | --- | --- |
 | `name` | Display name in the TUI and web UI |
 | `key` | Unique ordering/navigation key for the view |
-| `filter` | CEL expression selecting matching markdown files |
+| `when` | Fennel predicate selecting matching markdown files |
 | `template` | Go template used when creating a new item |
 
 Optional fields include `show_tags`, `title_field`, `subtitle_field`, `sort_field`, `sort_order`, `preview_template`, `stats_template`, and `subviews`.

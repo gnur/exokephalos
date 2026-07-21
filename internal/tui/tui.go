@@ -68,8 +68,9 @@ type tagCountsCache struct {
 
 // viewState holds the runtime state for a single configured view.
 type viewState struct {
-	cfg            config.ViewConfig
-	id             string
+	cfg config.ViewConfig
+	id  string
+	// Deprecated test-only fields; runtime filtering uses config predicates.
 	filter         *filter.Program
 	subFilters     []*filter.Program
 	activeSubview  int
@@ -262,24 +263,6 @@ func New(cfg *config.Config, baseDir string, c *cache.Cache, appCfg ...*config.A
 			cfg:            ov.Config,
 			id:             ov.ID,
 			tagCountsCache: &tagCountsCache{},
-		}
-
-		// Compile parent filter
-		prog, err := filter.Compile(ov.Config.Filter)
-		if err != nil {
-			// If filter fails to compile, skip this view
-			continue
-		}
-		vs.filter = prog
-
-		// Compile subview filters
-		for _, sv := range ov.Config.Subviews {
-			subProg, err := filter.Compile(sv.Filter)
-			if err != nil {
-				// Use a permissive filter on error
-				subProg, _ = filter.Compile("true")
-			}
-			vs.subFilters = append(vs.subFilters, subProg)
 		}
 
 		// Precompile preview template if configured
@@ -871,16 +854,14 @@ func (m Model) actionEntries() []actionEntry {
 	for _, name := range names {
 		act := m.actions[name]
 		enabled := false
-		if strings.TrimSpace(act.Filter) == "" {
-			enabled = true
-		} else if hasItem {
-			enabled = act.Match(item.Frontmatter)
+		if hasItem {
+			enabled = act.MatchNote(config.Note{ID: item.ID, Path: item.Path, Type: item.Type, Tags: item.Tags, Frontmatter: item.Frontmatter, Body: item.Body})
 		}
 		entries = append(entries, actionEntry{
 			Kind:        actionEntryConfigured,
 			Name:        name,
 			Description: act.Description,
-			Filter:      act.Filter,
+			Filter:      "",
 			Enabled:     enabled,
 		})
 	}
@@ -1642,7 +1623,7 @@ func (m *Model) applyFilters(allItems []scanner.Item) {
 		vs := &m.views[i]
 		vs.items = nil
 		for _, item := range allItems {
-			matched, err := vs.filter.Eval(item.Frontmatter)
+			matched, err := m.cfg.MatchView(vs.id, config.Note{ID: item.ID, Path: item.Path, Type: item.Type, Tags: item.Tags, Frontmatter: item.Frontmatter, Body: item.Body})
 			if err == nil && matched {
 				vs.items = append(vs.items, item)
 			}
@@ -1682,14 +1663,13 @@ func itemLess(a, b scanner.Item, field string, desc bool) bool {
 }
 
 func (m *Model) applySubviewFilter(vs *viewState) {
-	if vs.activeSubview >= len(vs.subFilters) {
+	if vs.activeSubview >= len(vs.cfg.Subviews) {
 		vs.filteredItems = vs.items
 		return
 	}
-	subFilter := vs.subFilters[vs.activeSubview]
 	vs.filteredItems = nil
 	for _, item := range vs.items {
-		matched, err := subFilter.Eval(item.Frontmatter)
+		matched, err := m.cfg.MatchSubview(vs.id, vs.activeSubview, config.Note{ID: item.ID, Path: item.Path, Type: item.Type, Tags: item.Tags, Frontmatter: item.Frontmatter, Body: item.Body})
 		if err == nil && matched {
 			vs.filteredItems = append(vs.filteredItems, item)
 		}
@@ -2282,20 +2262,6 @@ func (m *Model) reloadConfig() error {
 			cfg:            ov.Config,
 			id:             ov.ID,
 			tagCountsCache: &tagCountsCache{},
-		}
-
-		prog, err := filter.Compile(ov.Config.Filter)
-		if err != nil {
-			continue
-		}
-		vs.filter = prog
-
-		for _, sv := range ov.Config.Subviews {
-			subProg, err := filter.Compile(sv.Filter)
-			if err != nil {
-				subProg, _ = filter.Compile("true")
-			}
-			vs.subFilters = append(vs.subFilters, subProg)
 		}
 
 		if ov.Config.PreviewTemplate != "" {

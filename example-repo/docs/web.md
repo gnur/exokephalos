@@ -13,7 +13,7 @@ EXO_DIR=/path/to/your/notes xo serve
 By default, the server listens locally at:
 `http://localhost:8293`
 
-`EXO_DIR` must point at the data directory containing root-level workspace `*.toml` config files. If it is not set, exo uses `./example-repo`.
+`EXO_DIR` must point at the data directory containing `exo.fnl` and optional workspace modules. If it is not set, exo uses `./example-repo`.
 
 ## Running With Docker
 
@@ -36,12 +36,10 @@ The image runs `xo serve` by default. Prebuilt binaries for TUI, web, and LSP us
 
 ## Serve Mode
 
-`xo serve` is always SQLite-backed and always exposes the sync server. Optionally create `.exo/serve.toml` to override the database path or listen address:
+`xo serve` is always SQLite-backed and always exposes the sync server. Optionally create `.exo/serve.fnl` to override the database path or listen address:
 
-```toml
-[server]
-db_path = ".exo/server.sqlite"
-listen = ":8293"
+```fennel
+{:server {:db-path ".exo/server.sqlite" :listen ":8293"}}
 ```
 
 Then start the server:

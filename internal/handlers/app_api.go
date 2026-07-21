@@ -46,7 +46,6 @@ type appSubview struct {
 type appAction struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	Filter      string `json:"filter"`
 }
 
 type appBootstrapResponse struct {
@@ -450,7 +449,7 @@ func (h *Handlers) appViews() []appView {
 func (h *Handlers) appActions() []appAction {
 	actions := make([]appAction, 0, len(h.Cfg.Actions))
 	for name, cfg := range h.Cfg.Actions {
-		actions = append(actions, appAction{Name: name, Description: cfg.Description, Filter: cfg.Filter})
+		actions = append(actions, appAction{Name: name, Description: cfg.Description})
 	}
 	sort.Slice(actions, func(i, j int) bool { return actions[i].Name < actions[j].Name })
 	return actions

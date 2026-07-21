@@ -927,11 +927,7 @@ func (m Model) filteredActionEntries() []actionEntry {
 
 func (m Model) executeActionEntry(entry actionEntry) (tea.Model, tea.Cmd) {
 	if !entry.Enabled {
-		if entry.Filter != "" {
-			m.status = "Requires: " + entry.Filter
-		} else {
-			m.status = "Action is not available"
-		}
+		m.status = "Action is not applicable to this item"
 		return m, nil
 	}
 

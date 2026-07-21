@@ -4,6 +4,9 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -36,6 +39,8 @@ type Note struct {
 	Tags                 []string
 	Frontmatter          map[string]interface{}
 }
+
+const maxCapabilityFileBytes = 1 << 20
 
 func newRuntime(contents []NamedContent) (*runtime, error) {
 	r := &runtime{modules: map[string]string{}, loaded: map[string]lua.LValue{}}
@@ -357,15 +362,88 @@ func (r *runtime) capabilities(g PermissionGrant) *lua.LTable {
 			if err != nil {
 				L.RaiseError("%v", err)
 			}
+			if len(data) > maxCapabilityFileBytes {
+				L.RaiseError("filesystem read exceeds %d byte limit", maxCapabilityFileBytes)
+			}
 			L.Push(lua.LString(data))
 			return 1
 		}))
 	}
+	if len(g.Write) > 0 {
+		fs.RawSetString("write", r.L.NewFunction(func(L *lua.LState) int {
+			name, content := L.CheckString(1), L.CheckString(2)
+			if !matchesGrant(name, g.Write) {
+				L.RaiseError("filesystem write denied: %s", name)
+			}
+			if len(content) > maxCapabilityFileBytes {
+				L.RaiseError("filesystem write exceeds %d byte limit", maxCapabilityFileBytes)
+			}
+			full := filepath.Join(r.baseDir, name)
+			if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+				L.RaiseError("%v", err)
+			}
+			if err := os.WriteFile(full, []byte(content), 0644); err != nil {
+				L.RaiseError("%v", err)
+			}
+			return 0
+		}))
+	}
 	exo.RawSetString("filesystem", fs)
+	if len(g.Origins) > 0 {
+		network := r.L.NewTable()
+		network.RawSetString("get", r.L.NewFunction(func(L *lua.LState) int {
+			raw := L.CheckString(1)
+			u, err := url.Parse(raw)
+			if err != nil || u.Scheme != "https" || !originAllowed(u, g.Origins) {
+				L.RaiseError("network request denied: %s", raw)
+			}
+			client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if !originAllowed(req.URL, g.Origins) {
+					return http.ErrUseLastResponse
+				}
+				return nil
+			}}
+			resp, err := client.Get(raw)
+			if err != nil {
+				L.RaiseError("%v", err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			if err != nil {
+				L.RaiseError("%v", err)
+			}
+			L.Push(lua.LString(body))
+			return 1
+		}))
+		exo.RawSetString("network", network)
+	}
 	return exo
 }
 
+func matchesGrant(name string, patterns []string) bool {
+	if filepath.IsAbs(name) || strings.Contains(filepath.ToSlash(name), "..") {
+		return false
+	}
+	for _, pattern := range patterns {
+		if ok, _ := path.Match(pattern, filepath.ToSlash(name)); ok {
+			return true
+		}
+	}
+	return false
+}
+func originAllowed(u *url.URL, origins []string) bool {
+	for _, origin := range origins {
+		if origin == u.Scheme+"://"+u.Host {
+			return true
+		}
+	}
+	return false
+}
+
 func applyPermissions(cfg *Config, value lua.LValue) error {
+	if containsFunction(value) {
+		return fmt.Errorf("permissions.fnl must contain data only")
+	}
 	root, ok := value.(*lua.LTable)
 	if !ok {
 		return fmt.Errorf("permissions.fnl must return a table")
@@ -391,14 +469,47 @@ func applyPermissions(cfg *Config, value lua.LValue) error {
 			return
 		}
 		fs, _ := grant.RawGetString("filesystem").(*lua.LTable)
-		if fs != nil {
+		if fs != nil && declared(action.Permissions, "filesystem") {
 			if reads, ok := fs.RawGetString("read").(*lua.LTable); ok {
 				reads.ForEach(func(_ lua.LValue, v lua.LValue) { action.grant.Read = append(action.grant.Read, luaString(v)) })
+			}
+			if writes, ok := fs.RawGetString("write").(*lua.LTable); ok {
+				writes.ForEach(func(_ lua.LValue, v lua.LValue) { action.grant.Write = append(action.grant.Write, luaString(v)) })
+			}
+		}
+		if network, ok := grant.RawGetString("network").(*lua.LTable); ok && declared(action.Permissions, "network") {
+			if origins, ok := network.RawGetString("origins").(*lua.LTable); ok {
+				origins.ForEach(func(_ lua.LValue, v lua.LValue) { action.grant.Origins = append(action.grant.Origins, luaString(v)) })
 			}
 		}
 		cfg.Actions[name] = action
 	})
 	return result
+}
+
+func containsFunction(value lua.LValue) bool {
+	if value.Type() == lua.LTFunction {
+		return true
+	}
+	table, ok := value.(*lua.LTable)
+	if !ok {
+		return false
+	}
+	found := false
+	table.ForEach(func(_, value lua.LValue) {
+		if containsFunction(value) {
+			found = true
+		}
+	})
+	return found
+}
+func declared(items []string, name string) bool {
+	for _, item := range items {
+		if item == name {
+			return true
+		}
+	}
+	return false
 }
 
 func noteTable(L *lua.LState, note Note) *lua.LTable {

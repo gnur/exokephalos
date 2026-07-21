@@ -14,7 +14,7 @@ import './styles.css';
 
 type Screen = 'items' | 'create' | 'settings';
 type Pane = 'tags' | 'items' | 'editor';
-type SettingsTab = 'api-keys' | 'password' | 'sync-clients' | 'sync-status' | 'toml-settings';
+type SettingsTab = 'api-keys' | 'password' | 'sync-clients' | 'sync-status' | 'config-settings';
 
 function itemTitle(item: Item) {
   return item.title || String(item.frontmatter.title ?? item.id);
@@ -756,7 +756,7 @@ function SettingsView({ entries, syncStatus }: { entries: OutboxEntry[]; syncSta
   async function saveConfig() {
     if (!selectedConfigPath) return;
     await updateConfig(selectedConfigPath, configContent);
-    setMessage('TOML settings saved');
+    setMessage('Fennel/Lua settings saved');
     await refreshFromServer();
     await loadConfigs();
   }
@@ -773,7 +773,7 @@ function SettingsView({ entries, syncStatus }: { entries: OutboxEntry[]; syncSta
         <button className={tab === 'password' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('password')}>Password</button>
         <button className={tab === 'sync-clients' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('sync-clients')}>Sync clients</button>
         <button className={tab === 'sync-status' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('sync-status')}>Sync status</button>
-        <button className={tab === 'toml-settings' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('toml-settings')}>TOML settings</button>
+        <button className={tab === 'config-settings' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('config-settings')}>Fennel/Lua settings</button>
       </div>
 
       {tab === 'api-keys' ? (
@@ -845,17 +845,17 @@ function SettingsView({ entries, syncStatus }: { entries: OutboxEntry[]; syncSta
         </div>
       ) : null}
 
-      {tab === 'toml-settings' ? (
+      {tab === 'config-settings' ? (
         <div className="settings-section">
-          <h2>TOML settings</h2>
-          {configs.length === 0 ? <div className="empty-state">No synced TOML settings.</div> : null}
+          <h2>Fennel/Lua settings</h2>
+          {configs.length === 0 ? <div className="empty-state">No synced Fennel/Lua settings.</div> : null}
           {configs.length ? (
             <>
               <label>Config file<select value={selectedConfigPath} onChange={(event) => selectConfig(event.target.value)}>
                 {configs.map((cfg) => <option key={cfg.path} value={cfg.path}>{cfg.path}</option>)}
               </select></label>
-              <textarea className="raw-editor" value={configContent} onChange={(event) => setConfigContent(event.target.value)} aria-label="TOML settings" />
-              <button className="button primary" onClick={() => void saveConfig()}>Save TOML settings</button>
+              <textarea className="raw-editor" value={configContent} onChange={(event) => setConfigContent(event.target.value)} aria-label="Fennel/Lua settings" />
+              <button className="button primary" onClick={() => void saveConfig()}>Save Fennel/Lua settings</button>
               {message ? <p className="notice">{message}</p> : null}
             </>
           ) : null}

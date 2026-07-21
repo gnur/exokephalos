@@ -32,7 +32,7 @@ Because there is no fixed database schema, you can introduce any arbitrary type 
 
 ## Common Expression Language (CEL) Views
 
-Views define the collections displayed in both the TUI and Web interfaces. Views are configured via root-level `.toml` files in `EXO_DIR`, such as `notes.toml` or `books.toml`. The `.exo/` directory is reserved for local app state and machine-local config.
+Views define the collections displayed in both the TUI and Web interfaces. Views are configured in `exo.fnl`, optionally with Fennel or Lua files below `modules/`. The `.exo/` directory is reserved for local app state and machine-local config.
 
 Each view compiles a [Google CEL (Common Expression Language)](https://github.com/google/cel-go) filter expression to select matching markdown files from the repository.
 

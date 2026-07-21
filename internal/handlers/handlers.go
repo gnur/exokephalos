@@ -571,6 +571,11 @@ func (h *Handlers) reloadConfig() error {
 	if err != nil {
 		return err
 	}
+	if h.SyncServer != nil {
+		if err := config.LoadPermissions(h.BaseDir, cfg); err != nil {
+			return err
+		}
+	}
 
 	actions := make(map[string]*action.Action)
 	for name, ac := range cfg.Actions {

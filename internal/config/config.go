@@ -208,6 +208,9 @@ func (a ActionConfig) Match(note Note) (bool, error) {
 	return a.runtime.callPredicate(a.when, note)
 }
 func (a ActionConfig) Run(note Note) (Note, error) {
+	if a.runtime == nil {
+		return Note{}, fmt.Errorf("action %q is not attached to a loaded Fennel workspace", a.name)
+	}
 	return a.runtime.callAction(a.run, note, a.runtime.capabilities(a.grant))
 }
 

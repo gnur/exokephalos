@@ -37,7 +37,7 @@ exokephalos is a Go application for personal knowledge management with a TUI (te
 
 ## Views and Subviews (CEL-Based)
 
-- Views are configured via `.toml` files in the `.exo/` directory inside `EXO_DIR` (e.g. `.exo/notes.toml`, `.exo/books.toml`).
+- Views are configured in workspace `exo.fnl`, with optional `modules/**/*.fnl` or `modules/**/*.lua` files inside `EXO_DIR`.
 - Views filter notes using Google Common Expression Language (CEL) expressions.
 - The CEL environment exposes `type` (string), `tags` (list of strings), and `fm` (full map of frontmatter fields).
 - Subviews provide tabbed filtering using additional CEL sub-expressions.
@@ -49,11 +49,11 @@ exokephalos is a Go application for personal knowledge management with a TUI (te
 
 ## Custom Actions
 
-- Configured under the `[actions]` section in config files (e.g., `.exo/actions.toml`).
+- Configured under `:actions` in workspace `exo.fnl`.
 - Each action specifies:
   - `description`: label.
   - `filter`: CEL boolean expression to check applicability.
-  - `expr`: `yq` mutation syntax (e.g. `.tags -= ["reading"] | .tags += ["read"]`).
+  - `run`: a Fennel/Lua function returning the replacement note.
 
 ## Import and Export Commands
 

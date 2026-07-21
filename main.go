@@ -116,6 +116,10 @@ func runServer(appCfg *config.AppConfig, dir string) {
 		slog.Error("failed to load sync server config", "error", err)
 		os.Exit(1)
 	}
+	if err := config.LoadPermissions(dir, cfg); err != nil {
+		slog.Error("failed to load server action permissions", "error", err)
+		os.Exit(1)
+	}
 	h, err := handlers.NewSyncServer(cfg, dir, s, templatesFS)
 	if err != nil {
 		slog.Error("failed to initialize handlers", "error", err)

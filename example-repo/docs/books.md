@@ -35,19 +35,14 @@ A view can be configured to display a summary page of reading statistics, includ
 
 ### Enabling Stats in a View
 
-To enable the stats page for a view, set the `stats_template` attribute to `"books/stats"` in your view configuration file:
+To enable the stats page for a view, set `:stats-template` to `"books/stats"` in `exo.fnl`:
 
-```toml
-[views.books]
-name = "Books"
-key = "b"
-filter = '("read" in tags || "to-read" in tags || "reading" in tags || "stopped-reading" in tags)'
-show_tags = false
-title_field = "title"
-subtitle_field = "author"
-sort_field = "added"
-sort_order = "desc"
-stats_template = "books/stats"
+```fennel
+{:views {:books {:name "Books" :key "b" :show-tags false
+                 :title-field "title" :subtitle-field "author"
+                 :sort-field "added" :sort-order "desc"
+                 :when (fn [note] (= note.type "book"))
+                 :stats-template "books/stats"}}}
 ```
 
 Once `stats_template` is configured, a "Stats" option becomes available in the dropdown navigation of the web interface (at `/views/books/stats`) displaying reading charts.

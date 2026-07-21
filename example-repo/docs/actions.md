@@ -18,4 +18,16 @@ Custom actions are defined in the synced `exo.fnl` workspace configuration and r
 
 Actions never receive unrestricted filesystem, shell, environment, or network access. They may request capabilities with `:permissions`; the executing host must grant the same action in local-only `.exo/permissions.fnl`. The browser never executes configuration code.
 
+For example, an action that declares `:permissions [:filesystem :network]` can be granted only the paths and HTTPS origins needed on this machine:
+
+```fennel
+{:actions
+ {:import-reference
+  {:filesystem {:read ["references/*"]
+                :write ["generated/*"]}
+   :network {:origins ["https://openlibrary.org"]}}}}
+```
+
+The runtime exposes only `exo.filesystem.read`, `exo.filesystem.write`, and `exo.network.get` when their matching grant exists. Paths are workspace-relative and must match a grant; network requests are HTTPS-only, origin-checked, time-limited, redirect-checked, and response-limited.
+
 Use `:` in the TUI to open the action picker. The web interface shows actions that match the current item.

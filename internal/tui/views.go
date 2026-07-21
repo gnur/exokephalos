@@ -17,7 +17,7 @@ func (m Model) View() string {
 	}
 
 	if len(m.views) == 0 {
-		return "No views configured. Check your .exo.toml file."
+		return "No views configured. Check your exo.fnl file."
 	}
 
 	// Render popup overlays
@@ -86,8 +86,8 @@ func (m Model) renderActionPickerOverlay() string {
 		for i, entry := range visibleEntries {
 			absoluteIndex := entryOffset + i
 			label := fmt.Sprintf("%s — %s", entry.Name, entry.Description)
-			if !entry.Enabled && entry.Filter != "" {
-				label += "  requires: " + entry.Filter
+			if !entry.Enabled {
+				label += "  not applicable"
 			}
 			prefix := "  "
 			if absoluteIndex == m.actionCursor {
@@ -112,8 +112,8 @@ func actionPickerWidth(entries []actionEntry) int {
 	width := 44
 	for _, entry := range entries {
 		labelWidth := len(entry.Name) + len(entry.Description) + 5
-		if !entry.Enabled && entry.Filter != "" {
-			labelWidth += len(entry.Filter) + len("  requires: ")
+		if !entry.Enabled {
+			labelWidth += len("  not applicable")
 		}
 		if labelWidth > width {
 			width = labelWidth

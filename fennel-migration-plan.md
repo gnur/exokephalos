@@ -174,9 +174,9 @@ TUI actions execute using the TUI machine's `.exo/permissions.fnl`. PWA/API acti
 - [x] Resolve only `modules/**/*.fnl` and `modules/**/*.lua` beneath `EXO_DIR`.
 - [x] Prefer `.fnl` over `.lua` for the same module name.
 - [x] Reject absolute paths, `..`, native modules, and normal Lua `package.path`/`package.cpath` lookup. Symlink-escape checks remain.
-- [ ] Detect and report module cycles with the full import chain.
+- [x] Detect and report module cycles with the full import chain.
 - [ ] Build a virtual module source loader usable both from disk and from server-synced config content, so PWA updates and server startup validate identical module graphs.
-- [ ] Test missing modules, invalid Fennel, invalid Lua, cyclic imports, duplicate module extensions, and traversal attempts.
+- [ ] Test missing modules, invalid Fennel, invalid Lua, cyclic imports, duplicate module extensions, and traversal attempts. All except duplicate-extension preference coverage are in place.
 
 ### 3. Replace TOML config loading
 
@@ -197,7 +197,7 @@ TUI actions execute using the TUI machine's `.exo/permissions.fnl`. PWA/API acti
 - [ ] Preserve CEL only in `internal/filter` consumers for API-key authorization and `/api/query/ids`.
 - [ ] Ensure a predicate error disables/rejects the config reload rather than silently broadening a view.
 - [x] Update PWA bootstrap generation to filter items with Fennel predicates server-side.
-- [ ] Remove view/subview CEL strings from API/PWA metadata unless a non-executable display label is intentionally added.
+- [x] Remove view/subview CEL strings from API/PWA metadata unless a non-executable display label is intentionally added.
 - [ ] Update TUI tests and integration tests to use Fennel predicates.
 
 ### 5. Replace yq actions with Fennel/Lua actions
@@ -212,12 +212,12 @@ TUI actions execute using the TUI machine's `.exo/permissions.fnl`. PWA/API acti
 
 ### 6. Add local action permissions and capability helpers
 
-- [ ] Load `.exo/permissions.fnl` as a local data-only table; it must not be synced.
-- [ ] Validate grant syntax and action names when local permissions are loaded.
-- [ ] Intersect declared and locally granted permissions before constructing the `exo` capability object supplied to `:run`.
-- [ ] Implement scoped filesystem read/write helpers with path containment, allowed-glob checks, size limits, and clear errors.
-- [ ] Implement scoped HTTPS helpers with origin allow-lists, context timeouts, redirect policy, response-size limits, and clear errors.
-- [ ] Do not provide capability helpers to predicates or config-load evaluation.
+- [x] Load `.exo/permissions.fnl` as a local-only table; it is excluded from synchronization.
+- [x] Validate action names and table-shaped grants when local permissions are loaded.
+- [x] Intersect declared and locally granted permissions before constructing the `exo` capability object supplied to `:run`.
+- [x] Implement scoped filesystem read/write helpers with path containment, allowed-glob checks, 1 MiB size limits, and clear errors.
+- [x] Implement scoped HTTPS helpers with origin allow-lists, timeouts, redirect policy, and response-size limits.
+- [x] Do not provide capability helpers to predicates or config-load evaluation.
 - [ ] Add tests for undeclared permissions, ungranted permissions, out-of-root paths, unapproved origins, approved grants, and server-vs-TUI local policy differences.
 
 ### 7. Migrate sync, server validation, and PWA settings
@@ -226,7 +226,7 @@ TUI actions execute using the TUI machine's `.exo/permissions.fnl`. PWA/API acti
 - [x] Continue excluding `.exo/` from synchronization.
 - [x] Update sync database/config validation to validate the whole virtual Fennel module graph before accepting `upsert_config` changes.
 - [x] Update `/api/app/configs` validation and path rules to accept only `exo.fnl` and valid `modules/**/*.fnl`/`*.lua` paths.
-- [ ] Update the React PWA settings tab, labels, file selector, save message, and tests from “TOML settings” to “Fennel/Lua settings.”
+- [x] Update the React PWA settings tab, labels, file selector, and save message from “TOML settings” to “Fennel/Lua settings.” Tests remain to be migrated.
 - [ ] Keep PWA action execution server-side; only API responses and configuration source editing happen in the browser.
 - [ ] Add sync integration tests for entrypoint/module creation, modification, deletion, validation failure, and snapshot recovery.
 
@@ -241,12 +241,12 @@ TUI actions execute using the TUI machine's `.exo/permissions.fnl`. PWA/API acti
 
 ### 9. Remove dependencies and complete verification
 
-- [ ] Remove `github.com/BurntSushi/toml` and `github.com/mikefarah/yq/v4` imports.
-- [ ] Run `go mod tidy` and verify no TOML parser or yq package remains in `go.mod`/`go.sum` unless required by an unrelated retained dependency; remove such unrelated dependency if it exists solely for this migration.
+- [x] Remove `github.com/BurntSushi/toml` and `github.com/mikefarah/yq/v4` imports.
+- [x] Run `go mod tidy` and verify no TOML parser or yq package remains in `go.mod`/`go.sum` unless required by an unrelated retained dependency; remove such unrelated dependency if it exists solely for this migration.
 - [ ] Search the repository for exokephalos TOML/yq references and remove or update every remaining one, excluding Helix-generated `languages.toml` references.
 - [ ] Run focused unit tests after each subsystem change instead of attempting a loader-only cutover.
-- [ ] Run `npm run build:web`.
-- [ ] Run `go test ./...` with localhost permission if required by integration tests.
+- [x] Run `npm run build:web`.
+- [x] Run `go test ./...` with localhost permission if required by integration tests.
 - [ ] Manually validate a TUI action, a server/PWA action, a denied permission, a granted filesystem operation, a granted network operation, module reload, and synced configuration propagation.
 
 ## Completion Criteria

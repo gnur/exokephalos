@@ -191,12 +191,10 @@ The web UI listens to this stream and refreshes the current page when notes or c
 
 ## TUI Sync API
 
-The TUI uses these endpoints when `.exo/tui.toml` contains:
+The TUI uses these endpoints when `.exo/tui.fnl` contains:
 
-```toml
-[sync]
-server_url = "http://localhost:8293"
-client_id = "laptop"
+```fennel
+{:sync {:server-url "http://localhost:8293" :client-id "laptop"}}
 ```
 
 The initial enrollment request is unsigned. After approval, all sync data requests are signed with the client's generated ed25519 private key.
@@ -280,7 +278,7 @@ Supported config operations:
 
 | Operation | Meaning |
 | --- | --- |
-| `upsert_config` | Create or update a root-level workspace TOML config |
+| `upsert_config` | Create or update `exo.fnl` or a `modules/**/*.fnl`/`*.lua` workspace config file |
 | `delete_config` | Mark a config deleted |
 | `delete` | Delete alias accepted by the server |
 
@@ -316,7 +314,7 @@ Response:
     {
       "op": "upsert_config",
       "target_kind": "config",
-      "path": "notes.toml",
+      "path": "exo.fnl",
       "content": "default_view = \"notes\"\n"
     }
   ]
@@ -342,7 +340,7 @@ Signed sync endpoints require these headers:
 
 | Header | Description |
 | --- | --- |
-| `X-Exo-Client-ID` | Client ID from `.exo/tui.toml` or hostname fallback |
+| `X-Exo-Client-ID` | Client ID from `.exo/tui.fnl` or hostname fallback |
 | `X-Exo-Timestamp` | RFC3339Nano UTC timestamp; must be within 5 minutes |
 | `X-Exo-Nonce` | Unique nonce for this client |
 | `X-Exo-Signature` | Base64 ed25519 signature |

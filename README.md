@@ -3,17 +3,17 @@
 ** outside of head, from the greek εγκέφαλος which literally means within the head, or brain **
 
 `xo` (pronounced exo) is a offline first note / personal knowledge / zettelkasten application. It's a TUI for quickly creating, updating and searching notes. It uses markdown with frontmatter for managing metadata. The tui can sync with a sync server that doubles as a PWA host. Everything is offline first.
-Views and subviews can be configured using TOML files, using [CEL](https://cel.dev/overview/cel-overview) for filtering.
+Views and subviews are configured in Fennel (`exo.fnl` and optional workspace modules) with Fennel predicates.
 The sync server also has an API that can be used for querying, retrieving and updating items in the `xo` database.
 
 
 ## Features
 
 - **Fully generic, config-driven** — Define any type of content (notes, books, articles, logs, etc.) via configuration files
-- **Config-driven views** — Define any number of views with CEL filter expressions on frontmatter
+- **Config-driven views** — Define any number of views with Fennel predicates over complete notes
 - **Subviews** — Narrow a view with additional filters (shown as tabs)
 - **Tag filtering** — Views with `show_tags = true` get a clickable tag sidebar
-- **Actions** — User-triggered frontmatter transformations with CEL matching + yq expressions
+- **Actions** — User-triggered Fennel/Lua note transformations with local capability grants
 - **Book tracking** — Manage a reading list with statuses (to-read, reading, read)
 - **Webhooks** — Receive and store incoming webhooks as markdown files
 - **Stats pages** — Per-view stats with embedded templates
@@ -62,33 +62,17 @@ export EXO_DIR=~/notes
 
 ### 2. Add a minimal config file
 
-Create `~/notes/notes.toml`:
+Create `~/notes/exo.fnl`:
 
-```toml
-default_view = "notes"
-
-[views.notes]
-name = "Notes"
-key = "n"
-filter = 'type == "note"'
-show_tags = true
-title_field = "title"
-sort_field = "created"
-sort_order = "desc"
-template = """
----
-type: note
-tags: []
-id: {{.ID}}
-created: {{.Date}}
-title: "{{.Title}}"
----
-
-# {{.Title}}
-"""
+```fennel
+{:default-view :notes
+ :views {:notes {:name "Notes" :key "n" :show-tags true
+                 :when (fn [note] (= note.type "note"))
+                 :template "---\ntype: note\ntags: []\nid: {{.ID}}\ncreated: {{.Date}}\ntitle: \"{{.Title}}\"\n---\n\n# {{.Title}}\n"}}
+ :actions {}}
 ```
 
-Workspace config lives in root-level `*.toml` files in `EXO_DIR`, such as `notes.toml` and `actions.toml`. The `.exo/` directory is reserved for local application config, cache databases, sync keys, and other machine-local state. Legacy `.exo/*.toml` and `.exo.toml` workspace configs are still loaded only when no root-level `*.toml` files exist.
+Workspace config lives in `exo.fnl` and optional `modules/**/*.fnl` or `modules/**/*.lua` files in `EXO_DIR`. The `.exo/` directory is local-only and holds application settings, permissions, cache databases, and sync keys.
 
 Each view needs:
 
@@ -96,7 +80,7 @@ Each view needs:
 |-------|---------|
 | `name` | Display name in the TUI and web UI |
 | `key` | Unique ordering/navigation key for the view |
-| `filter` | CEL expression selecting matching markdown files |
+| `when` | Fennel predicate selecting matching markdown files |
 | `template` | Go template used when creating a new item |
 
 Optional fields such as `show_tags`, `title_field`, `subtitle_field`, `sort_field`, `sort_order`, `preview_template`, `stats_template`, and `subviews` control display and filtering behavior.
@@ -134,141 +118,40 @@ EXO_DIR=~/notes xo lsp    # LSP server on stdio
 
 ## Configuration
 
-Views and actions are defined in root-level `*.toml` files in your data directory (`EXO_DIR`). The app scans all `.md` files recursively and filters them by frontmatter using [CEL expressions](https://github.com/google/cel-go).
+Views and actions are defined in `exo.fnl`, with optional Fennel or Lua modules below `modules/` in your data directory (`EXO_DIR`). The app scans all `.md` files recursively and filters them with Fennel predicates.
 
-The `.exo/` directory is local-only. It is used for files such as `.exo/tui.toml`, `.exo/serve.toml`, `.exo/cache.sqlite`, generated sync keys, and server databases. These files are not workspace config and are not intended to sync between machines.
+The `.exo/` directory is local-only. It is used for `.exo/tui.fnl`, `.exo/serve.fnl`, `.exo/permissions.fnl`, `.exo/cache.sqlite`, generated sync keys, and server databases. These files are not workspace config and are never synced.
 
-Config loading order:
-
-1. Load all root-level `*.toml` files, except `.exo.toml`.
-2. If no root-level TOML files exist, fall back to legacy `.exo/*.toml`, excluding `.exo/tui.toml` and `.exo/serve.toml`.
-3. If no legacy `.exo/*.toml` files exist, fall back to legacy `.exo.toml`.
+`exo.fnl` is required. Modules resolve only from `modules/`, preferring `.fnl` over `.lua` for the same module name.
 
 ### Minimal example
 
-```toml
-default_view = "notes"
-
-[views.notes]
-name = "Notes"
-key = "n"
-filter = 'type == "note"'
-show_tags = true
-title_field = "title"
-sort_field = "created"
-sort_order = "desc"
-template = """
----
-type: note
-tags: []
-id: {{.ID}}
-created: {{.Date}}
-title: "{{.Title}}"
----
-
-# {{.Title}}
-"""
+```fennel
+{:default-view :notes
+ :views {:notes {:name "Notes" :key "n" :show-tags true
+                 :when (fn [note] (= note.type "note"))
+                 :template "---\ntype: note\ntags: []\nid: {{.ID}}\ncreated: {{.Date}}\ntitle: \"{{.Title}}\"\n---\n\n# {{.Title}}\n"}}
+ :actions {}}
 ```
 
 ### Full example with subviews and stats
 
-```toml
-default_view = "notes"
-
-[views.notes]
-name = "Notes"
-key = "n"
-filter = 'type == "note" && !("read" in tags || "to-read" in tags)'
-show_tags = true
-title_field = "title"
-sort_field = "created"
-sort_order = "desc"
-template = """
----
-type: note
-tags: []
-id: {{.ID}}
-created: {{.Date}}
-title: "{{.Title}}"
----
-
-# {{.Title}}
-"""
-
-[[views.notes.subviews]]
-name = "All"
-filter = "true"
-
-[[views.notes.subviews]]
-name = "Recipes"
-filter = '"recept" in tags'
-
-[views.books]
-name = "Books"
-key = "b"
-filter = '("read" in tags || "to-read" in tags || "reading" in tags)'
-show_tags = false
-title_field = "title"
-subtitle_field = "author"
-sort_field = "added"
-sort_order = "desc"
-stats_template = "books/stats"
-template = """
----
-type: book
-tags: [to-read]
-author: {{.Author}}
-title: "{{.Title}}"
-pages: {{.Pages}}
-cover: "{{.Cover}}"
-url: "{{.URL}}"
-added: {{.Date}}
-started:
-finished:
----
-"""
-preview_template = """
-# {{.title}}
-
-**Author:** {{.author}}
-**Pages:** {{.pages}}
-**Added:** {{.added}}
-"""
-
-[[views.books.subviews]]
-name = "All"
-filter = "true"
-
-[[views.books.subviews]]
-name = "To Read"
-filter = '"to-read" in tags'
-
-[[views.books.subviews]]
-name = "Reading"
-filter = '"reading" in tags'
-
-[[views.books.subviews]]
-name = "Read"
-filter = '"read" in tags'
-
-[views.articles]
-name = "Articles"
-key = "a"
-filter = 'type == "article"'
-show_tags = true
-title_field = "title"
-sort_field = "published"
-sort_order = "desc"
-template = """
----
-type: article
-title: "{{.Title}}"
-author: ""
-url: ""
-published: {{.Date}}
-tags: []
----
-"""
+```fennel
+(local has-tag (fn [tags tag]
+                 (var found false)
+                 (each [_ value (ipairs tags)] (when (= value tag) (set found true)))
+                 found))
+{:default-view :notes
+ :views {:notes {:name "Notes" :key "n" :show-tags true
+                 :when (fn [note] (= note.type "note"))
+                 :template "---\ntype: note\ntags: []\ntitle: \"{{.Title}}\"\n---\n"
+                 :subviews [{:name "All" :when (fn [_] true)}
+                            {:name "Recipes" :when (fn [note] (has-tag note.tags "recept"))}]}
+         :books {:name "Books" :key "b" :show-tags false :title-field "title"
+                 :subtitle-field "author" :sort-field "added" :stats-template "books/stats"
+                 :when (fn [note] (= note.type "book"))
+                 :template "---\ntype: book\ntags: [to-read]\ntitle: \"{{.Title}}\"\n---\n"}}
+ :actions {}}
 ```
 
 ### Config reference
@@ -277,15 +160,15 @@ tags: []
 
 | Field | Description |
 |-------|-------------|
-| `default_view` | View ID to show on startup (TUI) and root redirect (web) |
+| `:default-view` | View ID to show on startup (TUI) and root redirect (web) |
 
-#### `[views.<id>]`
+#### `:views`
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | yes | Display name |
 | `key` | yes | Unique single-char key for TUI view switching |
-| `filter` | yes | CEL expression evaluated against frontmatter |
+| `when` | yes | Fennel predicate evaluated against the complete note |
 | `show_tags` | no | Show tag sidebar + tag badges on items (default: false) |
 | `title_field` | no | Frontmatter field for item title (default: "title") |
 | `subtitle_field` | no | Frontmatter field for subtitle line |
@@ -295,53 +178,20 @@ tags: []
 | `preview_template` | no | Go template for TUI preview pane (receives frontmatter + `.Body`) |
 | `stats_template` | no | Embedded stats template name (e.g. "books/stats") |
 
-#### `[[views.<id>.subviews]]`
+#### Subviews and actions
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `name` | yes | Tab label |
-| `filter` | yes | CEL expression (ANDed with parent view filter) |
+Subviews use `:name` and a boolean Fennel `:when` predicate. Actions have `:description`, optional `:when`, optional capability `:permissions`, and required `:run`; `:run` receives and returns the complete note.
 
-#### `[actions.<name>]`
-
-Actions are user-triggered transformations that modify an item's frontmatter on disk. The optional `filter` field uses CEL to determine which items the action applies to, and `expr` uses [yq](https://github.com/mikefarah/yq) syntax to describe the transformation.
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `filter` | no | CEL expression — item must match for the action to be enabled; omitted means always enabled |
-| `expr` | yes | yq expression describing the frontmatter mutation |
-| `description` | yes | Human-readable label shown in the UI |
-
-**Example:**
-
-```toml
-[actions.finish-book]
-filter = '"reading" in tags'
-expr = '.tags -= ["reading"] | .tags += ["read"] | .finished = now'
-description = "Mark book as finished reading"
-
-[actions.archive-note]
-filter = 'type == "note" && "active" in tags'
-expr = '.tags -= ["active"] | .tags += ["archived"] | .archived_at = now'
-description = "Archive this note"
+```fennel
+{:actions
+ {:mark-done {:description "Mark item as done"
+              :when (fn [note] (= note.frontmatter.status "todo"))
+              :run (fn [note]
+                     (assoc note :frontmatter
+                            (assoc note.frontmatter :status "done")))}}}
 ```
 
-**yq expression reference:**
-
-| Operation | Expression |
-|-----------|-----------|
-| Remove tag, add another | `.tags -= ["old"] \| .tags += ["new"]` |
-| Add current datetime | `.updated = now` |
-| Add formatted date | `.created = (now \| format_datetime("2006-01-02"))` |
-| Remove a field | `del(.deprecated)` |
-
-### CEL filter variables
-
-| Variable | Type | Description |
-|----------|------|-------------|
-| `type` | string | Value of frontmatter `type` field |
-| `tags` | list(string) | Value of frontmatter `tags` field |
-| `fm` | map(string, dyn) | Full frontmatter map for advanced queries |
+Workspace views/actions no longer use CEL or yq. CEL remains only for API-key authorization and `POST /api/query/ids`.
 
 ### Template auto-fill variables
 
@@ -479,12 +329,10 @@ In serve mode:
 
 ### Start Serve Mode
 
-Optionally create `.exo/serve.toml` in the server data directory to override the default database path or listen address:
+Optionally create `.exo/serve.fnl` in the server data directory to override the default database path or listen address:
 
-```toml
-[server]
-db_path = ".exo/server.sqlite"
-listen = ":8293"
+```fennel
+{:server {:db-path ".exo/server.sqlite" :listen ":8293"}}
 ```
 
 Start the server:
@@ -510,12 +358,10 @@ http://localhost:8293/admin/sync/clients
 
 ### Configure A TUI Client
 
-Create `.exo/tui.toml` in the client workspace:
+Create `.exo/tui.fnl` in the client workspace:
 
-```toml
-[sync]
-server_url = "http://localhost:8293"
-client_id = "laptop"
+```fennel
+{:sync {:server-url "http://localhost:8293" :client-id "laptop"}}
 ```
 
 Then start the TUI:
@@ -559,10 +405,8 @@ http://localhost:8293/admin/sync/clients
 
 Configure a local TUI client with the forwarded URL:
 
-```toml
-[sync]
-server_url = "http://localhost:8293"
-client_id = "laptop"
+```fennel
+{:sync {:server-url "http://localhost:8293" :client-id "laptop"}}
 ```
 
 Inside the cluster, the service URL is:
@@ -592,7 +436,7 @@ require('lspconfig.configs').exokephalos = {
     cmd = { 'xo', 'lsp' },
     filetypes = { 'markdown' },
     root_dir = function(fname)
-      return vim.fs.dirname(vim.fs.find({ '.exo.toml', '.exo' }, { upward = true })[1])
+      return vim.fs.dirname(vim.fs.find({ 'exo.fnl', '.exo' }, { upward = true })[1])
     end,
     settings = {},
   },
@@ -608,7 +452,7 @@ Helix: Run `xo helix-init` to automatically create `.helix/languages.toml` with 
 
 - Go (stdlib `net/http` with 1.22+ routing)
 - [CEL-Go](https://github.com/google/cel-go) for filter expressions
-- [yq](https://github.com/mikefarah/yq) for action expressions
+- [Fennel](https://fennel-lang.org/) for workspace configuration and actions
 - [Bubbletea](https://github.com/charmbracelet/bubbletea) + [Lipgloss](https://github.com/charmbracelet/lipgloss) + [Glamour](https://github.com/charmbracelet/glamour) for TUI
 - Tailwind CSS v4 (web interface)
 - Go `html/template` for web rendering
@@ -697,7 +541,7 @@ task dev  # Hot-reload with Air + CSS watch
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `EXO_DIR` | `./example-repo` | Path to the data directory (normally contains root-level workspace `*.toml` config plus markdown files) |
+| `EXO_DIR` | `./example-repo` | Path to the data directory (normally contains `exo.fnl`, optional modules, and markdown files) |
 | `EDITOR` | `vim` | Editor used by the TUI for editing |
 
 ## Data Structure
@@ -708,11 +552,12 @@ The data directory is flat — all `.md` files are scanned recursively and filte
 data-dir/
 ├── .exo/               # Local-only app state and machine config
 │   ├── cache.sqlite    # TUI cache and sync outbox
-│   ├── tui.toml        # Optional TUI-local sync settings
-│   ├── serve.toml      # Optional server-local settings
+│   ├── tui.fnl         # Optional TUI-local sync settings
+│   ├── serve.fnl       # Optional server-local settings
+│   ├── permissions.fnl # Local action capability grants
 │   └── keys/           # Generated client signing keys
-├── notes.toml          # Synced workspace view config
-├── actions.toml        # Synced workspace actions
+├── exo.fnl             # Synced workspace configuration entrypoint
+├── modules/            # Optional synced Fennel/Lua workspace modules
 ├── notes/              # Notes (type: note)
 ├── books/              # Books (tagged read/to-read/reading)
 ├── articles/           # Articles (type: article)

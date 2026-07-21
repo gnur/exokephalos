@@ -9,7 +9,7 @@ import (
 func TestFennelWorkspacePredicatesAndActions(t *testing.T) {
 	cfg, err := LoadContents([]NamedContent{{Name: "exo.fnl", Content: []byte(`
 {:default-view :notes
- :views {:notes {:name "Notes" :key "n" :when (fn [note] (= note.type "note")) :template "---\n---\n"}}
+ :views {:notes {:name "Notes" :key "n" :when (fn [note] (= note.type "note"))}}
  :actions {:append-body {:description "Append" :run (fn [note] (assoc note :body (.. note.body "!")))}}}
 `)}})
 	if err != nil {
@@ -33,7 +33,7 @@ func TestPermissionsRequireWorkspaceDeclarationAndLocalGrant(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "input.txt"), []byte("allowed"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	workspace := `{:views {:notes {:name "Notes" :key "n" :when (fn [_] true) :template "---\n---\n"}}
+	workspace := `{:views {:notes {:name "Notes" :key "n" :when (fn [_] true)}}
 :actions {:read {:description "Read" :permissions [:filesystem] :run (fn [note exo] (assoc note :body (exo.filesystem.read "input.txt")))}}}`
 	if err := os.WriteFile(filepath.Join(dir, "exo.fnl"), []byte(workspace), 0644); err != nil {
 		t.Fatal(err)
@@ -66,7 +66,7 @@ func TestFilesystemWritePermissionIsScoped(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, ".exo"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	workspace := `{:views {:notes {:name "Notes" :key "n" :when (fn [_] true) :template "---\n---\n"}}
+	workspace := `{:views {:notes {:name "Notes" :key "n" :when (fn [_] true)}}
 :actions {:write {:description "Write" :permissions [:filesystem] :run (fn [note exo] (do (exo.filesystem.write "generated/output.txt" "written") note))}}}`
 	if err := os.WriteFile(filepath.Join(dir, "exo.fnl"), []byte(workspace), 0644); err != nil {
 		t.Fatal(err)
@@ -90,12 +90,12 @@ func TestFilesystemWritePermissionIsScoped(t *testing.T) {
 func TestWorkspaceModulesAreSandboxed(t *testing.T) {
 	base := []NamedContent{
 		{Name: "exo.fnl", Content: []byte(`(local views (require :modules.views)) {:views views :actions {}}`)},
-		{Name: "modules/views.fnl", Content: []byte(`{:notes {:name "Notes" :key "n" :when (fn [_] true) :template "---\n---\n"}}`)},
+		{Name: "modules/views.fnl", Content: []byte(`{:notes {:name "Notes" :key "n" :when (fn [_] true)}}`)},
 	}
 	if _, err := LoadContents(base); err != nil {
 		t.Fatalf("loading Fennel module: %v", err)
 	}
-	withLua := []NamedContent{base[0], {Name: "modules/views.lua", Content: []byte(`return { notes = { name = "Notes", key = "n", when = function(_) return true end, template = "---\n---\n" } }`)}}
+	withLua := []NamedContent{base[0], {Name: "modules/views.lua", Content: []byte(`return { notes = { name = "Notes", key = "n", when = function(_) return true end } }`)}}
 	if _, err := LoadContents(withLua); err != nil {
 		t.Fatalf("loading Lua module: %v", err)
 	}

@@ -110,35 +110,6 @@ func TestHardcoverBookTitle(t *testing.T) {
 	}
 }
 
-func TestHardcoverBookTemplateIncludesImportedMetadata(t *testing.T) {
-	vars := newAutoFillVars()
-	vars["Title"] = "Book Title"
-	vars["Author"] = "[Author Name]"
-	vars["URL"] = "https://hardcover.app/books/book-title"
-	vars["Pages"] = "123"
-	vars["Cover"] = "https://example.com/cover.jpg"
-	vars["ISBN"] = "9781234567890"
-
-	content, _, err := renderCreateTemplate(hardcoverBookTemplate, "books", t.TempDir(), vars)
-	if err != nil {
-		t.Fatalf("renderCreateTemplate: %v", err)
-	}
-	for _, want := range []string{
-		"type: book",
-		"tags:\n  - to-read",
-		"author:\n  - Author Name",
-		"title: Book Title",
-		"pages: 123",
-		"cover: https://example.com/cover.jpg",
-		"url: https://hardcover.app/books/book-title",
-		`isbn: "9781234567890"`,
-	} {
-		if !strings.Contains(content, want) {
-			t.Errorf("rendered content missing %q:\n%s", want, content)
-		}
-	}
-}
-
 func TestAppendImportedDescriptionPreservesExistingBody(t *testing.T) {
 	content := "---\ntype: book\n---\nExisting notes\n"
 	got := appendImportedDescription(content, "A short description.")
@@ -277,37 +248,6 @@ func TestEnsureIDInFrontmatter_NoFrontmatter(t *testing.T) {
 	}
 }
 
-func TestRenderCreateTemplate_InjectsID(t *testing.T) {
-	// Template without id field
-	tmpl := "---\ntype: article\ntimestamp: {{.DateTime}}\n---\n"
-
-	vars := newAutoFillVars()
-	content, _, err := renderCreateTemplate(tmpl, "articles", "/tmp", vars)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.Contains(content, "id: ") {
-		t.Errorf("expected id to be auto-injected.\nGot:\n%s", content)
-	}
-}
-
-func TestRenderCreateTemplate_KeepsExistingID(t *testing.T) {
-	// Template with explicit id field
-	tmpl := "---\ntype: note\nid: {{.ID}}\ntitle: {{.Title}}\n---\n"
-
-	vars := newAutoFillVars()
-	vars["Title"] = "Test Note"
-	content, _, err := renderCreateTemplate(tmpl, "notes", "/tmp", vars)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// Should have exactly one id field (not duplicated)
-	count := strings.Count(content, "id: ")
-	if count != 1 {
-		t.Errorf("expected exactly 1 id field, got %d.\nContent:\n%s", count, content)
-	}
-}
-
 func TestModelCreation(t *testing.T) {
 	tmpDir := setupTestRepo(t)
 
@@ -365,7 +305,7 @@ func TestActionPickerFiltersByNameAndDescription(t *testing.T) {
 }
 
 func TestActionPickerShowsDisabledActionAndReportsFilter(t *testing.T) {
-	cfg, err := config.LoadContents([]config.NamedContent{{Name: "exo.fnl", Content: []byte(`{:views {:books {:name "Books" :key "b" :when (fn [_] true) :template "---\n---\n"}} :actions {:finish-book {:description "Finish book" :when (fn [note] (var found false) (each [_ tag (ipairs note.tags)] (when (= tag "reading") (set found true))) found) :run (fn [note] note)}}}`)}})
+	cfg, err := config.LoadContents([]config.NamedContent{{Name: "exo.fnl", Content: []byte(`{:views {:books {:name "Books" :key "b" :when (fn [_] true)}} :actions {:finish-book {:description "Finish book" :when (fn [note] (var found false) (each [_ tag (ipairs note.tags)] (when (= tag "reading") (set found true))) found) :run (fn [note] note)}}}`)}})
 	if err != nil {
 		t.Fatal(err)
 	}

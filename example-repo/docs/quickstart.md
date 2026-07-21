@@ -50,8 +50,7 @@ Create `~/notes/exo.fnl`:
  :views {:notes {:name "Notes"
                  :key "n"
                  :show-tags true
-                 :when (fn [note] (= note.type "note"))
-                 :template "---\ntype: note\ntags: []\nid: {{.ID}}\ncreated: {{.Date}}\ntitle: \"{{.Title}}\"\n---\n\n# {{.Title}}\n"}}
+                 :when (fn [note] (= note.type "note"))}}
  :actions {}}
 ```
 
@@ -64,7 +63,6 @@ Each view requires:
 | `name` | Display name in the TUI and web UI |
 | `key` | Unique ordering/navigation key for the view |
 | `when` | Fennel predicate selecting matching markdown files |
-| `template` | Go template used when creating a new item |
 
 Optional fields include `show_tags`, `title_field`, `subtitle_field`, `sort_field`, `sort_order`, `preview_template`, `stats_template`, and `subviews`.
 

@@ -146,7 +146,7 @@ func TestLoadConfigFromDBParsesConfigWithoutTempDir(t *testing.T) {
 	_, err = server.db.Exec(`
 		INSERT INTO configs(path, content, revision, updated_at, deleted_at)
 		VALUES (?, ?, ?, ?, '')
-`, "exo.fnl", `{:views {:notes {:name "Notes" :key "n" :when (fn [note] (= note.type "note")) :template "---\ntype: note\n---\n"}} :actions {}}
+`, "exo.fnl", `{:views {:notes {:name "Notes" :key "n" :when (fn [note] (= note.type "note"))}} :actions {}}
 `, 1, "2026-07-15T08:38:14Z")
 	if err != nil {
 		t.Fatalf("insert config: %v", err)

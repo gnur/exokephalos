@@ -235,7 +235,7 @@ func decodeViews(r *runtime, cfg *Config, value lua.LValue) error {
 			err = fmt.Errorf("view %q must be a table", id)
 			return
 		}
-		v := ViewConfig{Name: luaString(vt.RawGetString("name")), Key: luaString(vt.RawGetString("key")), Filter: "true", ShowTags: luaBool(vt.RawGetString("show-tags")), TitleField: luaString(vt.RawGetString("title-field")), SubtitleField: luaString(vt.RawGetString("subtitle-field")), SortField: luaString(vt.RawGetString("sort-field")), SortOrder: luaString(vt.RawGetString("sort-order")), Template: luaString(vt.RawGetString("template")), PreviewTemplate: luaString(vt.RawGetString("preview-template")), StatsTemplate: luaString(vt.RawGetString("stats-template")), when: callableOf(vt.RawGetString("when"), "view "+id)}
+		v := ViewConfig{Name: luaString(vt.RawGetString("name")), Key: luaString(vt.RawGetString("key")), Filter: "true", ShowTags: luaBool(vt.RawGetString("show-tags")), TitleField: luaString(vt.RawGetString("title-field")), SubtitleField: luaString(vt.RawGetString("subtitle-field")), SortField: luaString(vt.RawGetString("sort-field")), SortOrder: luaString(vt.RawGetString("sort-order")), PreviewTemplate: luaString(vt.RawGetString("preview-template")), StatsTemplate: luaString(vt.RawGetString("stats-template")), when: callableOf(vt.RawGetString("when"), "view "+id)}
 		svs, _ := vt.RawGetString("subviews").(*lua.LTable)
 		if svs != nil {
 			svs.ForEach(func(_ lua.LValue, svv lua.LValue) {

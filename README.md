@@ -68,7 +68,7 @@ Create `~/notes/exo.fnl`:
 {:default-view :notes
  :views {:notes {:name "Notes" :key "n" :show-tags true
                  :when (fn [note] (= note.type "note"))
-                 :template "---\ntype: note\ntags: []\nid: {{.ID}}\ncreated: {{.Date}}\ntitle: \"{{.Title}}\"\n---\n\n# {{.Title}}\n"}}
+                 }}
  :actions {}}
 ```
 
@@ -81,7 +81,6 @@ Each view needs:
 | `name` | Display name in the TUI and web UI |
 | `key` | Unique ordering/navigation key for the view |
 | `when` | Fennel predicate selecting matching markdown files |
-| `template` | Go template used when creating a new item |
 
 Optional fields such as `show_tags`, `title_field`, `subtitle_field`, `sort_field`, `sort_order`, `preview_template`, `stats_template`, and `subviews` control display and filtering behavior.
 
@@ -130,7 +129,7 @@ The `.exo/` directory is local-only. It is used for `.exo/tui.fnl`, `.exo/serve.
 {:default-view :notes
  :views {:notes {:name "Notes" :key "n" :show-tags true
                  :when (fn [note] (= note.type "note"))
-                 :template "---\ntype: note\ntags: []\nid: {{.ID}}\ncreated: {{.Date}}\ntitle: \"{{.Title}}\"\n---\n\n# {{.Title}}\n"}}
+                 }}
  :actions {}}
 ```
 
@@ -144,13 +143,12 @@ The `.exo/` directory is local-only. It is used for `.exo/tui.fnl`, `.exo/serve.
 {:default-view :notes
  :views {:notes {:name "Notes" :key "n" :show-tags true
                  :when (fn [note] (= note.type "note"))
-                 :template "---\ntype: note\ntags: []\ntitle: \"{{.Title}}\"\n---\n"
                  :subviews [{:name "All" :when (fn [_] true)}
                             {:name "Recipes" :when (fn [note] (has-tag note.tags "recept"))}]}
          :books {:name "Books" :key "b" :show-tags false :title-field "title"
                  :subtitle-field "author" :sort-field "added" :stats-template "books/stats"
                  :when (fn [note] (= note.type "book"))
-                 :template "---\ntype: book\ntags: [to-read]\ntitle: \"{{.Title}}\"\n---\n"}}
+                 }}
  :actions {}}
 ```
 
@@ -174,7 +172,6 @@ The `.exo/` directory is local-only. It is used for `.exo/tui.fnl`, `.exo/serve.
 | `subtitle_field` | no | Frontmatter field for subtitle line |
 | `sort_field` | no | Frontmatter field to sort by (default: "created") |
 | `sort_order` | no | "asc" or "desc" (default: "desc") |
-| `template` | yes | Go template for file content on creation |
 | `preview_template` | no | Go template for TUI preview pane (receives frontmatter + `.Body`) |
 | `stats_template` | no | Embedded stats template name (e.g. "books/stats") |
 

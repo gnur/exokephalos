@@ -4,15 +4,13 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
-	gotemplate "text/template"
 	"time"
 
 	"github.com/gnur/exokephalos/internal/config"
 	"github.com/gnur/exokephalos/internal/encryption"
-	"github.com/gnur/exokephalos/internal/id"
+	"github.com/gnur/exokephalos/internal/itemcreate"
 	"github.com/gnur/exokephalos/internal/markdown"
 	"github.com/gnur/exokephalos/internal/scanner"
 	"gopkg.in/yaml.v3"
@@ -282,17 +280,13 @@ func (h *Handlers) ViewNew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse template to extract variable names for the form
-	vars := extractTemplateVars(viewCfg.Template)
-	data["FormVars"] = vars
-
 	h.render(w, r, "views/new.html", data)
 }
 
 // ViewNewPost handles the creation of a new item from form submission.
 func (h *Handlers) ViewNewPost(w http.ResponseWriter, r *http.Request) {
 	viewID := r.PathValue("viewId")
-	viewCfg, ok := h.Cfg.Views[viewID]
+	_, ok := h.Cfg.Views[viewID]
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -300,52 +294,16 @@ func (h *Handlers) ViewNewPost(w http.ResponseWriter, r *http.Request) {
 
 	_ = r.ParseForm()
 
-	// Build vars from form values. Encryption controls are handled separately
-	// rather than being made available to content templates.
-	vars := make(map[string]string)
-	for key, values := range r.Form {
-		if key == "encrypted" || key == "passphrase" {
-			continue
-		}
-		if len(values) > 0 {
-			vars[key] = values[0]
-		}
-	}
-
-	// Import auto-fill vars from the TUI's create logic.
-	// We duplicate the time-based fills here for the web.
-	now := time.Now()
-	if vars["Date"] == "" {
-		vars["Date"] = now.Format("2006-01-02")
-	}
-	if vars["DateTime"] == "" {
-		vars["DateTime"] = now.Format("2006-01-02T15:04:05")
-	}
-	if vars["Year"] == "" {
-		vars["Year"] = now.Format("2006")
-	}
-	if vars["Month"] == "" {
-		vars["Month"] = now.Format("01")
-	}
-	if vars["Day"] == "" {
-		vars["Day"] = now.Format("02")
-	}
-	if vars["ID"] == "" {
-		vars["ID"] = id.GenerateID()
-	}
-
-	// Render content and path from templates
-	content, fullPath, err := renderWebCreateTemplate(viewCfg.Template, viewID, h.BaseDir, vars)
+	item, err := itemcreate.New(h.BaseDir, r.FormValue("type"), r.FormValue("title"), r.FormValue("body"))
 	if err != nil {
-		http.Error(w, "Template error: "+err.Error(), 500)
+		http.Error(w, "Create error: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	fm, body, err := markdown.ParseFrontmatterBytes([]byte(content))
-	if err != nil {
-		http.Error(w, err.Error(), 500)
+	if err := itemcreate.Verify(item.Frontmatter, strings.TrimSpace(r.FormValue("type")), strings.TrimSpace(r.FormValue("title"))); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	fm, body := item.Frontmatter, item.Body
 	if r.FormValue("encrypted") == "true" {
 		passphrase := r.FormValue("passphrase")
 		if passphrase == "" {
@@ -364,7 +322,7 @@ func (h *Handlers) ViewNewPost(w http.ResponseWriter, r *http.Request) {
 		}
 		fm["encrypted"] = true
 	}
-	if err := h.Store.CreateItem(fullPath, fm, body); err != nil {
+	if err := h.Store.CreateItem(item.Path, fm, body); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -481,124 +439,6 @@ func computeTagCounts(items []scanner.Item) []TagCount {
 		return result[i].Tag < result[j].Tag
 	})
 	return result
-}
-
-// extractTemplateVars parses a Go template string and extracts {{.VarName}} references.
-// It returns only the vars that are NOT auto-fill (Date, DateTime, ID, Year, Month, Day, Slug).
-func extractTemplateVars(tmpl string) []string {
-	autoFill := map[string]bool{
-		"Date": true, "DateTime": true, "ID": true,
-		"Year": true, "Month": true, "Day": true, "Slug": true,
-	}
-
-	seen := map[string]bool{}
-	var vars []string
-
-	// Simple regex-free extraction: find {{.Name}} patterns
-	rest := tmpl
-	for {
-		idx := strings.Index(rest, "{{.")
-		if idx == -1 {
-			break
-		}
-		rest = rest[idx+3:]
-		end := strings.Index(rest, "}}")
-		if end == -1 {
-			break
-		}
-		name := strings.TrimSpace(rest[:end])
-		// Handle pipe expressions like {{.Name | func}}
-		if pipeIdx := strings.Index(name, "|"); pipeIdx != -1 {
-			name = strings.TrimSpace(name[:pipeIdx])
-		}
-		// Handle method calls
-		if strings.Contains(name, "(") || strings.Contains(name, ".") {
-			rest = rest[end+2:]
-			continue
-		}
-		if name != "" && !autoFill[name] && !seen[name] {
-			seen[name] = true
-			vars = append(vars, name)
-		}
-		rest = rest[end+2:]
-	}
-	return vars
-}
-
-// renderWebCreateTemplate renders the content template and generates the file path.
-// It ensures the resulting content always has 'id', 'type', 'tags', and 'created' fields in the frontmatter.
-func renderWebCreateTemplate(contentTmpl, viewID, baseDir string, vars map[string]string) (string, string, error) {
-	// Add Slug derived from Title
-	title := vars["Title"]
-	if title == "" {
-		for k, v := range vars {
-			if strings.ToLower(k) == "title" {
-				title = v
-				break
-			}
-		}
-	}
-	if title != "" {
-		vars["Slug"] = markdown.Slugify(title)
-	}
-
-	// Ensure ID is available
-	idVal, ok := vars["ID"]
-	if !ok || idVal == "" {
-		idVal = id.GenerateID()
-		vars["ID"] = idVal
-	}
-
-	// Render content
-	content, err := renderWebTemplate("content", contentTmpl, vars)
-	if err != nil {
-		return "", "", fmt.Errorf("rendering content template: %w", err)
-	}
-
-	defaultType := strings.TrimSuffix(viewID, "s")
-
-	// Ensure id, type, tags, created are present in frontmatter
-	content, err = markdown.EnsureRequiredFields(content, idVal, defaultType)
-	if err != nil {
-		return "", "", fmt.Errorf("ensuring required fields: %w", err)
-	}
-
-	// Generate destination path according to import logic
-	absBase, err := filepath.Abs(baseDir)
-	if err != nil {
-		return "", "", fmt.Errorf("absolute base path: %w", err)
-	}
-	destDir := filepath.Join(absBase, idVal[:3])
-	var fileName string
-	if title != "" {
-		slug := markdown.Slugify(title)
-		if slug != "" {
-			fileName = idVal + "-" + slug + ".md"
-		} else {
-			fileName = idVal + ".md"
-		}
-	} else {
-		fileName = idVal + ".md"
-	}
-	fullPath := filepath.Clean(filepath.Join(destDir, fileName))
-
-	if !strings.HasPrefix(fullPath, absBase+string(filepath.Separator)) && fullPath != absBase {
-		return "", "", fmt.Errorf("path traversal detected: target path %s is outside base directory %s", fullPath, absBase)
-	}
-
-	return content, fullPath, nil
-}
-
-func renderWebTemplate(name, tmplStr string, vars map[string]string) (string, error) {
-	t, err := gotemplate.New(name).Parse(tmplStr)
-	if err != nil {
-		return "", err
-	}
-	var buf strings.Builder
-	if err := t.Execute(&buf, vars); err != nil {
-		return "", err
-	}
-	return buf.String(), nil
 }
 
 // OrderedView re-export for templates.

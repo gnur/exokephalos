@@ -601,13 +601,17 @@ function CreateView({ views, onCreated }: { views: View[]; onCreated: (id: strin
   const [body, setBody] = useState('');
   const [encrypted, setEncrypted] = useState(false);
   const [url, setURL] = useState('');
-  const types = Array.from(new Set(['note', ...views.map((view) => view.id.endsWith('s') ? view.id.slice(0, -1) : view.id)]));
 
   async function create() {
+	const itemType = type.trim();
+	const itemTitle = title.trim();
     const id = newID();
     const created = new Date().toISOString();
-    const path = `${type}/${created.slice(0, 4)}/${created.slice(5, 7)}/${slugify(title)}.md`;
-    const frontmatter: Frontmatter = { id, type, title, tags: [], created };
+    const path = `${itemType}/${created.slice(0, 4)}/${created.slice(5, 7)}/${slugify(itemTitle)}.md`;
+    const frontmatter: Frontmatter = { id, type: itemType, title: itemTitle, tags: [], created };
+    if (String(frontmatter.type) !== itemType || String(frontmatter.title) !== itemTitle) {
+      throw new Error('new item frontmatter is missing its type or title');
+    }
     let storedBody = body;
     if (encrypted) {
       const passphrase = window.prompt('Passphrase for this note');
@@ -615,7 +619,7 @@ function CreateView({ views, onCreated }: { views: View[]; onCreated: (id: strin
       frontmatter.encrypted = true;
       storedBody = await (await encryption()).encryptBody(id, passphrase, body);
     }
-    const item: Item = { id, type, path, title, subtitle: '', tags: [], frontmatter, body: storedBody, raw: rawFromParts(frontmatter, storedBody), updated_at: created };
+    const item: Item = { id, type: itemType, path, title: itemTitle, subtitle: '', tags: [], frontmatter, body: storedBody, raw: rawFromParts(frontmatter, storedBody), updated_at: created };
     await db.items.put(item);
     await enqueue({ id: crypto.randomUUID(), op: 'upsert_item', item_id: id, path, frontmatter, body: storedBody });
     setTitle('');
@@ -634,11 +638,11 @@ function CreateView({ views, onCreated }: { views: View[]; onCreated: (id: strin
 
   return (
     <section className="single-pane form-pane">
-      <label>Type<select value={type} onChange={(event) => setType(event.target.value)}>{types.map((value) => <option key={value}>{value}</option>)}</select></label>
+      <label>Type<input value={type} onChange={(event) => setType(event.target.value)} /></label>
       <label>Title<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
       <label>Body<textarea value={body} onChange={(event) => setBody(event.target.value)} /></label>
       <label><input type="checkbox" checked={encrypted} onChange={(event) => setEncrypted(event.target.checked)} /> Encrypt body</label>
-      <button className="button primary" disabled={!title.trim()} onClick={() => void create()}>Create</button>
+      <button className="button primary" disabled={!type.trim() || !title.trim()} onClick={() => void create()}>Create</button>
       <div className="divider" />
       <label>Import URL<input value={url} onChange={(event) => setURL(event.target.value)} placeholder="https://..." /></label>
       <button className="button" disabled={!url.trim()} onClick={() => void createFromURL()}>Import URL</button>

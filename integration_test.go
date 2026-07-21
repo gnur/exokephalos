@@ -309,7 +309,9 @@ func TestViewCreateAndDelete(t *testing.T) {
 
 	// Create a note
 	form := url.Values{}
-	form.Set("Title", "Integration Test Note")
+	form.Set("type", "note")
+	form.Set("title", "Integration Test Note")
+	form.Set("body", "Created through the standard form.")
 
 	resp, err := client.PostForm(srv.URL+"/views/notes/new", form)
 	if err != nil {
@@ -328,6 +330,26 @@ func TestViewCreateAndDelete(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	s := string(body)
 	assertContains(t, s, "Integration Test Note")
+
+	var createdContent string
+	err = filepath.Walk(filepath.Join(tmpDir, "note"), func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || filepath.Ext(path) != ".md" {
+			return err
+		}
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if strings.Contains(string(content), "title: Integration Test Note") {
+			createdContent = string(content)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, createdContent, "type: note")
+	assertContains(t, createdContent, "title: Integration Test Note")
 
 	// Find the item ID from the link
 	idx := strings.Index(s, "Integration Test Note")

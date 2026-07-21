@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"text/template"
 
 	"github.com/gnur/exokephalos/internal/id"
+	"github.com/gnur/exokephalos/internal/itemcreate"
 	"github.com/gnur/exokephalos/internal/markdown"
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
@@ -77,38 +77,14 @@ func (s *Server) normalizeFrontmatterAction(action *protocol.CodeAction, data ma
 }
 
 func (s *Server) createNote(title string) error {
-	if s.config == nil {
-		return fmt.Errorf("workspace configuration is unavailable")
-	}
-	views := s.config.OrderedViews()
-	if len(views) == 0 {
-		return fmt.Errorf("no view is configured")
-	}
-	view := views[s.config.DefaultViewIndex()]
-	noteID := id.GenerateID()
-	vars := map[string]string{"Title": title, "ID": noteID, "Slug": markdown.Slugify(title)}
-	t, err := template.New("note").Parse(view.Config.Template)
-	if err != nil {
-		return fmt.Errorf("parsing note template: %w", err)
-	}
-	var content strings.Builder
-	if err := t.Execute(&content, vars); err != nil {
-		return fmt.Errorf("rendering note template: %w", err)
-	}
-	rendered, err := markdown.EnsureRequiredFields(content.String(), noteID, strings.TrimSuffix(view.ID, "s"))
+	item, err := itemcreate.New(s.baseDir, "note", title, "")
 	if err != nil {
 		return err
 	}
-	fm, body, err := markdown.ParseFrontmatterBytes([]byte(rendered))
-	if err != nil {
+	if err := itemcreate.Verify(item.Frontmatter, "note", strings.TrimSpace(title)); err != nil {
 		return err
 	}
-	name := noteID + ".md"
-	if slug := markdown.Slugify(title); slug != "" {
-		name = noteID + "-" + slug + ".md"
-	}
-	path := filepath.Join(s.baseDir, noteID[:3], name)
-	return s.repo.CreateItem(path, fm, body)
+	return s.repo.CreateItem(item.Path, item.Frontmatter, item.Body)
 }
 
 func documentSymbols(text string) []protocol.DocumentSymbol {

@@ -42,7 +42,6 @@ type ViewConfig struct {
 	SubtitleField   string          `json:"subtitle_field"`
 	SortField       string          `json:"sort_field"`
 	SortOrder       string          `json:"sort_order"`
-	Template        string          `json:"template"`
 	PreviewTemplate string          `json:"preview_template"`
 	StatsTemplate   string          `json:"stats_template"`
 	Subviews        []SubviewConfig `json:"subviews"`
@@ -241,7 +240,7 @@ func LoadPermissions(dir string, cfg *Config) error {
 }
 
 func (c *Config) addBuiltInViews() {
-	c.Views["all"] = ViewConfig{Name: "All", Key: "0", ShowTags: true, TitleField: "title", SubtitleField: "type", SortField: "created", SortOrder: "desc", Template: "---\ntype: note\ntags: []\ntitle: \"{{.Title}}\"\n---\n\n", Subviews: []SubviewConfig{{Name: "All", when: alwaysCallable(c.runtime)}}, when: alwaysCallable(c.runtime)}
+	c.Views["all"] = ViewConfig{Name: "All", Key: "0", ShowTags: true, TitleField: "title", SubtitleField: "type", SortField: "created", SortOrder: "desc", Subviews: []SubviewConfig{{Name: "All", when: alwaysCallable(c.runtime)}}, when: alwaysCallable(c.runtime)}
 }
 func (c *Config) validate() error {
 	if len(c.Views) == 0 {
@@ -254,8 +253,8 @@ func (c *Config) validate() error {
 	}
 	keys := map[string]string{}
 	for id, v := range c.Views {
-		if v.Name == "" || v.Key == "" || v.Template == "" || v.when.fn == nil {
-			return fmt.Errorf("view %q requires :name, :key, :template, and function :when", id)
+		if v.Name == "" || v.Key == "" || v.when.fn == nil {
+			return fmt.Errorf("view %q requires :name, :key, and function :when", id)
 		}
 		if prior, ok := keys[v.Key]; ok {
 			return fmt.Errorf("view %q key %q conflicts with %q", id, v.Key, prior)

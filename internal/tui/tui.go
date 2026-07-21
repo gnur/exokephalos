@@ -25,6 +25,7 @@ import (
 	"github.com/gnur/exokephalos/internal/filter"
 	"github.com/gnur/exokephalos/internal/goodreads"
 	"github.com/gnur/exokephalos/internal/hardcover"
+	"github.com/gnur/exokephalos/internal/itemcreate"
 	"github.com/gnur/exokephalos/internal/markdown"
 	"github.com/gnur/exokephalos/internal/repo"
 	"github.com/gnur/exokephalos/internal/scanner"
@@ -162,21 +163,6 @@ type hardcoverSearchMsg struct {
 	results []hardcover.Book
 	err     error
 }
-
-const hardcoverBookTemplate = `---
-type: book
-tags: [to-read]
-author: {{.Author}}
-title: "{{.Title}}"
-pages: {{.Pages}}
-cover: "{{.Cover}}"
-url: "{{.URL}}"
-{{if .ISBN}}isbn: "{{.ISBN}}"{{end}}
-added: {{.Date}}
-started:
-finished:
----
-`
 
 type actionEntryKind int
 
@@ -1951,25 +1937,19 @@ func (m Model) importBook(url string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Start with auto-fill vars (Date, DateTime, ID, etc.)
-	vars := newAutoFillVars()
-
-	// Add book-specific fields
-	vars["Title"] = meta.Title
-	vars["Author"] = formatYAMLStringList(meta.Author)
-	vars["URL"] = meta.URL
-	vars["Pages"] = fmt.Sprintf("%d", meta.Pages)
-	vars["Cover"] = meta.Cover
-
-	// Find the books view to get its template and path
 	for _, vs := range m.views {
 		if isBookView(&vs) {
-			content, path, err := renderCreateTemplate(hardcoverBookTemplate, vs.id, m.baseDir, vars)
+			item, err := itemcreate.New(m.baseDir, "book", meta.Title, "")
 			if err != nil {
-				m.status = fmt.Sprintf("Template error: %v", err)
+				m.status = fmt.Sprintf("Create error: %v", err)
 				return m, nil
 			}
-			if err := writeNewFile(path, content); err != nil {
+			item.Frontmatter["tags"] = toInterfaceSlice([]string{"to-read"})
+			item.Frontmatter["author"] = toInterfaceSlice(meta.Author)
+			item.Frontmatter["url"] = meta.URL
+			item.Frontmatter["pages"] = meta.Pages
+			item.Frontmatter["cover"] = meta.Cover
+			if err := itemcreate.Write(item); err != nil {
 				m.status = fmt.Sprintf("Write error: %v", err)
 				return m, nil
 			}
@@ -1999,33 +1979,41 @@ func importURLCmd(baseDir string, c *cache.Cache, rawURL string) tea.Cmd {
 }
 
 func (m Model) createHardcoverBook(book hardcover.Book) (tea.Model, tea.Cmd) {
-	vars := newAutoFillVars()
-	vars["Title"] = hardcoverBookTitle(book)
-	vars["Author"] = formatYAMLStringList(book.Authors)
-	vars["URL"] = book.URL
-	vars["Pages"] = fmt.Sprintf("%d", book.Pages)
-	vars["Cover"] = book.Cover
-	vars["ISBN"] = book.ISBN
-
 	for _, vs := range m.views {
 		if isBookView(&vs) {
-			content, path, err := renderCreateTemplate(vs.cfg.Template, vs.id, m.baseDir, vars)
+			title := hardcoverBookTitle(book)
+			item, err := itemcreate.New(m.baseDir, "book", title, strings.TrimSpace(book.Description))
 			if err != nil {
-				m.status = fmt.Sprintf("Template error: %v", err)
+				m.status = fmt.Sprintf("Create error: %v", err)
 				return m, nil
 			}
-			content = appendImportedDescription(content, book.Description)
-			if err := writeNewFile(path, content); err != nil {
+			item.Frontmatter["tags"] = toInterfaceSlice([]string{"to-read"})
+			item.Frontmatter["author"] = toInterfaceSlice(book.Authors)
+			item.Frontmatter["url"] = book.URL
+			item.Frontmatter["pages"] = book.Pages
+			item.Frontmatter["cover"] = book.Cover
+			if book.ISBN != "" {
+				item.Frontmatter["isbn"] = book.ISBN
+			}
+			if err := itemcreate.Write(item); err != nil {
 				m.status = fmt.Sprintf("Write error: %v", err)
 				return m, nil
 			}
-			m.status = fmt.Sprintf("Added book: %s", vars["Title"])
+			m.status = fmt.Sprintf("Added book: %s", title)
 			return m, tea.Batch(m.loadData(), m.reconcileIfStartedCmd())
 		}
 	}
 
 	m.status = "No books view configured"
 	return m, nil
+}
+
+func toInterfaceSlice(values []string) []interface{} {
+	result := make([]interface{}, len(values))
+	for i, value := range values {
+		result[i] = value
+	}
+	return result
 }
 
 func hardcoverBookTitle(book hardcover.Book) string {

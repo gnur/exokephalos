@@ -1,6 +1,6 @@
 # Web Interface
 
-exokephalos includes a beautiful, premium, responsive web interface utilizing HTMX for fast, dynamic interactions.
+exokephalos includes a beautiful, premium, responsive progressive web interface.
 
 ## Starting the Web Server
 
@@ -86,7 +86,7 @@ Then approve sync clients at `http://localhost:8293/admin/sync/clients`. The in-
 ## Features
 
 - **Dynamic Navigation**: Tabbed views and responsive layout loaded natively.
-- **boosted page loads**: Powered by htmx for snappy navigation.
+- **installable PWA**: Built with React and designed for app-like navigation.
 - **Creation & Modification**: Edit items in markdown, import URLs as notes, or trigger custom actions.
 - **Metadata Cards**: The full YAML frontmatter of any item is rendered under the details page.
 - **Reading Stats**: View stats graphs built with Chart.js.

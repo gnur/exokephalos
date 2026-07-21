@@ -10,12 +10,7 @@
 {{end}}
 
 {{define "clients_table"}}
-<div id="sync-clients-panel"
-     hx-get="/admin/sync/clients?partial=table"
-     hx-trigger="every 2s"
-     hx-target="#sync-clients-panel"
-     hx-swap="outerHTML"
-     class="overflow-x-auto border border-gray-800 rounded">
+<div id="sync-clients-panel" class="overflow-x-auto border border-gray-800 rounded">
     <table class="w-full text-sm">
         <thead class="bg-gray-950 text-gray-400">
             <tr>

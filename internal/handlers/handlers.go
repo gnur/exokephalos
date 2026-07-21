@@ -488,15 +488,8 @@ func (h *Handlers) render(w http.ResponseWriter, r *http.Request, name string, d
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
-	// For htmx requests, render only the partial (main + footer OOB swap).
-	// This skips the full HTML document, head, nav — saving ~2KB transfer.
-	templateName := "layout"
-	if r.Header.Get("HX-Request") == "true" {
-		templateName = "partial"
-	}
-
 	var buf bytes.Buffer
-	if err := tmpl.ExecuteTemplate(&buf, templateName, data); err != nil {
+	if err := tmpl.ExecuteTemplate(&buf, "layout", data); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}

@@ -31,7 +31,8 @@ var autoFillVars = map[string]bool{
 var templateVarRegex = regexp.MustCompile(`\{\{\s*\.(\w+)\s*\}\}`)
 
 // createNew starts the creation flow for the current view.
-func (m Model) createNew() (tea.Model, tea.Cmd) {
+func (m Model) createNew(encrypt ...bool) (tea.Model, tea.Cmd) {
+	m.createEncrypted = len(encrypt) > 0 && encrypt[0]
 	vs := m.currentView()
 	if vs == nil {
 		return m, nil
@@ -62,6 +63,9 @@ func (m Model) createNew() (tea.Model, tea.Cmd) {
 		if err != nil {
 			m.status = fmt.Sprintf("Template error: %v", err)
 			return m, nil
+		}
+		if m.createEncrypted {
+			return m.prepareEncryptedCreate(content, path)
 		}
 		if err := writeNewFile(path, content); err != nil {
 			m.status = fmt.Sprintf("Write error: %v", err)
@@ -101,6 +105,9 @@ func (m Model) finishCreate() (tea.Model, tea.Cmd) {
 		m.status = fmt.Sprintf("Template error: %v", err)
 		return m, nil
 	}
+	if m.createEncrypted {
+		return m.prepareEncryptedCreate(content, path)
+	}
 	if err := writeNewFile(path, content); err != nil {
 		m.status = fmt.Sprintf("Write error: %v", err)
 		return m, nil
@@ -115,6 +122,19 @@ func (m Model) finishCreate() (tea.Model, tea.Cmd) {
 	return m, tea.ExecProcess(c, func(err error) tea.Msg {
 		return refreshMsg{}
 	})
+}
+
+// prepareEncryptedCreate asks for the passphrase before putting the new note on
+// disk, keeping its initial plaintext out of the repository.
+func (m Model) prepareEncryptedCreate(content, path string) (tea.Model, tea.Cmd) {
+	m.pendingEncryptedContent = content
+	m.pendingEncryptedPath = path
+	m.mode = modeCreateEncrypted
+	m.attachInput.SetValue("")
+	m.attachInput.Prompt = "New passphrase: "
+	m.attachInput.EchoMode = textinput.EchoPassword
+	m.attachInput.Focus()
+	return m, textinput.Blink
 }
 
 // renderCreateTemplate renders the content template and generates the file path.
@@ -181,7 +201,6 @@ func renderCreateTemplate(contentTmpl, viewID, baseDir string, vars map[string]s
 	return content, fullPath, nil
 }
 
-
 func renderTemplate(name, tmplStr string, vars map[string]string) (string, error) {
 	tmpl, err := template.New(name).Parse(tmplStr)
 	if err != nil {
@@ -217,7 +236,6 @@ func writeNewFile(path, content string) error {
 
 	return os.WriteFile(path, []byte(content), 0644)
 }
-
 
 // newAutoFillVars returns the map of auto-fill template variables.
 func newAutoFillVars() map[string]string {

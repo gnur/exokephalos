@@ -44,12 +44,10 @@ tasks:
     desc: Download/update vendored JS dependencies
     cmds:
       - mkdir -p static/js
-      - curl -sL "https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js" -o static/js/htmx.min.js
       - curl -sL "https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js" -o static/js/chart.min.js
     sources:
       - Taskfile.yml
     generates:
-      - static/js/htmx.min.js
       - static/js/chart.min.js
 
   deps:update:

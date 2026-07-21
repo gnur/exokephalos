@@ -19,18 +19,6 @@ func (h *Handlers) SyncClients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data["Clients"] = clients
-	if r.URL.Query().Get("partial") == "table" {
-		tmpl := h.templates["sync/clients.html"]
-		if tmpl == nil {
-			http.Error(w, "Template not found: sync/clients.html", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := tmpl.ExecuteTemplate(w, "clients_table", data); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-		return
-	}
 	h.render(w, r, "sync/clients.html", data)
 }
 

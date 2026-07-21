@@ -17,6 +17,17 @@
         <p class="text-gray-400 text-sm">This template has no user-provided fields. All values are auto-generated.</p>
         {{end}}
 
+        <label class="flex items-center gap-3 text-base font-bold text-gray-100">
+            <input type="checkbox" name="encrypted" value="true" class="h-5 w-5 rounded border-2 border-gray-400 bg-gray-800 text-blue-600 focus:ring-2 focus:ring-blue-500">
+            Encrypt this note
+        </label>
+        <div>
+            <label for="passphrase" class="block text-sm font-medium text-gray-300 mb-1">Encryption passphrase</label>
+            <input type="password" id="passphrase" name="passphrase" autocomplete="new-password"
+                   class="w-full border border-gray-600 bg-gray-800 text-gray-100 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                   placeholder="Required when encrypting">
+        </div>
+
         <div class="flex gap-2 pt-2">
             <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded font-medium">Create</button>
             <a href="/views/{{.ViewID}}" class="bg-gray-700 hover:bg-gray-600 text-gray-200 px-4 py-2 rounded font-medium">Cancel</a>

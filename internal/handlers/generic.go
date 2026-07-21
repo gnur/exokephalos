@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gnur/exokephalos/internal/config"
+	"github.com/gnur/exokephalos/internal/encryption"
 	"github.com/gnur/exokephalos/internal/id"
 	"github.com/gnur/exokephalos/internal/markdown"
 	"github.com/gnur/exokephalos/internal/scanner"
@@ -302,9 +303,13 @@ func (h *Handlers) ViewNewPost(w http.ResponseWriter, r *http.Request) {
 
 	_ = r.ParseForm()
 
-	// Build vars from form values
+	// Build vars from form values. Encryption controls are handled separately
+	// rather than being made available to content templates.
 	vars := make(map[string]string)
 	for key, values := range r.Form {
+		if key == "encrypted" || key == "passphrase" {
+			continue
+		}
 		if len(values) > 0 {
 			vars[key] = values[0]
 		}
@@ -343,6 +348,24 @@ func (h *Handlers) ViewNewPost(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
+	}
+	if r.FormValue("encrypted") == "true" {
+		passphrase := r.FormValue("passphrase")
+		if passphrase == "" {
+			http.Error(w, "an encryption passphrase is required", http.StatusBadRequest)
+			return
+		}
+		noteID := markdown.FMString(fm, "id")
+		if noteID == "" {
+			http.Error(w, "encrypted notes require an id", http.StatusInternalServerError)
+			return
+		}
+		body, err = encryption.Encrypt(noteID, passphrase, body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		fm["encrypted"] = true
 	}
 	if err := h.Store.CreateItem(fullPath, fm, body); err != nil {
 		http.Error(w, err.Error(), 500)

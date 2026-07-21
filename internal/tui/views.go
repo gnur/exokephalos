@@ -372,6 +372,9 @@ func (m Model) renderFooter() string {
 	if m.mode == modeEncryptedEdit {
 		return searchPromptStyle.Render(m.attachInput.View())
 	}
+	if m.mode == modeCreateEncrypted {
+		return searchPromptStyle.Render(m.attachInput.View())
+	}
 	if m.mode == modeSearchTags {
 		return searchPromptStyle.Render(m.tagFilterInput.View())
 	}
@@ -381,9 +384,9 @@ func (m Model) renderFooter() string {
 
 	var hint string
 	if m.currentViewShowsTags() {
-		hint = " /:filter  ::actions  space:tag  h/l:pane  tab:subview  g:views  n:new  e:edit  d:del  q:quit"
+		hint = " /:filter  ::actions  space:tag  h/l:pane  tab:subview  g:views  n:new  N:new encrypted  e:edit  E:encrypt  d:del  q:quit"
 	} else {
-		hint = " /:filter  ::actions  tab:subview  g:views  n:new  e:edit  d:del  q:quit"
+		hint = " /:filter  ::actions  tab:subview  g:views  n:new  N:new encrypted  e:edit  E:encrypt  d:del  q:quit"
 	}
 
 	// Show selected tags

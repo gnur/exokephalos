@@ -4,7 +4,7 @@ exokephalos is a lightweight personal knowledge management system. The TUI and L
 
 It offers three distinct interfaces:
 1. **TUI**: A terminal UI built with Bubble Tea for fast, keyboard-driven navigation (`xo`).
-2. **Web UI**: A modern, responsive web server powered by HTMX (`xo serve`).
+2. **Web UI**: A modern, responsive progressive web app (`xo serve`).
 3. **LSP Server**: A Language Server Protocol server that provides auto-completions, hover previews, and wiki-link go-to-definition in text editors (`xo lsp`).
 
 Start with the Quickstart doc to create a data directory, set `EXO_DIR`, and add the first root-level workspace configuration file.

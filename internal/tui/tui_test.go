@@ -11,12 +11,64 @@ import (
 	"github.com/gnur/exokephalos/internal/action"
 	"github.com/gnur/exokephalos/internal/cache"
 	"github.com/gnur/exokephalos/internal/config"
+	"github.com/gnur/exokephalos/internal/encryption"
 	"github.com/gnur/exokephalos/internal/filter"
 	"github.com/gnur/exokephalos/internal/hardcover"
 	"github.com/gnur/exokephalos/internal/importer"
 	"github.com/gnur/exokephalos/internal/markdown"
 	"github.com/gnur/exokephalos/internal/scanner"
 )
+
+func TestEncryptedEditSavesEditedFrontmatterAndBody(t *testing.T) {
+	dir := t.TempDir()
+	notePath := filepath.Join(dir, "note.md")
+	oldFM := map[string]interface{}{"id": "note123", "title": "Before", "encrypted": true}
+	ciphertext, err := encryption.Encrypt("note123", "passphrase", "Before body")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := markdown.WriteFrontmatter(notePath, oldFM, ciphertext); err != nil {
+		t.Fatal(err)
+	}
+
+	temp, err := os.CreateTemp(dir, "encrypted-edit-*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	editedFM := map[string]interface{}{"id": "note123", "title": "After", "category": "private"}
+	if err := markdown.WriteFrontmatter(temp.Name(), editedFM, "After body"); err != nil {
+		t.Fatal(err)
+	}
+	if err := temp.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	m := Model{
+		encryptedEdit: &scanner.Item{Path: notePath, Frontmatter: oldFM, Body: ciphertext},
+		encryptedTemp: temp.Name(),
+		encryptedPass: "passphrase",
+	}
+	updated, _ := m.Update(encryptedEditMsg{})
+	result := updated.(Model)
+	if result.status != "Encrypted note saved" {
+		t.Fatalf("status = %q", result.status)
+	}
+
+	fm, savedBody, err := markdown.ParseFrontmatter(notePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fm["title"] != "After" || fm["category"] != "private" || fm["encrypted"] != true {
+		t.Fatalf("frontmatter = %#v", fm)
+	}
+	plain, err := encryption.Decrypt("note123", "passphrase", savedBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain != "After body" {
+		t.Fatalf("decrypted body = %q", plain)
+	}
+}
 
 func TestAppendImportedDescription(t *testing.T) {
 	content := "---\ntype: book\n---\n"

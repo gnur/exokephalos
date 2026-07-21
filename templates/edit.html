@@ -4,7 +4,7 @@
     <h1 class="text-2xl font-bold mt-4 mb-4">{{.Title}}</h1>
     <form method="POST" action="{{.PostURL}}" class="space-y-4">
         <div>
-            <textarea name="content" rows="30" class="w-full border border-gray-600 bg-gray-800 text-gray-100 rounded px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">{{.Content}}</textarea>
+            <textarea name="content" rows="30" wrap="soft" autocapitalize="off" spellcheck="false" class="block w-full max-w-full resize-y overflow-x-hidden whitespace-pre-wrap break-words border border-gray-600 bg-gray-800 text-gray-100 rounded px-3 py-2 font-mono text-[13px] leading-5 focus:outline-none focus:ring-2 focus:ring-blue-500">{{.Content}}</textarea>
         </div>
         <div class="flex gap-2">
             <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded font-medium">Save</button>

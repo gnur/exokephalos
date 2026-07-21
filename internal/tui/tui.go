@@ -49,6 +49,7 @@ const (
 	modeSyncOutbox
 	modeAttachImage
 	modeEncryptedEdit
+	modeCreateEncrypted
 )
 
 // Pane focus for views with tags enabled
@@ -103,23 +104,26 @@ type Model struct {
 	pane pane
 
 	// Inputs
-	tagFilterInput  textinput.Model
-	textFilterInput textinput.Model
-	promptInput     textinput.Model
-	importInput     textinput.Model
-	hardcoverInput  textinput.Model
-	urlInput        textinput.Model
-	attachInput     textinput.Model
-	encryptedEdit   *scanner.Item
-	encryptedTemp   string
-	encryptedPass   string
-	actionInput     textinput.Model
-	viewMenuInput   string
+	tagFilterInput          textinput.Model
+	textFilterInput         textinput.Model
+	promptInput             textinput.Model
+	importInput             textinput.Model
+	hardcoverInput          textinput.Model
+	urlInput                textinput.Model
+	attachInput             textinput.Model
+	encryptedEdit           *scanner.Item
+	encryptedTemp           string
+	encryptedPass           string
+	pendingEncryptedContent string
+	pendingEncryptedPath    string
+	actionInput             textinput.Model
+	viewMenuInput           string
 
 	// Create flow
 	createVars       map[string]string
 	pendingPrompts   []string
 	currentPromptIdx int
+	createEncrypted  bool
 
 	// Preview
 	preview viewport.Model
@@ -385,12 +389,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = fmt.Sprintf("Read encrypted edit: %v", err)
 			return m, nil
 		}
-		body, err := encryption.Encrypt(m.encryptedEdit.ID, m.encryptedPass, string(plain))
+		fm, body, err := markdown.ParseFrontmatterBytes(plain)
+		if err != nil {
+			m.status = fmt.Sprintf("Parse encrypted edit: %v", err)
+			return m, nil
+		}
+		noteID := markdown.FMString(fm, "id")
+		if noteID == "" {
+			m.status = "Encrypted notes require an id"
+			return m, nil
+		}
+		fm["encrypted"] = true
+		body, err = encryption.Encrypt(noteID, m.encryptedPass, body)
 		if err != nil {
 			m.status = fmt.Sprintf("Encrypt edit: %v", err)
 			return m, nil
 		}
-		if err := markdown.WriteFrontmatter(m.encryptedEdit.Path, m.encryptedEdit.Frontmatter, body); err != nil {
+		if err := markdown.WriteFrontmatter(m.encryptedEdit.Path, fm, body); err != nil {
 			m.status = fmt.Sprintf("Save encrypted edit: %v", err)
 			return m, nil
 		}
@@ -513,6 +528,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleAttachImageKey(msg)
 	case modeEncryptedEdit:
 		return m.handleEncryptedEditKey(msg)
+	case modeCreateEncrypted:
+		return m.handleCreateEncryptedKey(msg)
 	case modeSearchTags:
 		return m.handleSearchTagsKey(msg)
 	case modeSearchItems:
@@ -1344,6 +1361,12 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n":
 		return m.createNew()
 
+	case "N":
+		return m.createNew(true)
+
+	case "E":
+		return m.enableEncryptionSelected()
+
 	case "d":
 		items := m.currentItems()
 		vs := m.currentView()
@@ -1791,6 +1814,28 @@ func (m Model) editSelected() (tea.Model, tea.Cmd) {
 	})
 }
 
+// enableEncryptionSelected encrypts the selected note's body after prompting
+// for a passphrase. Existing encrypted notes are intentionally left unchanged.
+func (m Model) enableEncryptionSelected() (tea.Model, tea.Cmd) {
+	items := m.currentItems()
+	vs := m.currentView()
+	if vs == nil || len(items) == 0 || vs.cursor >= len(items) {
+		return m, nil
+	}
+	item := items[vs.cursor]
+	if item.Frontmatter["encrypted"] == true || encryption.IsEncrypted(item.Body) {
+		m.status = "Note is already encrypted"
+		return m, nil
+	}
+	m.encryptedEdit = &item
+	m.mode = modeEncryptedEdit
+	m.attachInput.SetValue("")
+	m.attachInput.Prompt = "New passphrase: "
+	m.attachInput.EchoMode = textinput.EchoPassword
+	m.attachInput.Focus()
+	return m, textinput.Blink
+}
+
 func (m Model) handleEncryptedEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "esc" {
 		m.mode = modeNormal
@@ -1808,18 +1853,104 @@ func (m Model) handleEncryptedEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	pass := m.attachInput.Value()
+	if pass == "" {
+		m.status = "A passphrase is required"
+		return m, nil
+	}
+	if !encryption.IsEncrypted(m.encryptedEdit.Body) {
+		body, err := encryption.Encrypt(m.encryptedEdit.ID, pass, m.encryptedEdit.Body)
+		if err != nil {
+			m.status = fmt.Sprintf("Encrypt note: %v", err)
+			return m, nil
+		}
+		fm := make(map[string]interface{}, len(m.encryptedEdit.Frontmatter)+1)
+		for key, value := range m.encryptedEdit.Frontmatter {
+			fm[key] = value
+		}
+		fm["encrypted"] = true
+		if err := markdown.WriteFrontmatter(m.encryptedEdit.Path, fm, body); err != nil {
+			m.status = fmt.Sprintf("Save encrypted note: %v", err)
+			return m, nil
+		}
+		m.mode = modeNormal
+		m.attachInput.Blur()
+		m.attachInput.EchoMode = textinput.EchoNormal
+		m.encryptedEdit = nil
+		m.status = "Note encrypted"
+		return m, tea.Batch(m.loadData(), m.reconcileIfStartedCmd())
+	}
 	plain, err := encryption.Decrypt(m.encryptedEdit.ID, pass, m.encryptedEdit.Body)
 	if err != nil {
 		m.status = "Unable to decrypt note"
 		return m, nil
 	}
+	return m.openEncryptedEditor(plain, pass)
+}
+
+func (m Model) handleCreateEncryptedKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "esc" {
+		m.mode = modeNormal
+		m.attachInput.Blur()
+		m.pendingEncryptedContent = ""
+		m.pendingEncryptedPath = ""
+		m.createEncrypted = false
+		return m, nil
+	}
+	if msg.String() != "enter" {
+		var cmd tea.Cmd
+		m.attachInput, cmd = m.attachInput.Update(msg)
+		return m, cmd
+	}
+	pass := m.attachInput.Value()
+	if pass == "" {
+		m.status = "A passphrase is required"
+		return m, nil
+	}
+	fm, body, err := markdown.ParseFrontmatterBytes([]byte(m.pendingEncryptedContent))
+	if err != nil {
+		m.status = fmt.Sprintf("Parse new note: %v", err)
+		return m, nil
+	}
+	noteID := markdown.FMString(fm, "id")
+	if noteID == "" {
+		m.status = "Encrypted notes require an id"
+		return m, nil
+	}
+	fm["encrypted"] = true
+	ciphertext, err := encryption.Encrypt(noteID, pass, body)
+	if err != nil {
+		m.status = fmt.Sprintf("Encrypt new note: %v", err)
+		return m, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(m.pendingEncryptedPath), 0755); err != nil {
+		m.status = fmt.Sprintf("Create encrypted note directory: %v", err)
+		return m, nil
+	}
+	if _, err := os.Stat(m.pendingEncryptedPath); err == nil {
+		m.status = "An item with this id already exists"
+		return m, nil
+	}
+	if err := markdown.WriteFrontmatter(m.pendingEncryptedPath, fm, ciphertext); err != nil {
+		m.status = fmt.Sprintf("Save encrypted note: %v", err)
+		return m, nil
+	}
+	m.encryptedEdit = &scanner.Item{Path: m.pendingEncryptedPath, Frontmatter: fm, Body: ciphertext}
+	m.pendingEncryptedContent = ""
+	m.pendingEncryptedPath = ""
+	m.createEncrypted = false
+	return m.openEncryptedEditor(body, pass)
+}
+
+// openEncryptedEditor writes the complete plaintext note to a private temporary
+// file, so users can edit frontmatter as well as the body.
+func (m Model) openEncryptedEditor(body, pass string) (tea.Model, tea.Cmd) {
 	f, err := os.CreateTemp("", "exokephalos-encrypted-*.md")
 	if err != nil {
 		m.status = fmt.Sprintf("Create temp edit: %v", err)
 		return m, nil
 	}
 	_ = f.Chmod(0600)
-	if _, err = f.WriteString(plain); err != nil {
+	if err := markdown.WriteFrontmatter(f.Name(), m.encryptedEdit.Frontmatter, body); err != nil {
 		_ = f.Close()
 		_ = os.Remove(f.Name())
 		m.status = fmt.Sprintf("Write temp edit: %v", err)

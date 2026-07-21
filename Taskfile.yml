@@ -92,7 +92,7 @@ tasks:
         temp_dir=$(mktemp -d ./tmp-run/exo-XXXXXX)
         echo "Created temporary EXO_DIR at $temp_dir"
         mkdir -p "$temp_dir/.exo"
-        cp -r ./example-repo/.exo/* "$temp_dir/.exo/"
+        cp ./example-repo/exo.fnl "$temp_dir/exo.fnl"
         EXO_DIR="$temp_dir" ./xo import ./example-repo/book book
         EXO_DIR="$temp_dir" ./xo import ./example-repo/note note
         EXO_DIR="$temp_dir" ./xo import ./example-repo/webhook webhook
@@ -110,6 +110,7 @@ tasks:
         temp_dir=$(mktemp -d ./tmp-run/exo-XXXXXX)
         echo "Created temporary EXO_DIR at $temp_dir"
         mkdir -p "$temp_dir/.exo"
+        cp ./example-repo/exo.fnl "$temp_dir/exo.fnl"
         echo "Starting empty SQLite-backed xo serve. Sync a TUI client to populate notes and view config."
         EXO_DIR="$temp_dir" ./xo serve
 
@@ -124,20 +125,16 @@ tasks:
         port="${PORT:-8293}"
 
         mkdir -p "$server_dir/.exo" "$client_dir/.exo"
+        cp ./example-repo/exo.fnl "$server_dir/exo.fnl"
+        cp ./example-repo/exo.fnl "$client_dir/exo.fnl"
 
-        cat > "$server_dir/.exo/serve.toml" <<EOF
-        [server]
-        db_path = ".exo/server.sqlite"
-        listen = ":$port"
+        cat > "$server_dir/.exo/serve.fnl" <<EOF
+        {:server {:db-path ".exo/server.sqlite" :listen ":$port"}}
         EOF
 
-        cat > "$client_dir/.exo/tui.toml" <<EOF
-        [sync]
-        server_url = "http://localhost:$port"
-        client_id = "local-dev-client"
+        cat > "$client_dir/.exo/tui.fnl" <<EOF
+        {:sync {:server-url "http://localhost:$port" :client-id "local-dev-client"}}
         EOF
-
-        cp ./example-repo/.exo/*.toml "$client_dir"/
         EXO_DIR="$client_dir" ./xo import ./example-repo/note note
         EXO_DIR="$client_dir" ./xo import ./example-repo/docs doc
 

@@ -1,4 +1,3 @@
-;; Workspace configuration migrated from the former .exo/*.toml files.
 (local has-tag (fn [tags tag]
   (var found false)
   (each [_ value (ipairs tags)]

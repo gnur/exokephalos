@@ -68,8 +68,8 @@ spec:
             - name: data
               mountPath: /data
             - name: config
-              mountPath: /data/.exo/serve.toml
-              subPath: serve.toml
+              mountPath: /data/.exo/serve.fnl
+              subPath: serve.fnl
               readOnly: true
       volumes:
         - name: config

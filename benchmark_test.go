@@ -84,8 +84,8 @@ func setupBenchServer(tb testing.TB) (*httptest.Server, string, *cache.Cache) {
 		tb.Fatalf("Failed to create temp dir: %v", err)
 	}
 
-	// Copy only the config file from example-repo
-	cmd := exec.Command("cp", "-a", "./example-repo/.exo.toml", tmpDir+"/.exo.toml")
+	// Copy only the workspace config from example-repo.
+	cmd := exec.Command("cp", "-a", "./example-repo/exo.fnl", tmpDir+"/exo.fnl")
 	if err := cmd.Run(); err != nil {
 		os.RemoveAll(tmpDir)
 		tb.Fatalf("Failed to copy config: %v", err)

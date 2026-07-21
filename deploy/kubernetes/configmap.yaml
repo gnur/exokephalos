@@ -4,7 +4,5 @@ metadata:
   name: exo-config
   namespace: exo
 data:
-  serve.toml: |
-    [server]
-    db_path = ".exo/server.sqlite"
-    listen = ":8293"
+  serve.fnl: |
+    {:server {:db-path ".exo/server.sqlite" :listen ":8293"}}

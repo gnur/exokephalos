@@ -27,7 +27,7 @@ func (a *Action) MatchNote(note config.Note) bool {
 	return err == nil && ok
 }
 func (a *Action) Mutate(fm map[string]interface{}) (map[string]interface{}, error) {
-	n, err := a.config.Run(config.Note{Path: "action.md", Type: stringValue(fm["type"]), Tags: markdown.ExtractTags(fm), Frontmatter: fm})
+	n, err := a.config.Run(config.Note{ID: stringValue(fm["id"]), Path: "action.md", Type: stringValue(fm["type"]), Tags: markdown.ExtractTags(fm), Frontmatter: fm})
 	if err != nil {
 		return nil, err
 	}
@@ -36,7 +36,7 @@ func (a *Action) Mutate(fm map[string]interface{}) (map[string]interface{}, erro
 
 func (a *Action) Run(note config.Note) (config.Note, error) { return a.config.Run(note) }
 func (a *Action) Apply(path string, fm map[string]interface{}, body string) error {
-	n, err := a.config.Run(config.Note{Path: path, Type: stringValue(fm["type"]), Tags: markdown.ExtractTags(fm), Frontmatter: fm, Body: body})
+	n, err := a.config.Run(config.Note{ID: stringValue(fm["id"]), Path: path, Type: stringValue(fm["type"]), Tags: markdown.ExtractTags(fm), Frontmatter: fm, Body: body})
 	if err != nil {
 		return err
 	}

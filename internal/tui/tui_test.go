@@ -138,6 +138,45 @@ func TestActionErrorPopupDismisses(t *testing.T) {
 	}
 }
 
+func TestApplyActionUpdatesCachedTags(t *testing.T) {
+	dir := t.TempDir()
+	notePath := filepath.Join(dir, "note.md")
+	if err := os.WriteFile(notePath, []byte("---\nid: actionnote\ntype: note\ntags: [todo]\ntitle: Action note\ncreated: 2026-01-01T00:00:00Z\n---\nBody\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := cache.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	cfg, err := config.LoadContents([]config.NamedContent{{Name: "exo.fnl", Content: []byte(`
+{:views {:notes {:name "Notes" :key "n" :when (fn [_] true)}}
+ :actions {:mark-done {:description "Mark done" :run (fn [note] (assoc note :tags (add-tag note.tags "done")))}}}
+`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := c.All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(cfg, dir, c)
+	m.ready = true
+	m.applyFilters(items)
+	updated, _ := m.applyAction("mark-done")
+	result := updated.(Model)
+	if result.mode == modeActionError {
+		t.Fatalf("action failed: %s", result.actionError)
+	}
+	cached, err := c.GetByID("actionnote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cached.Tags) != 2 || cached.Tags[0] != "todo" || cached.Tags[1] != "done" {
+		t.Fatalf("cached tags = %#v", cached.Tags)
+	}
+}
+
 func setupTestRepo(t *testing.T) string {
 	tmpDir := t.TempDir()
 

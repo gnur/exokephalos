@@ -1051,17 +1051,23 @@ func (m Model) applyAction(actionName string) (tea.Model, tea.Cmd) {
 	item := items[vs.cursor]
 
 	if err := act.Apply(item.Path, item.Frontmatter, item.Body); err != nil {
-		m.status = fmt.Sprintf("Action failed: %v", err)
-		m.actionError = err.Error()
-		m.mode = modeActionError
+		m.showActionError(err)
 		return m, nil
-	} else {
-		_ = m.cache.NotifyWrite(item.Path)
-		m.status = fmt.Sprintf("Applied: %s", act.Description)
 	}
+	if err := m.cache.NotifyWrite(item.Path); err != nil {
+		m.showActionError(fmt.Errorf("updating cache: %w", err))
+		return m, nil
+	}
+	m.status = fmt.Sprintf("Applied: %s", act.Description)
 
 	m.mode = modeNormal
 	return m, tea.Batch(m.loadData(), m.reconcileIfStartedCmd())
+}
+
+func (m *Model) showActionError(err error) {
+	m.status = fmt.Sprintf("Action failed: %v", err)
+	m.actionError = err.Error()
+	m.mode = modeActionError
 }
 
 func (m Model) handleActionErrorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

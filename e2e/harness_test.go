@@ -129,10 +129,8 @@ func (h *harness) seedWorkspaces() {
 	mustMkdir(h.t, filepath.Join(h.serverDir, ".exo"))
 	mustMkdir(h.t, filepath.Join(h.clientDir, ".exo"))
 
-	for _, name := range []string{"notes.toml", "docs.toml", "actions.toml"} {
-		copyFile(h.t, filepath.Join(h.root, "example-repo", ".exo", name), filepath.Join(h.serverDir, name))
-		copyFile(h.t, filepath.Join(h.root, "example-repo", ".exo", name), filepath.Join(h.clientDir, name))
-	}
+	copyFile(h.t, filepath.Join(h.root, "example-repo", "exo.fnl"), filepath.Join(h.serverDir, "exo.fnl"))
+	copyFile(h.t, filepath.Join(h.root, "example-repo", "exo.fnl"), filepath.Join(h.clientDir, "exo.fnl"))
 	writeFile(h.t, filepath.Join(h.clientDir, "note", "2026", "06", "test.md"), `---
 id: e2enote
 type: note
@@ -160,14 +158,8 @@ This doc verifies config-backed view sync.
 
 	port := freePort(h.t)
 	h.baseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
-	writeFile(h.t, filepath.Join(h.serverDir, ".exo", "serve.toml"), fmt.Sprintf(`[server]
-db_path = ".exo/server.sqlite"
-listen = "127.0.0.1:%d"
-`, port))
-	writeFile(h.t, filepath.Join(h.clientDir, ".exo", "tui.toml"), fmt.Sprintf(`[sync]
-server_url = %q
-client_id = %q
-`, h.baseURL, clientID))
+	writeFile(h.t, filepath.Join(h.serverDir, ".exo", "serve.fnl"), fmt.Sprintf(`{:server {:db-path ".exo/server.sqlite" :listen "127.0.0.1:%d"}}`, port))
+	writeFile(h.t, filepath.Join(h.clientDir, ".exo", "tui.fnl"), fmt.Sprintf(`{:sync {:server-url %q :client-id %q}}`, h.baseURL, clientID))
 }
 
 func (h *harness) startServer() {

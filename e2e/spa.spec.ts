@@ -50,7 +50,7 @@ test('SPA login, mobile shell, editor, approval, and browser outbox', async ({ p
   await expect.poll(() => pendingBrowserOutboxCount(page), { timeout: 10_000 }).toBe(0);
   await exerciseEncryptedNote(page);
   await exerciseAPIKeyManagement(page, request, onlineID);
-  await exerciseTOMLSettings(page);
+  await exerciseConfigSettings(page);
 
   await page.context().setOffline(true);
   await expect(page.locator('.sync-warning')).toContainText('sync offline');
@@ -174,16 +174,16 @@ async function verifyBottomLeftViewsMenu(page: Page) {
   await expect(panel).toHaveCount(0);
 }
 
-async function exerciseTOMLSettings(page: Page) {
+async function exerciseConfigSettings(page: Page) {
   await page.getByRole('button', { name: 'Menu' }).click();
   await page.locator('.menu-panel').getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('button', { name: 'TOML settings' }).click();
-  await expect(page.getByRole('heading', { name: 'TOML settings' })).toBeVisible();
-  await page.locator('label').filter({ hasText: 'Config file' }).locator('select').selectOption('notes.toml');
-  const editor = page.getByLabel('TOML settings');
-  await expect(editor).toContainText('[views.notes]');
-  await page.getByRole('button', { name: 'Save TOML settings' }).click();
-  await expect(page.locator('.notice').filter({ hasText: 'TOML settings saved' })).toBeVisible();
+  await page.getByRole('button', { name: 'Fennel/Lua settings' }).click();
+  await expect(page.getByRole('heading', { name: 'Fennel/Lua settings' })).toBeVisible();
+  await page.locator('label').filter({ hasText: 'Config file' }).locator('select').selectOption('exo.fnl');
+  const editor = page.getByLabel('Fennel/Lua settings');
+  await expect(editor).toContainText(':views');
+  await page.getByRole('button', { name: 'Save Fennel/Lua settings' }).click();
+  await expect(page.locator('.notice').filter({ hasText: 'Fennel/Lua settings saved' })).toBeVisible();
 }
 
 async function exerciseTagFiltering(page: Page) {

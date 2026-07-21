@@ -32,19 +32,25 @@ type SyncServerConfig struct {
 }
 
 type ViewConfig struct {
-	Name, Key string
+	Name string `json:"name"`
+	Key  string `json:"key"`
 	// Filter is retained only as an empty display field while callers migrate;
 	// workspace filtering is always the compiled :when function.
-	Filter                                          string
-	ShowTags                                        bool
-	TitleField, SubtitleField, SortField, SortOrder string
-	Template, PreviewTemplate, StatsTemplate        string
-	Subviews                                        []SubviewConfig
-	when                                            callable
+	Filter          string          `json:"filter"`
+	ShowTags        bool            `json:"show_tags"`
+	TitleField      string          `json:"title_field"`
+	SubtitleField   string          `json:"subtitle_field"`
+	SortField       string          `json:"sort_field"`
+	SortOrder       string          `json:"sort_order"`
+	Template        string          `json:"template"`
+	PreviewTemplate string          `json:"preview_template"`
+	StatsTemplate   string          `json:"stats_template"`
+	Subviews        []SubviewConfig `json:"subviews"`
+	when            callable
 }
 type SubviewConfig struct {
-	Name   string
-	Filter string
+	Name   string `json:"name"`
+	Filter string `json:"filter"`
 	when   callable
 }
 type ActionConfig struct {

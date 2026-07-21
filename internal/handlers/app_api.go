@@ -145,6 +145,52 @@ func (h *Handlers) AppChanges(w http.ResponseWriter, r *http.Request) {
 	writeAppJSON(w, resp)
 }
 
+// AppSyncV2Push is the cookie-authenticated equivalent of the signed TUI v2
+// endpoint. Browser identity is deliberately per IndexedDB installation, not
+// per login cookie, so acknowledgement and tombstone retention remain sound.
+func (h *Handlers) AppSyncV2Push(w http.ResponseWriter, r *http.Request) {
+	if h.SyncServer == nil {
+		writeAPIError(w, "sync server is not enabled", http.StatusNotFound)
+		return
+	}
+	actor := strings.TrimSpace(r.Header.Get("X-Exo-Device-ID"))
+	if actor == "" {
+		writeAPIError(w, "missing browser device identity", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Operations []syncsvc.SyncOperation `json:"operations"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	result, err := h.SyncServer.PushOperations(actor, req.Operations)
+	if err != nil {
+		writeAPIError(w, "applying sync operations", http.StatusInternalServerError)
+		return
+	}
+	writeAppJSON(w, map[string]interface{}{"results": result})
+}
+
+func (h *Handlers) AppSyncV2Bootstrap(w http.ResponseWriter, r *http.Request) {
+	if h.SyncServer == nil {
+		writeAPIError(w, "sync server is not enabled", http.StatusNotFound)
+		return
+	}
+	epoch, err := h.SyncServer.Epoch()
+	if err != nil {
+		writeAPIError(w, "reading sync epoch", 500)
+		return
+	}
+	ops, cursor, err := h.SyncServer.PullOperations(0, 1000)
+	if err != nil {
+		writeAPIError(w, "reading sync bootstrap", 500)
+		return
+	}
+	writeAppJSON(w, map[string]interface{}{"protocol": syncsvc.SyncProtocolVersion, "epoch": epoch, "cursor": cursor, "operations": ops})
+}
+
 func (h *Handlers) AppSyncClients(w http.ResponseWriter, r *http.Request) {
 	if h.SyncServer == nil {
 		writeAppJSON(w, map[string]interface{}{"clients": []syncsvc.Client{}})

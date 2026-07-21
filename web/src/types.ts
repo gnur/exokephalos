@@ -72,6 +72,31 @@ export type OutboxEntry = {
   updated_at: string;
 };
 
+export type HLC = {
+  physical_ms: number;
+  logical: number;
+  actor_id: string;
+};
+
+export type SyncOperation = {
+  id: string;
+  epoch: string;
+  actor_id: string;
+  kind: 'item' | 'config' | 'asset';
+  target: string;
+  delete: boolean;
+  path?: string;
+  version: HLC;
+  frontmatter?: Frontmatter;
+  body?: string;
+  content?: string;
+  hash?: string;
+  mime?: string;
+  size?: number;
+};
+
+export type SyncDevice = { id: string; label: string; logical: number; physical_ms: number };
+
 export type SyncClient = {
   id: string;
   label: string;

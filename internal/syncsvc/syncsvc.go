@@ -125,6 +125,12 @@ func (s *Server) RegisterAPI(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sync/changes", s.requireSignature(s.handleChanges))
 	mux.HandleFunc("GET /api/sync/snapshot", s.requireSignature(s.handleSnapshot))
 	mux.HandleFunc("GET /api/sync/events", s.requireSignature(s.handleEvents))
+	// v2 is an operation feed.  It intentionally has separate routes so a
+	// client built against the old snapshot protocol cannot write a new epoch.
+	mux.HandleFunc("GET /api/sync/v2/bootstrap", s.requireSignature(s.handleV2Bootstrap))
+	mux.HandleFunc("POST /api/sync/v2/push", s.requireSignature(s.handleV2Push))
+	mux.HandleFunc("GET /api/sync/v2/pull", s.requireSignature(s.handleV2Pull))
+	mux.HandleFunc("POST /api/sync/v2/ack", s.requireSignature(s.handleV2Ack))
 	mux.HandleFunc("PUT /api/sync/assets/{path...}", s.requireSignature(s.handleAssetUpload))
 	mux.HandleFunc("GET /api/sync/assets/{path...}", s.requireSignature(s.handleAssetDownload))
 }
@@ -197,7 +203,7 @@ func (s *Server) migrate() error {
 			return err
 		}
 	}
-	return nil
+	return s.migrateV2()
 }
 
 func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {

@@ -58,10 +58,10 @@ func startSyncCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) tea.
 		if err := c.SetSyncStarted(true); err != nil {
 			return syncMsg{status: "error", err: err}
 		}
-		if err := pushOutbox(appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
+		if _, err := syncV2(baseDir, appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
 			return syncMsg{status: "offline", err: err, retrySync: true}
 		}
-		cfgChanged, err := pullSnapshot(baseDir, appCfg.Sync.ServerURL, clientID, priv, c)
+		cfgChanged, err := syncV2(baseDir, appCfg.Sync.ServerURL, clientID, priv, c)
 		if err != nil {
 			return syncMsg{status: "offline", err: err, retrySync: true}
 		}
@@ -89,10 +89,10 @@ func syncStartupCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) te
 			host, _ := os.Hostname()
 			clientID = host
 		}
-		if err := pushOutbox(appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
+		if _, err := syncV2(baseDir, appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
 			return syncMsg{status: "offline", err: err, retrySync: true}
 		}
-		cfgChanged, err := pullSnapshot(baseDir, appCfg.Sync.ServerURL, clientID, priv, c)
+		cfgChanged, err := syncV2(baseDir, appCfg.Sync.ServerURL, clientID, priv, c)
 		if err != nil {
 			return syncMsg{status: "error", err: err, retrySync: true}
 		}
@@ -123,10 +123,10 @@ func reconcileSyncCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) 
 			host, _ := os.Hostname()
 			clientID = host
 		}
-		if err := pushOutbox(appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
+		if _, err := syncV2(baseDir, appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
 			return syncMsg{status: "offline", err: err, retrySync: true}
 		}
-		cfgChanged, err := pullSnapshot(baseDir, appCfg.Sync.ServerURL, clientID, priv, c)
+		cfgChanged, err := syncV2(baseDir, appCfg.Sync.ServerURL, clientID, priv, c)
 		if err != nil {
 			return syncMsg{status: "offline", err: err, retrySync: true}
 		}
@@ -188,7 +188,7 @@ func pushOutboxCmd(c *cache.Cache, appCfg *config.AppConfig) tea.Cmd {
 			host, _ := os.Hostname()
 			clientID = host
 		}
-		if err := pushOutbox(appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
+		if _, err := syncV2(c.BaseDir(), appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
 			return syncMsg{status: "offline", err: err}
 		}
 		return syncMsg{status: "connected", startListen: true, retrySync: true}
@@ -216,7 +216,7 @@ func syncListenCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) tea
 		if revision > 0 {
 			_ = c.SetMeta("sync_last_revision", fmt.Sprintf("%d", revision))
 		}
-		cfgChanged, err := pullSnapshot(baseDir, appCfg.Sync.ServerURL, clientID, priv, c)
+		cfgChanged, err := syncV2(baseDir, appCfg.Sync.ServerURL, clientID, priv, c)
 		if err != nil {
 			return syncMsg{status: "offline", err: err, retryListen: true, retrySync: true}
 		}
@@ -624,4 +624,172 @@ func configHashMetaKey(path string) string {
 func contentHashString(content string) string {
 	sum := sha256.Sum256([]byte(content))
 	return hex.EncodeToString(sum[:])
+}
+
+// syncV2 keeps Markdown as the local projection while using the operation feed
+// as the authority. Legacy outbox rows are deliberately translated here rather
+// than discarded: an interrupted upgrade can retry the exact same operation.
+func syncV2(baseDir, serverURL, clientID string, priv ed25519.PrivateKey, c *cache.Cache) (bool, error) {
+	epoch, cursor, remote, err := v2Bootstrap(serverURL, clientID, priv)
+	if err != nil {
+		return false, err
+	}
+	if err := applyV2Operations(baseDir, c, remote); err != nil {
+		return false, err
+	}
+	entries, err := c.PendingOutbox(100)
+	if err != nil {
+		return false, err
+	}
+	if len(entries) > 0 {
+		ops := make([]syncsvc.SyncOperation, 0, len(entries))
+		ids := make([]int64, 0, len(entries))
+		for _, entry := range entries {
+			var ch syncsvc.Change
+			if err := json.Unmarshal([]byte(entry.Payload), &ch); err != nil {
+				_ = c.MarkOutboxFailed(entry.ID, err.Error())
+				continue
+			}
+			kind, target := ch.TargetKind, ch.ID
+			if kind == "" {
+				kind = "item"
+			}
+			if target == "" {
+				target = ch.Path
+			}
+			deleteOp := ch.Op == "delete" || strings.HasPrefix(ch.Op, "delete_")
+			idHash := sha256.Sum256([]byte(epoch + "\x00" + clientID + "\x00" + fmt.Sprintf("%d", entry.ID)))
+			ops = append(ops, syncsvc.SyncOperation{ID: hex.EncodeToString(idHash[:]), Epoch: epoch, ActorID: clientID, Kind: kind, Target: target, Delete: deleteOp, Path: ch.Path, Version: syncsvc.HLC{PhysicalMS: entry.CreatedAt.UnixMilli(), Logical: entry.ID, ActorID: clientID}, Frontmatter: ch.Frontmatter, Body: ch.Body, Content: ch.Content, Hash: ch.Hash, MIME: ch.MIME, Size: ch.Size})
+			ids = append(ids, entry.ID)
+		}
+		if len(ops) > 0 {
+			body, _ := json.Marshal(map[string]interface{}{"operations": ops})
+			req, _ := http.NewRequest(http.MethodPost, strings.TrimRight(serverURL, "/")+"/api/sync/v2/push", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			syncsvc.SignRequest(req, body, clientID, priv)
+			resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+			if err != nil {
+				return false, err
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode >= 300 {
+				return false, fmt.Errorf("v2 push failed: %s", resp.Status)
+			}
+			var result struct {
+				Results []syncsvc.OperationResult `json:"results"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				return false, err
+			}
+			byID := map[string]syncsvc.OperationResult{}
+			for _, r := range result.Results {
+				byID[r.ID] = r
+			}
+			for i, op := range ops {
+				r := byID[op.ID]
+				if r.Status == "applied" || r.Status == "superseded" {
+					_ = c.MarkOutboxSynced(ids[i])
+					if r.Cursor > cursor {
+						cursor = r.Cursor
+					}
+				} else {
+					_ = c.MarkOutboxFailed(ids[i], r.Error)
+				}
+			}
+		}
+	}
+	more, next, err := v2Pull(serverURL, clientID, priv, cursor)
+	if err != nil {
+		return false, err
+	}
+	if err := applyV2Operations(baseDir, c, more); err != nil {
+		return false, err
+	}
+	if next > cursor {
+		cursor = next
+	}
+	if err := v2Ack(serverURL, clientID, priv, cursor); err != nil {
+		return false, err
+	}
+	_ = c.SetMeta("sync_v2_epoch", epoch)
+	_ = c.SetMeta("sync_v2_cursor", fmt.Sprintf("%d", cursor))
+	return false, nil
+}
+
+func v2Bootstrap(serverURL, clientID string, priv ed25519.PrivateKey) (string, int64, []syncsvc.SyncOperation, error) {
+	req, _ := http.NewRequest(http.MethodGet, strings.TrimRight(serverURL, "/")+"/api/sync/v2/bootstrap", nil)
+	syncsvc.SignRequest(req, nil, clientID, priv)
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return "", 0, nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return "", 0, nil, fmt.Errorf("v2 bootstrap failed: %s", resp.Status)
+	}
+	var out struct {
+		Epoch      string                  `json:"epoch"`
+		Cursor     int64                   `json:"cursor"`
+		Operations []syncsvc.SyncOperation `json:"operations"`
+	}
+	err = json.NewDecoder(resp.Body).Decode(&out)
+	return out.Epoch, out.Cursor, out.Operations, err
+}
+func v2Pull(serverURL, clientID string, priv ed25519.PrivateKey, cursor int64) ([]syncsvc.SyncOperation, int64, error) {
+	req, _ := http.NewRequest(http.MethodGet, strings.TrimRight(serverURL, "/")+"/api/sync/v2/pull?cursor="+fmt.Sprint(cursor), nil)
+	syncsvc.SignRequest(req, nil, clientID, priv)
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return nil, cursor, err
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Cursor     int64                   `json:"cursor"`
+		Operations []syncsvc.SyncOperation `json:"operations"`
+	}
+	if resp.StatusCode >= 300 {
+		return nil, cursor, fmt.Errorf("v2 pull failed: %s", resp.Status)
+	}
+	err = json.NewDecoder(resp.Body).Decode(&out)
+	return out.Operations, out.Cursor, err
+}
+func v2Ack(serverURL, clientID string, priv ed25519.PrivateKey, cursor int64) error {
+	body, _ := json.Marshal(map[string]int64{"cursor": cursor})
+	req, _ := http.NewRequest(http.MethodPost, strings.TrimRight(serverURL, "/")+"/api/sync/v2/ack", bytes.NewReader(body))
+	syncsvc.SignRequest(req, body, clientID, priv)
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("v2 ack failed: %s", resp.Status)
+	}
+	return nil
+}
+func applyV2Operations(baseDir string, c *cache.Cache, ops []syncsvc.SyncOperation) error {
+	for _, op := range ops {
+		if op.Kind != "item" {
+			continue
+		}
+		path := filepath.Join(baseDir, filepath.FromSlash(op.Path))
+		if op.Path == "" {
+			continue
+		}
+		if op.Delete {
+			_ = os.Remove(path)
+			_ = c.NotifyDeleteNoOutbox(path)
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return err
+		}
+		if err := markdown.WriteFrontmatter(path, op.Frontmatter, op.Body); err != nil {
+			return err
+		}
+		if err := c.NotifyWriteNoOutbox(path); err != nil {
+			return err
+		}
+	}
+	return nil
 }

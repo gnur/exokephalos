@@ -11,9 +11,120 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gnur/exokephalos/internal/version"
 )
+
+func TestV2OperationsUseDeterministicLWWAndAreIdempotent(t *testing.T) {
+	s, err := NewServer(filepath.Join(t.TempDir(), "server.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	epoch, err := s.Epoch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer := SyncOperation{ID: "op-new", Epoch: epoch, ActorID: "b", Kind: "item", Target: "note-1", Path: "note.md", Version: HLC{PhysicalMS: 100, Logical: 0, ActorID: "b"}, Frontmatter: map[string]interface{}{"id": "note-1"}, Body: "new"}
+	result, err := s.PushOperations("b", []SyncOperation{newer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result[0].Status != "applied" {
+		t.Fatalf("new result = %+v", result[0])
+	}
+	// Equal clocks resolve on actor ID, so this later-arriving operation loses.
+	older := newer
+	older.ID = "op-old"
+	older.ActorID = "a"
+	older.Version.ActorID = "a"
+	older.Body = "old"
+	result, err = s.PushOperations("a", []SyncOperation{older})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result[0].Status != "superseded" {
+		t.Fatalf("old result = %+v", result[0])
+	}
+	result, err = s.PushOperations("b", []SyncOperation{newer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result[0].Status != "applied" || result[0].Cursor == 0 {
+		t.Fatalf("retry result = %+v", result[0])
+	}
+	ops, cursor, err := s.PullOperations(0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cursor != result[0].Cursor || len(ops) != 1 || ops[0].Body != "new" {
+		t.Fatalf("pull = %#v cursor=%d", ops, cursor)
+	}
+	if err := s.Acknowledge("b", cursor); err != nil {
+		t.Fatal(err)
+	}
+	var ack int64
+	if err := s.DB().QueryRow(`SELECT cursor FROM sync_acks WHERE actor_id='b'`).Scan(&ack); err != nil || ack != cursor {
+		t.Fatalf("ack = %d, %v", ack, err)
+	}
+}
+
+func TestV2RejectsWrongEpochWithoutBlockingOtherOperations(t *testing.T) {
+	s, err := NewServer(filepath.Join(t.TempDir(), "server.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	epoch, _ := s.Epoch()
+	valid := SyncOperation{ID: "ok", Epoch: epoch, ActorID: "device", Kind: "config", Target: "exo.fnl", Version: HLC{PhysicalMS: time.Now().UnixMilli(), ActorID: "device"}, Content: "{}"}
+	invalid := valid
+	invalid.ID = "bad"
+	invalid.Epoch = "wrong"
+	result, err := s.PushOperations("device", []SyncOperation{invalid, valid})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result[0].Status != "rejected" || result[1].Status != "applied" {
+		t.Fatalf("results = %+v", result)
+	}
+}
+
+func TestV2TombstoneCompactsOnlyAfterEveryActiveAcknowledgement(t *testing.T) {
+	s, err := NewServer(filepath.Join(t.TempDir(), "server.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	epoch, _ := s.Epoch()
+	upsert := SyncOperation{ID: "create", Epoch: epoch, ActorID: "a", Kind: "item", Target: "n", Path: "n.md", Version: HLC{PhysicalMS: 1, ActorID: "a"}, Frontmatter: map[string]interface{}{"id": "n", "type": "note"}}
+	if _, err := s.PushOperations("a", []SyncOperation{upsert}); err != nil {
+		t.Fatal(err)
+	}
+	deleteOp := upsert
+	deleteOp.ID = "delete"
+	deleteOp.Delete = true
+	deleteOp.Version = HLC{PhysicalMS: 2, ActorID: "a"}
+	result, err := s.PushOperations("a", []SyncOperation{deleteOp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Acknowledge("a", result[0].Cursor); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Acknowledge("b", result[0].Cursor-1); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.CompactTombstones(); err != nil || n != 0 {
+		t.Fatalf("early compact = %d, %v", n, err)
+	}
+	if err := s.Acknowledge("b", result[0].Cursor); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.CompactTombstones(); err != nil || n != 1 {
+		t.Fatalf("compact = %d, %v", n, err)
+	}
+}
 
 func TestVersionEndpoint(t *testing.T) {
 	server, err := NewServer(filepath.Join(t.TempDir(), "server.sqlite"))

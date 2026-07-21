@@ -1,4 +1,4 @@
-import type { Action, APIKey, Bootstrap, ConfigFile, Item, OutboxEntry, SyncClient } from './types';
+import type { Action, APIKey, Bootstrap, ConfigFile, Item, OutboxEntry, SyncClient, SyncOperation } from './types';
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -44,6 +44,17 @@ export function pushChanges(changes: OutboxEntry[]) {
         body: entry.body ?? '',
       })),
     }),
+  });
+}
+
+// v2 is used by new offline clients. It is separate from the legacy app
+// mutation route so a partially upgraded install cannot silently mix clocks.
+export function pushSyncOperations(operations: SyncOperation[]) {
+  return import('./db').then(async ({ ensureSyncDevice }) => {
+    const device = await ensureSyncDevice();
+    return api<{ results: Array<{ id: string; status: string; cursor?: number; error?: string }> }>('/api/app/sync/v2/push', {
+      method: 'POST', body: JSON.stringify({ operations }), headers: { 'X-Exo-Device-ID': device.id },
+    });
   });
 }
 

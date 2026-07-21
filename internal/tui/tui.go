@@ -51,6 +51,7 @@ const (
 	modeAttachImage
 	modeEncryptedEdit
 	modeCreateEncrypted
+	modeActionError
 )
 
 // Pane focus for views with tags enabled
@@ -141,7 +142,8 @@ type Model struct {
 	hardcoverResults []hardcover.Book
 
 	// Status message
-	status string
+	status      string
+	actionError string
 
 	syncStatus         string
 	syncTickScheduled  bool
@@ -479,6 +481,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleViewMenuKey(msg)
 	case modeActionPicker:
 		return m.handleActionPickerKey(msg)
+	case modeActionError:
+		return m.handleActionErrorKey(msg)
 	case modeConfirmDelete:
 		return m.handleConfirmDeleteKey(msg)
 	case modeCreatePrompt:
@@ -1048,6 +1052,9 @@ func (m Model) applyAction(actionName string) (tea.Model, tea.Cmd) {
 
 	if err := act.Apply(item.Path, item.Frontmatter, item.Body); err != nil {
 		m.status = fmt.Sprintf("Action failed: %v", err)
+		m.actionError = err.Error()
+		m.mode = modeActionError
+		return m, nil
 	} else {
 		_ = m.cache.NotifyWrite(item.Path)
 		m.status = fmt.Sprintf("Applied: %s", act.Description)
@@ -1055,6 +1062,15 @@ func (m Model) applyAction(actionName string) (tea.Model, tea.Cmd) {
 
 	m.mode = modeNormal
 	return m, tea.Batch(m.loadData(), m.reconcileIfStartedCmd())
+}
+
+func (m Model) handleActionErrorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "enter", " ":
+		m.mode = modeNormal
+		m.actionError = ""
+	}
+	return m, nil
 }
 
 func (m Model) handleConfirmDeleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

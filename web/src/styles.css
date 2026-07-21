@@ -658,3 +658,34 @@ textarea {
     margin: 0 auto;
   }
 }
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: rgb(15 23 42 / 65%);
+}
+
+.action-error-modal {
+  width: min(34rem, 100%);
+  border: 1px solid var(--danger, #ef4444);
+  border-radius: 0.75rem;
+  background: var(--surface, #fff);
+  box-shadow: 0 1.5rem 4rem rgb(0 0 0 / 30%);
+  padding: 1.25rem;
+}
+
+.action-error-modal h2 {
+  margin: 0 0 0.75rem;
+  color: var(--danger, #ef4444);
+}
+
+.action-error-modal pre {
+  max-height: 50vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0 0 1rem;
+}

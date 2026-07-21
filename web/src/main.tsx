@@ -338,6 +338,7 @@ function ItemsView({ items, views, actions, selected, onSelect, viewID, subviewN
   const activeView = views.find((view) => view.id === viewID) ?? views[0];
   const [editRequest, setEditRequest] = useState(0);
   const [applicableActions, setApplicableActions] = useState<Action[]>([]);
+  const [actionError, setActionError] = useState('');
   const baseVisible = useMemo(() => {
     const typeHint = activeView?.id.endsWith('s') ? activeView.id.slice(0, -1) : '';
     const subviewIDs = activeView?.subviews?.find((subview) => subview.name === subviewName)?.item_ids;
@@ -371,10 +372,14 @@ function ItemsView({ items, views, actions, selected, onSelect, viewID, subviewN
   }
 
   async function applyAction(action: Action, item: Item) {
-    const updated = await runAction(action.name, item.id);
-    await db.items.put(updated);
-    const result = await listItemActions(updated.id);
-    setApplicableActions(result.actions ?? []);
+    try {
+      const updated = await runAction(action.name, item.id);
+      await db.items.put(updated);
+      const result = await listItemActions(updated.id);
+      setApplicableActions(result.actions ?? []);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    }
   }
 
   async function importFromHardcover() {
@@ -415,6 +420,15 @@ function ItemsView({ items, views, actions, selected, onSelect, viewID, subviewN
 
   return (
     <section className="pane-shell">
+      {actionError ? (
+        <div className="modal-backdrop" role="presentation">
+          <div className="action-error-modal" role="dialog" aria-modal="true" aria-labelledby="action-error-title">
+            <h2 id="action-error-title">Action failed</h2>
+            <pre>{actionError}</pre>
+            <button className="button primary" autoFocus onClick={() => setActionError('')}>Dismiss</button>
+          </div>
+        </div>
+      ) : null}
       {pane !== 'editor' ? (
         <div className="items-header">
           <div>

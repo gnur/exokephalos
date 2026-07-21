@@ -27,6 +27,9 @@ func (m Model) View() string {
 	if m.mode == modeActionPicker {
 		return m.renderActionPickerOverlay()
 	}
+	if m.mode == modeActionError {
+		return m.renderActionErrorOverlay()
+	}
 	if m.mode == modeHardcoverResults {
 		return m.renderHardcoverResultsOverlay()
 	}
@@ -39,6 +42,21 @@ func (m Model) View() string {
 	footer := m.renderFooter()
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+}
+
+func (m Model) renderActionErrorOverlay() string {
+	popupW := 68
+	if maxW := m.width - 6; maxW > 20 && popupW > maxW {
+		popupW = maxW
+	}
+	content := strings.Join([]string{
+		confirmStyle.Render("Action failed"),
+		"",
+		popupLabelStyle.Render(wrapPopupText(m.actionError, popupW-8)),
+		"",
+		popupHintStyle.Render("  enter or esc to dismiss"),
+	}, "\n")
+	return renderFloating(content, m.width, m.height, popupW)
 }
 
 func (m Model) renderViewMenuOverlay() string {

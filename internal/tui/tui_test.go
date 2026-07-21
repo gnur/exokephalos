@@ -119,6 +119,25 @@ func TestAppendImportedDescriptionPreservesExistingBody(t *testing.T) {
 	}
 }
 
+func TestActionErrorPopupDismisses(t *testing.T) {
+	m := Model{
+		ready:       true,
+		width:       80,
+		height:      24,
+		views:       []viewState{{}},
+		mode:        modeActionError,
+		actionError: "intentional action failure",
+	}
+	if got := m.View(); !strings.Contains(got, "Action failed") || !strings.Contains(got, "intentional action failure") {
+		t.Fatalf("error popup = %q", got)
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	result := updated.(Model)
+	if result.mode != modeNormal || result.actionError != "" {
+		t.Fatalf("dismissed popup = mode %v, error %q", result.mode, result.actionError)
+	}
+}
+
 func setupTestRepo(t *testing.T) string {
 	tmpDir := t.TempDir()
 

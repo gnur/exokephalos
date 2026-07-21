@@ -187,6 +187,11 @@ const luaActionsModule = `return {
       return note
     end,
   },
+  ["fail-action"] = {
+    description = "Fail action",
+    when = function(_) return true end,
+    run = function(_) error("intentional Lua action failure") end,
+  },
 }`
 
 func (h *harness) startServer() {

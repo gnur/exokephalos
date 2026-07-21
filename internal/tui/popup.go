@@ -76,3 +76,33 @@ func renderFloatingTop(content string, width, popupW, contentH int) string {
 	}
 	return lipgloss.NewStyle().PaddingLeft(padLeft).Render(popup)
 }
+
+func wrapPopupText(text string, width int) string {
+	if width < 1 {
+		return text
+	}
+	var lines []string
+	for _, paragraph := range strings.Split(text, "\n") {
+		if paragraph == "" {
+			lines = append(lines, "")
+			continue
+		}
+		var line string
+		for _, word := range strings.Fields(paragraph) {
+			if line == "" {
+				line = word
+				continue
+			}
+			if len(line)+1+len(word) <= width {
+				line += " " + word
+				continue
+			}
+			lines = append(lines, line)
+			line = word
+		}
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return strings.Join(lines, "\n")
+}

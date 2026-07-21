@@ -50,6 +50,13 @@ test('SPA login, mobile shell, editor, approval, and browser outbox', async ({ p
   expect(luaActionResult.item.frontmatter.status).toBe('done');
   expect(luaActionResult.item.frontmatter.completed_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
 
+  await page.getByRole('button', { name: 'Fail action' }).click();
+  const actionError = page.getByRole('dialog', { name: 'Action failed' });
+  await expect(actionError).toContainText('intentional Lua action failure');
+  await actionError.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(actionError).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Actions' }).click();
   await page.getByRole('button', { name: 'Edit', exact: true }).click();
   await expect(page.getByLabel('Raw markdown')).toContainText('---');
   await page.getByRole('button', { name: 'Cancel' }).click();

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gnur/exokephalos/internal/auth"
@@ -21,7 +22,6 @@ import (
 	"github.com/gnur/exokephalos/internal/syncsvc"
 	"github.com/gnur/exokephalos/internal/tui"
 	"github.com/gnur/exokephalos/internal/version"
-	"strings"
 )
 
 //go:embed templates/*
@@ -33,7 +33,15 @@ var staticFS embed.FS
 //go:embed all:web/dist
 var spaFS embed.FS
 
+//go:embed exokephalos-agents.md
+var agentsGuide string
+
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "help" || os.Args[1] == "--help" || os.Args[1] == "-h") {
+		printHelp()
+		return
+	}
+
 	dir := os.Getenv("EXO_DIR")
 	if dir == "" {
 		dir = "./example-repo"
@@ -98,6 +106,23 @@ func main() {
 			log.Fatalf("TUI error: %v", err)
 		}
 	}
+}
+
+func printHelp() {
+	fmt.Print(agentsGuide)
+	fmt.Print("\n## Commands and flags\n\n" +
+		"xo                       Start the terminal UI\n" +
+		"xo serve                 Start the web and sync server\n" +
+		"xo lsp                   Start the language server on stdio\n" +
+		"xo import <dir> <type>   Import Markdown into the workspace\n" +
+		"xo export <dir> [--type <type>]\n" +
+		"                         Export workspace Markdown\n" +
+		"xo helix-init            Write Helix LSP settings for EXO_DIR\n" +
+		"xo version, xo --version Print build version\n" +
+		"xo help, xo --help, xo -h\n" +
+		"                         Print this guide\n\n" +
+		"Environment:\n" +
+		"  EXO_DIR                Workspace directory; defaults to ./example-repo\n")
 }
 
 func runServer(appCfg *config.AppConfig, dir string) {

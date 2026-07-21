@@ -100,6 +100,15 @@ func setupTestServer(t *testing.T) (*httptest.Server, string) {
 	return httptest.NewServer(h.TimingMiddleware(h.CSRFMiddleware(mux))), tmpDir
 }
 
+func TestHelpIncludesEmbeddedGuideAndCommands(t *testing.T) {
+	if !strings.Contains(agentsGuide, "# exokephalos") {
+		t.Fatal("embedded agents guide is missing its title")
+	}
+	if !strings.Contains(agentsGuide, ".exo/serve.fnl") || !strings.Contains(agentsGuide, ".exo/tui.fnl") {
+		t.Fatal("embedded agents guide is missing local configuration examples")
+	}
+}
+
 func writeTypedTestItems(t *testing.T, dir string) {
 	t.Helper()
 

@@ -24,6 +24,15 @@ Set `EXO_DIR` to a workspace directory. It must contain a root-level `exo.fnl`; 
 
 Views require `:name`, `:key`, and a function `:when`. New items use the shared type/title/body flow; views do not define item templates. Optional display settings include `:title-field`, `:subtitle-field`, `:sort-field`, `:sort-order`, `:show-tags`, `:preview-template`, `:stats-template`, and `:subviews`.
 
+Workspace code has tag and time helpers. In Fennel, use `has-tag`, `add-tag`, and `remove-tag`; Lua modules use the underscore forms `has_tag`, `add_tag`, and `remove_tag`. Tag helpers return a new list without mutating the input. `now` returns the current UTC time in RFC 3339 format.
+
+```fennel
+(has-tag note.tags "todo")
+(add-tag note.tags "done")
+(remove-tag note.tags "todo")
+(now)
+```
+
 ## Web server
 
 The server stores synced items and workspace configuration in SQLite. Configure it locally in `EXO_DIR/.exo/serve.fnl`:

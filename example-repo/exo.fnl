@@ -1,16 +1,3 @@
-(local has-tag (fn [tags tag]
-  (var found false)
-  (each [_ value (ipairs tags)]
-    (when (= value tag) (set found true)))
-  found))
-
-(local replace-tag (fn [tags remove add]
-  (local result [])
-  (each [_ value (ipairs tags)]
-    (when (not= value remove) (table.insert result value)))
-  (when (not (has-tag result add)) (table.insert result add))
-  result))
-
 {:default-view :notes
  :views
  {:books {:name "Books" :key "b" :show-tags false
@@ -31,6 +18,6 @@
              :when (fn [note] (or (= note.type "webhook") (= note.type "alert")))
              :subviews [{:name "All" :when (fn [_] true)}]}}
  :actions
- {:finish-book {:description "Mark book as finished reading" :when (fn [note] (has-tag note.tags "reading")) :run (fn [note] (assoc note :frontmatter (assoc note.frontmatter :tags (replace-tag note.tags "reading" "read"))))}
-  :start-book {:description "Start reading this book" :when (fn [note] (has-tag note.tags "to-read")) :run (fn [note] (assoc note :frontmatter (assoc note.frontmatter :tags (replace-tag note.tags "to-read" "reading"))))}
-  :mark-done {:description "Mark item as done" :when (fn [note] (and (has-tag note.tags "todo") (not (has-tag note.tags "done")))) :run (fn [note] (assoc note :frontmatter (assoc note.frontmatter :tags (replace-tag note.tags "" "done"))))}}}
+ {:finish-book {:description "Mark book as finished reading" :when (fn [note] (has-tag note.tags "reading")) :run (fn [note] (assoc note :frontmatter (assoc note.frontmatter :tags (add-tag (remove-tag note.tags "reading") "read"))))}
+  :start-book {:description "Start reading this book" :when (fn [note] (has-tag note.tags "to-read")) :run (fn [note] (assoc note :frontmatter (assoc note.frontmatter :tags (add-tag (remove-tag note.tags "to-read") "reading"))))}
+  :mark-done {:description "Mark item as done" :when (fn [note] (and (has-tag note.tags "todo") (not (has-tag note.tags "done")))) :run (fn [note] (assoc note :frontmatter (assoc note.frontmatter :tags (add-tag note.tags "done"))))}}}

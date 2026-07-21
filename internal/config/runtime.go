@@ -76,6 +76,18 @@ func newRuntime(contents []NamedContent) (*runtime, error) {
 	r.L.SetGlobal("__exo_fennel", lua.LNil)
 	r.L.SetGlobal("require", r.L.NewFunction(r.require))
 	r.L.SetGlobal("assoc", r.L.NewFunction(luaAssoc))
+	// Fennel accepts hyphenated names while Lua identifiers use underscores.
+	// Export both forms so workspace code can use its native spelling.
+	for _, name := range []string{"has-tag", "has_tag", "__fnl_global__has_2dtag"} {
+		r.L.SetGlobal(name, r.L.NewFunction(luaHasTag))
+	}
+	for _, name := range []string{"add-tag", "add_tag", "__fnl_global__add_2dtag"} {
+		r.L.SetGlobal(name, r.L.NewFunction(luaAddTag))
+	}
+	for _, name := range []string{"remove-tag", "remove_tag", "__fnl_global__remove_2dtag"} {
+		r.L.SetGlobal(name, r.L.NewFunction(luaRemoveTag))
+	}
+	r.L.SetGlobal("now", r.L.NewFunction(luaNow))
 	r.L.SetGlobal("dofile", lua.LNil)
 	r.L.SetGlobal("loadfile", lua.LNil)
 	r.L.SetGlobal("io", lua.LNil)
@@ -172,6 +184,55 @@ func luaAssoc(L *lua.LState) int {
 	t.ForEach(func(k, v lua.LValue) { copy.RawSet(k, v) })
 	copy.RawSet(key, value)
 	L.Push(copy)
+	return 1
+}
+
+func luaHasTag(L *lua.LState) int {
+	tags := L.CheckTable(1)
+	tag := L.CheckString(2)
+	found := false
+	tags.ForEach(func(_ lua.LValue, value lua.LValue) {
+		if luaString(value) == tag {
+			found = true
+		}
+	})
+	L.Push(lua.LBool(found))
+	return 1
+}
+
+func luaAddTag(L *lua.LState) int {
+	tags := L.CheckTable(1)
+	tag := L.CheckString(2)
+	copy := L.NewTable()
+	found := false
+	tags.ForEach(func(_ lua.LValue, value lua.LValue) {
+		copy.Append(value)
+		if luaString(value) == tag {
+			found = true
+		}
+	})
+	if !found {
+		copy.Append(lua.LString(tag))
+	}
+	L.Push(copy)
+	return 1
+}
+
+func luaRemoveTag(L *lua.LState) int {
+	tags := L.CheckTable(1)
+	tag := L.CheckString(2)
+	copy := L.NewTable()
+	tags.ForEach(func(_ lua.LValue, value lua.LValue) {
+		if luaString(value) != tag {
+			copy.Append(value)
+		}
+	})
+	L.Push(copy)
+	return 1
+}
+
+func luaNow(L *lua.LState) int {
+	L.Push(lua.LString(time.Now().UTC().Format(time.RFC3339)))
 	return 1
 }
 

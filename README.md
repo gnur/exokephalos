@@ -136,10 +136,6 @@ The `.exo/` directory is local-only. It is used for `.exo/tui.fnl`, `.exo/serve.
 ### Full example with subviews and stats
 
 ```fennel
-(local has-tag (fn [tags tag]
-                 (var found false)
-                 (each [_ value (ipairs tags)] (when (= value tag) (set found true)))
-                 found))
 {:default-view :notes
  :views {:notes {:name "Notes" :key "n" :show-tags true
                  :when (fn [note] (= note.type "note"))
@@ -151,6 +147,8 @@ The `.exo/` directory is local-only. It is used for `.exo/tui.fnl`, `.exo/serve.
                  }}
  :actions {}}
 ```
+
+Workspace code provides `has-tag`, `add-tag`, `remove-tag`, and `now`. The tag helpers return a new list; `now` returns an RFC 3339 UTC timestamp. Lua modules use `has_tag`, `add_tag`, and `remove_tag`.
 
 ### Config reference
 

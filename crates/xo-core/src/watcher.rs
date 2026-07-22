@@ -85,7 +85,7 @@ impl DebouncedWatcher {
 fn normalize_paths(root: &Path, paths: Vec<PathBuf>) -> Vec<ProjectionEvent> {
     let candidates = paths
         .into_iter()
-        .filter(|path| is_markdown_projection_path(root, path))
+        .filter(|path| is_projection_path(root, path))
         .collect::<BTreeSet<_>>();
     let mut upserts = Vec::new();
     let mut removals = Vec::new();
@@ -100,11 +100,18 @@ fn normalize_paths(root: &Path, paths: Vec<PathBuf>) -> Vec<ProjectionEvent> {
     upserts
 }
 
-fn is_markdown_projection_path(root: &Path, path: &Path) -> bool {
+fn is_projection_path(root: &Path, path: &Path) -> bool {
     let Ok(relative) = path.strip_prefix(root) else {
         return false;
     };
-    path.extension().is_some_and(|extension| extension == "md")
+    let relative_string = relative.to_string_lossy().replace('\\', "/");
+    let content_path = path.extension().is_some_and(|extension| extension == "md")
+        || relative_string == "exo.scm"
+        || (relative_string.starts_with("modules/")
+            && Path::new(&relative_string)
+                .extension()
+                .is_some_and(|value| value == "scm"));
+    content_path
         && relative
             .components()
             .next()
@@ -153,5 +160,28 @@ mod tests {
             }
         }
         assert!(observed.contains(&ProjectionEvent::Upsert(path)));
+    }
+
+    #[test]
+    fn watcher_includes_only_supported_steel_configuration_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("exo.scm");
+        let module = directory.path().join("modules/views/books.scm");
+        let unrelated = directory.path().join("script.scm");
+        std::fs::create_dir_all(module.parent().unwrap()).unwrap();
+        std::fs::write(&main, "main").unwrap();
+        std::fs::write(&module, "module").unwrap();
+        std::fs::write(&unrelated, "no").unwrap();
+        let events = normalize_paths(
+            directory.path(),
+            vec![main.clone(), module.clone(), unrelated],
+        );
+        assert_eq!(
+            events,
+            vec![
+                ProjectionEvent::Upsert(main),
+                ProjectionEvent::Upsert(module)
+            ]
+        );
     }
 }

@@ -1,0 +1,299 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use anyhow::{Context, Result};
+use xo_core::behavior::WorkspaceBehavior;
+use xo_core::iroh_node::{IrohNode, IrohWorkspace};
+use xo_core::projection::ProjectionState;
+use xo_core::records::{WorkspaceRecords, WorkspaceSnapshot};
+use xo_core::sync_state::{Connectivity, SyncStateStore};
+use xo_core::{
+    ActorId, CURRENT_SCHEMA, DeviceRecord, HlcClock, Note, NoteId, NoteRevision, RevisionId,
+};
+
+pub struct WorkspaceSession {
+    node: IrohNode,
+    workspace: IrohWorkspace,
+    actor: ActorId,
+    clock: HlcClock,
+    projection: ProjectionState,
+    pub sync_state: SyncStateStore,
+}
+
+impl WorkspaceSession {
+    pub async fn open(
+        state_dir: &Path,
+        workspace_id: Option<&str>,
+        ticket: Option<&str>,
+        projection: PathBuf,
+    ) -> Result<Self> {
+        let node = IrohNode::persistent(state_dir).await?;
+        let workspace = if let Some(ticket) = ticket {
+            node.import_workspace(ticket).await?
+        } else {
+            node.open_workspace_str(workspace_id.context("--workspace or --ticket is required")?)
+                .await?
+                .context("workspace is not present in this peer")?
+        };
+        if let Some(ticket) = ticket {
+            workspace.start_sync(ticket).await?;
+        }
+        let actor = ActorId::new(workspace.author_id().to_string());
+        let sync_state = SyncStateStore::open(state_dir.join("tui-sync.sqlite"))?;
+        sync_state.set_connectivity(&Connectivity::Connecting)?;
+        Ok(Self {
+            projection: ProjectionState::open(projection)?,
+            node,
+            workspace,
+            actor: actor.clone(),
+            clock: HlcClock::new(actor),
+            sync_state,
+        })
+    }
+
+    #[must_use]
+    pub fn workspace_id(&self) -> String {
+        self.workspace.id().to_string()
+    }
+
+    pub async fn snapshot(&self) -> Result<WorkspaceSnapshot> {
+        let snapshot = WorkspaceRecords::new(&self.workspace).snapshot().await?;
+        self.projection.reconcile(&snapshot.notes)?;
+        self.projection.reconcile_assets(&snapshot.assets)?;
+        self.projection.reconcile_configs(&snapshot.configs)?;
+        Ok(snapshot)
+    }
+
+    pub async fn behavior(&self) -> Result<WorkspaceBehavior> {
+        let configs = WorkspaceRecords::new(&self.workspace)
+            .list_configs()
+            .await?;
+        let mut modules = BTreeMap::new();
+        let mut main = None;
+        for config in configs {
+            let source = String::from_utf8(config.bytes)
+                .with_context(|| format!("configuration {} is not UTF-8", config.record.path))?;
+            if config.record.path == "exo.scm" {
+                main = Some(source);
+            } else {
+                modules.insert(config.record.path, source);
+            }
+        }
+        match main {
+            Some(source) => Ok(xo_core::steel_runtime::SteelWorkspace::load(
+                &source,
+                &modules,
+                "1970-01-01T00:00:00Z",
+            )?),
+            None => Ok(WorkspaceBehavior::default()),
+        }
+    }
+
+    pub async fn save(&mut self, note: &Note) -> Result<RevisionId> {
+        self.commit(note, false).await
+    }
+    pub async fn delete(&mut self, note: &Note) -> Result<RevisionId> {
+        self.commit(note, true).await
+    }
+
+    async fn commit(&mut self, note: &Note, deleted: bool) -> Result<RevisionId> {
+        let records = WorkspaceRecords::new(&self.workspace);
+        let mut predecessors = BTreeSet::new();
+        if let Some(resolved) = records.load_note(&note.id).await? {
+            predecessors.insert(resolved.winning_revision);
+            predecessors.extend(
+                resolved
+                    .conflict
+                    .into_iter()
+                    .flat_map(|value| value.concurrent_revisions),
+            );
+        }
+        records
+            .commit_revision(&NoteRevision {
+                schema: CURRENT_SCHEMA,
+                note_id: note.id.clone(),
+                frontmatter: note.frontmatter.clone(),
+                body: note.body.clone(),
+                materialized_path: note.path.clone(),
+                hlc: self.clock.next(now_ms()?),
+                author_id: self.actor.clone(),
+                predecessors,
+                deleted,
+            })
+            .await
+            .map_err(Into::into)
+    }
+
+    pub fn refresh_sync(&self) -> Result<()> {
+        self.sync_state.set_connectivity(&Connectivity::Direct)?;
+        Ok(())
+    }
+    pub async fn deleted_notes(&self) -> Result<Vec<Note>> {
+        Ok(WorkspaceRecords::new(&self.workspace)
+            .deleted_notes()
+            .await?)
+    }
+    pub async fn history(&self, note_id: &NoteId) -> Result<Vec<(RevisionId, NoteRevision)>> {
+        Ok(WorkspaceRecords::new(&self.workspace)
+            .revision_history(note_id)
+            .await?)
+    }
+    pub async fn retire_device(&mut self, mut device: DeviceRecord) -> Result<()> {
+        device.retired_at = Some(self.clock.next(now_ms()?));
+        WorkspaceRecords::new(&self.workspace)
+            .put_device(&device)
+            .await?;
+        Ok(())
+    }
+    pub fn retry(&self, operation_id: i64) -> Result<()> {
+        self.sync_state.retry(operation_id)?;
+        Ok(())
+    }
+    pub async fn shutdown(self) -> Result<()> {
+        self.node.shutdown().await
+    }
+}
+
+fn now_ms() -> Result<u64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock precedes Unix epoch")?
+        .as_millis()
+        .try_into()
+        .context("time does not fit u64")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use xo_core::domain::{Frontmatter, FrontmatterValue};
+    use xo_core::iroh_node::IrohNode;
+    use xo_core::records::WorkspaceRecords;
+    use xo_core::{Hlc, NoteId};
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn offline_tui_edit_reconnects_retains_conflict_and_converges() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let primary_state = directory.path().join("primary");
+        let central_state = directory.path().join("central");
+        let primary = IrohNode::persistent(&primary_state).await?;
+        let workspace = primary.create_workspace().await?;
+        let primary_records = WorkspaceRecords::new(&workspace);
+        let base = NoteRevision {
+            schema: CURRENT_SCHEMA,
+            note_id: NoteId::new("note002"),
+            frontmatter: Frontmatter::from([(
+                "title".into(),
+                FrontmatterValue::String("Base".into()),
+            )]),
+            body: "base".into(),
+            materialized_path: "notes/base.md".into(),
+            hlc: Hlc {
+                physical_ms: 100,
+                logical: 0,
+                actor_id: primary_records.actor_id(),
+            },
+            author_id: primary_records.actor_id(),
+            predecessors: BTreeSet::new(),
+            deleted: false,
+        };
+        let base_id = primary_records.commit_revision(&base).await?;
+        let workspace_id = workspace.id().to_string();
+        let ticket = workspace.share(true).await?;
+        let central = IrohNode::persistent(&central_state).await?;
+        let central_workspace = central.import_workspace(&ticket).await?;
+        wait_until(|| async {
+            WorkspaceRecords::new(&central_workspace)
+                .get_revision(&base.note_id, &base_id)
+                .await
+                .ok()
+                .flatten()
+                .is_some()
+        })
+        .await?;
+        central.shutdown().await?;
+        primary.shutdown().await?;
+
+        let mut session = WorkspaceSession::open(
+            &primary_state,
+            Some(&workspace_id),
+            None,
+            directory.path().join("projection"),
+        )
+        .await?;
+        let mut offline_note = session.snapshot().await?.notes[0].clone();
+        offline_note.body = "offline primary edit".into();
+        session.save(&offline_note).await?;
+
+        let central = IrohNode::persistent(&central_state).await?;
+        let central_workspace = central
+            .open_workspace_str(&workspace_id)
+            .await?
+            .context("central workspace missing")?;
+        let central_records = WorkspaceRecords::new(&central_workspace);
+        let central_actor = central_records.actor_id();
+        central_records
+            .commit_revision(&NoteRevision {
+                schema: CURRENT_SCHEMA,
+                note_id: base.note_id.clone(),
+                frontmatter: base.frontmatter.clone(),
+                body: "central concurrent edit".into(),
+                materialized_path: base.materialized_path.clone(),
+                hlc: Hlc {
+                    physical_ms: 200,
+                    logical: 0,
+                    actor_id: central_actor.clone(),
+                },
+                author_id: central_actor,
+                predecessors: BTreeSet::from([base_id]),
+                deleted: false,
+            })
+            .await?;
+        let primary_ticket = session.workspace.share(true).await?;
+        let central_ticket = central_workspace.share(true).await?;
+        central_workspace.start_sync(&primary_ticket).await?;
+        session.workspace.start_sync(&central_ticket).await?;
+        wait_until(|| async {
+            session.snapshot().await.ok().is_some_and(|snapshot| {
+                snapshot
+                    .resolved
+                    .iter()
+                    .any(|value| value.conflict.is_some())
+            }) && central_records
+                .snapshot()
+                .await
+                .ok()
+                .is_some_and(|snapshot| {
+                    snapshot
+                        .resolved
+                        .iter()
+                        .any(|value| value.conflict.is_some())
+                })
+        })
+        .await?;
+        let snapshot = session.snapshot().await?;
+        assert_eq!(snapshot.notes.len(), 1);
+        assert!(snapshot.resolved[0].conflict.is_some());
+        assert!(session.history(&base.note_id).await?.len() >= 3);
+        session.shutdown().await?;
+        central.shutdown().await?;
+        Ok(())
+    }
+
+    async fn wait_until<F, Fut>(mut condition: F) -> Result<()>
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
+        for _ in 0..200 {
+            if condition().await {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        anyhow::bail!("peers did not converge before timeout")
+    }
+}

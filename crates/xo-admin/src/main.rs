@@ -18,6 +18,11 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Convert the documented legacy exo.fnl subset into a portable exo.scm descriptor.
+    MigrateConfig {
+        source: PathBuf,
+        destination: PathBuf,
+    },
     /// Validate every Markdown file in an existing workspace without modifying it.
     AuditWorkspace { path: PathBuf },
     /// Import a Markdown workspace into a new native replicated workspace.
@@ -75,8 +80,27 @@ enum Command {
 }
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::MigrateConfig {
+            source,
+            destination,
+        } => {
+            let behavior = read_legacy_config(&source)?;
+            let output = migration_output(destination);
+            if output.exists() {
+                bail!("refusing to overwrite {}", output.display());
+            }
+            if let Some(parent) = output.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(
+                &output,
+                xo_core::steel_runtime::encode_config(&behavior, false),
+            )?;
+            println!("migrated={}", output.display());
+        }
         Command::AuditWorkspace { path } => {
             let mut valid = 0_u64;
             let mut invalid = 0_u64;
@@ -164,6 +188,14 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn migration_output(destination: PathBuf) -> PathBuf {
+    if destination.is_dir() || destination.extension().is_none() {
+        destination.join("exo.scm")
+    } else {
+        destination
+    }
 }
 
 async fn print_diagnostics(state_dir: &Path, workspace_id: &str) -> Result<()> {
@@ -309,6 +341,11 @@ async fn import_workspace(source: &Path, state_dir: &Path) -> Result<ImportResul
         );
     }
     let source_assets = scan_assets(&source)?;
+    let migrated_config = source
+        .join("exo.fnl")
+        .exists()
+        .then(|| read_legacy_config(&source))
+        .transpose()?;
 
     let node = IrohNode::persistent(&state_dir).await?;
     let workspace = node.create_workspace().await?;
@@ -336,6 +373,16 @@ async fn import_workspace(source: &Path, state_dir: &Path) -> Result<ImportResul
             })
             .await?;
     }
+    if let Some(behavior) = migrated_config {
+        records
+            .put_config(
+                "exo.scm",
+                xo_core::steel_runtime::encode_config(&behavior, false).into_bytes(),
+                clock.next(wall_clock_ms),
+                BTreeSet::new(),
+            )
+            .await?;
+    }
     let mut imported_assets = Vec::new();
     for asset in source_assets {
         let record = records
@@ -357,6 +404,59 @@ async fn import_workspace(source: &Path, state_dir: &Path) -> Result<ImportResul
     };
     node.shutdown().await?;
     Ok(result)
+}
+
+fn read_legacy_config(source: &Path) -> Result<xo_core::behavior::WorkspaceBehavior> {
+    let (root, path) = if source.is_dir() {
+        (source, source.join("exo.fnl"))
+    } else {
+        (
+            source.parent().unwrap_or(Path::new(".")),
+            source.to_path_buf(),
+        )
+    };
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("read legacy configuration {}", path.display()))?;
+    let mut legacy_modules = Vec::new();
+    collect_legacy_modules(root, root, &mut legacy_modules)?;
+    legacy_modules.retain(|candidate| candidate != &path);
+    if !legacy_modules.is_empty() {
+        let details = legacy_modules
+            .iter()
+            .map(|candidate| {
+                candidate
+                    .strip_prefix(root)
+                    .unwrap_or(candidate)
+                    .display()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        bail!(
+            "unsupported legacy Fennel/Lua modules: {details}; migrate them explicitly to declarative modules/**/*.scm files"
+        );
+    }
+    xo_core::legacy_config::migrate_fennel(&text).map_err(anyhow::Error::from)
+}
+
+fn collect_legacy_modules(root: &Path, directory: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            if !entry.file_name().to_string_lossy().starts_with('.') {
+                collect_legacy_modules(root, &path, output)?;
+            }
+        } else if path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value == "fnl" || value == "lua")
+        {
+            output.push(path);
+        }
+    }
+    let _ = root;
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -458,7 +558,11 @@ async fn verify_roundtrip(
     let projection = ProjectionState::open(clean.path())?;
     let note_report = projection.reconcile(&snapshot.notes)?;
     let asset_report = projection.reconcile_assets(&snapshot.assets)?;
-    if !note_report.diagnostics.is_empty() || !asset_report.diagnostics.is_empty() {
+    let config_report = projection.reconcile_configs(&snapshot.configs)?;
+    if !note_report.diagnostics.is_empty()
+        || !asset_report.diagnostics.is_empty()
+        || !config_report.diagnostics.is_empty()
+    {
         bail!("clean projection verification produced diagnostics");
     }
     let projected = xo_core::projection::scan(projection.root())?;
@@ -475,6 +579,11 @@ async fn verify_roundtrip(
                 "projected asset differs: {}",
                 asset.record.materialized_path
             );
+        }
+    }
+    for config in &snapshot.configs {
+        if std::fs::read(projection.root().join(&config.record.path))? != config.bytes {
+            bail!("projected configuration differs: {}", config.record.path);
         }
     }
     Ok(())
@@ -598,6 +707,47 @@ mod tests {
                 .is_err()
         );
         assert!(!directory.path().join(".exo").exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn example_workspace_imports_equivalent_versioned_steel_configuration() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../oldcodebase/example-repo"
+        ));
+        let state = directory.path().join("native");
+        let imported = import_workspace(source, &state).await?;
+        assert_eq!(imported.imported, 278);
+        let node = IrohNode::persistent(&state).await?;
+        let workspace = node
+            .open_workspace_str(&imported.workspace_id)
+            .await?
+            .context("imported workspace missing")?;
+        let configs = WorkspaceRecords::new(&workspace).list_configs().await?;
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].record.path, "exo.scm");
+        let loaded = xo_core::steel_runtime::SteelWorkspace::load(
+            std::str::from_utf8(&configs[0].bytes)?,
+            &std::collections::BTreeMap::default(),
+            "fixed",
+        )?;
+        assert_eq!(loaded.views.len(), 5);
+        assert_eq!(loaded.actions.len(), 3);
+        node.shutdown().await?;
+        Ok(())
+    }
+
+    #[test]
+    fn migration_destination_directory_may_contain_a_dot() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let destination = directory.path().join("config.output");
+        std::fs::create_dir(&destination)?;
+        assert_eq!(
+            migration_output(destination.clone()),
+            destination.join("exo.scm")
+        );
         Ok(())
     }
 }

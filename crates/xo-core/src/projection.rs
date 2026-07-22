@@ -156,6 +156,8 @@ pub struct ProjectionState {
     root: PathBuf,
     manifest_path: PathBuf,
     asset_manifest_path: PathBuf,
+    #[cfg(feature = "iroh-sync")]
+    config_manifest_path: PathBuf,
     expected_writes: ExpectedWrites,
 }
 
@@ -167,6 +169,8 @@ impl ProjectionState {
         Ok(Self {
             manifest_path: state_dir.join("projection.json"),
             asset_manifest_path: state_dir.join("assets.json"),
+            #[cfg(feature = "iroh-sync")]
+            config_manifest_path: state_dir.join("configs.json"),
             expected_writes: ExpectedWrites::open(state_dir.join("expected-writes.json"))?,
             root,
         })
@@ -246,6 +250,61 @@ impl ProjectionState {
             desired,
         )
     }
+
+    /// Materialize verified, winning Steel configuration records.
+    #[cfg(feature = "iroh-sync")]
+    pub fn reconcile_configs(
+        &self,
+        configs: &[crate::records::ProjectedConfig],
+    ) -> Result<MaterializationReport, ProjectionError> {
+        let mut desired = Vec::new();
+        for config in configs {
+            config
+                .record
+                .validate()
+                .map_err(|error| ProjectionError::InvalidAsset {
+                    path: config.record.path.clone(),
+                    message: error.to_string(),
+                })?;
+            if !valid_config_path(&config.record.path) {
+                return Err(ProjectionError::InvalidAsset {
+                    path: config.record.path.clone(),
+                    message: "configuration must be exo.scm or modules/**/*.scm".to_owned(),
+                });
+            }
+            if u64::try_from(config.bytes.len()).ok() != Some(config.record.size)
+                || blake3::hash(&config.bytes).to_hex().as_str() != config.record.blob_hash
+            {
+                return Err(ProjectionError::InvalidAsset {
+                    path: config.record.path.clone(),
+                    message: "bytes do not match the declared hash and size".to_owned(),
+                });
+            }
+            desired.push(DesiredFile {
+                id: config.record.path.clone(),
+                path: config.record.path.clone(),
+                bytes: config.bytes.clone(),
+            });
+        }
+        reconcile_files(
+            &self.root,
+            &self.config_manifest_path,
+            &self.expected_writes,
+            desired,
+        )
+    }
+}
+
+#[cfg(feature = "iroh-sync")]
+fn valid_config_path(path: &str) -> bool {
+    path == "exo.scm"
+        || (path.starts_with("modules/")
+            && Path::new(path)
+                .extension()
+                .is_some_and(|value| value == "scm")
+            && !path
+                .split('/')
+                .any(|part| part.is_empty() || part == "." || part == ".."))
 }
 
 fn reconcile_files(

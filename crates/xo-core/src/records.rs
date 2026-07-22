@@ -164,6 +164,73 @@ impl<'a> WorkspaceRecords<'a> {
         resolve_group(&group)
     }
 
+    /// Return accepted immutable history in deterministic HLC/revision order.
+    pub async fn revision_history(
+        &self,
+        note_id: &NoteId,
+    ) -> Result<Vec<(RevisionId, NoteRevision)>, RecordError> {
+        let prefix = format!("{NOTE_PREFIX}{note_id}/");
+        let mut group = NoteRecords::default();
+        let cutoffs = self.retirement_cutoffs().await?;
+        for entry in self.workspace.list_signed(prefix).await? {
+            let key = String::from_utf8(entry.key).map_err(|error| {
+                RecordError::InvalidKey(String::from_utf8_lossy(error.as_bytes()).into_owned())
+            })?;
+            decode_record(
+                &key,
+                &entry.value,
+                &ActorId::new(entry.author),
+                Some(note_id),
+                &cutoffs,
+                &mut group,
+            )?;
+        }
+        let mut history = group.revisions.into_iter().collect::<Vec<_>>();
+        history.sort_by(|(left_id, left), (right_id, right)| {
+            left.hlc.cmp(&right.hlc).then_with(|| left_id.cmp(right_id))
+        });
+        Ok(history)
+    }
+
+    /// Return the latest content of currently deleted notes so frontends can restore them.
+    pub async fn deleted_notes(&self) -> Result<Vec<Note>, RecordError> {
+        let cutoffs = self.retirement_cutoffs().await?;
+        let mut groups = BTreeMap::<NoteId, NoteRecords>::new();
+        for entry in self.workspace.list_signed(NOTE_PREFIX).await? {
+            let key = String::from_utf8_lossy(&entry.key).into_owned();
+            let Some(note_id) = note_id_from_key(&key) else {
+                continue;
+            };
+            decode_record(
+                &key,
+                &entry.value,
+                &ActorId::new(entry.author),
+                Some(&note_id),
+                &cutoffs,
+                groups.entry(note_id.clone()).or_default(),
+            )?;
+        }
+        let mut notes = Vec::new();
+        for group in groups.values() {
+            let Some(resolved) = resolve_group(group)? else {
+                continue;
+            };
+            if resolved.visible.is_some() {
+                continue;
+            }
+            if let Some(revision) = group.revisions.get(&resolved.winning_revision) {
+                notes.push(Note {
+                    id: revision.note_id.clone(),
+                    frontmatter: revision.frontmatter.clone(),
+                    body: revision.body.clone(),
+                    path: revision.materialized_path.clone(),
+                });
+            }
+        }
+        notes.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(notes)
+    }
+
     pub async fn get_revision(
         &self,
         note_id: &NoteId,

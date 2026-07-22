@@ -35,6 +35,7 @@ pub struct RefreshReport {
     pub snapshot: WorkspaceSnapshot,
     pub materialization: MaterializationReport,
     pub asset_materialization: MaterializationReport,
+    pub config_materialization: MaterializationReport,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -82,10 +83,12 @@ impl<'a> WorkspaceProjection<'a> {
         let snapshot = self.records.rebuild_index(self.index).await?;
         let materialization = self.state.reconcile(&snapshot.notes)?;
         let asset_materialization = self.state.reconcile_assets(&snapshot.assets)?;
+        let config_materialization = self.state.reconcile_configs(&snapshot.configs)?;
         Ok(RefreshReport {
             snapshot,
             materialization,
             asset_materialization,
+            config_materialization,
         })
     }
 
@@ -114,6 +117,33 @@ impl<'a> WorkspaceProjection<'a> {
         }
 
         for path in upserts {
+            if let Ok(relative) = relative_path(self.root(), &path)
+                && is_config_path(&relative)
+            {
+                let bytes = std::fs::read(&path).map_err(ProjectionError::from)?;
+                let current = self
+                    .records
+                    .list_configs()
+                    .await?
+                    .into_iter()
+                    .find(|config| config.record.path == relative);
+                if current.as_ref().is_none_or(|config| config.bytes != bytes) {
+                    let predecessors = current.as_ref().map_or_else(BTreeSet::new, |config| {
+                        BTreeSet::from([config.revision_id.clone()])
+                    });
+                    let timestamp = current.as_ref().map_or_else(
+                        || self.next_timestamp(),
+                        |config| self.next_after(&config.record.hlc),
+                    )?;
+                    report.committed.push(
+                        self.records
+                            .put_config(relative, bytes, timestamp, predecessors)
+                            .await?
+                            .revision_id,
+                    );
+                }
+                continue;
+            }
             match read_note(self.root(), &path) {
                 Ok(note) => {
                     if let Some(revision_id) = self.commit_note(note).await? {
@@ -160,6 +190,9 @@ impl<'a> WorkspaceProjection<'a> {
         report
             .diagnostics
             .extend(report.refresh.asset_materialization.diagnostics.clone());
+        report
+            .diagnostics
+            .extend(report.refresh.config_materialization.diagnostics.clone());
         Ok(report)
     }
 
@@ -223,6 +256,17 @@ impl<'a> WorkspaceProjection<'a> {
             .lock()
             .map_err(|_| WorkspaceProjectionError::Poisoned)
     }
+}
+
+fn is_config_path(path: &str) -> bool {
+    path == "exo.scm"
+        || (path.starts_with("modules/")
+            && Path::new(path)
+                .extension()
+                .is_some_and(|value| value == "scm")
+            && !path
+                .split('/')
+                .any(|part| part.is_empty() || part == "." || part == ".."))
 }
 
 fn wall_clock_ms() -> Result<u64, WorkspaceProjectionError> {
@@ -407,6 +451,44 @@ mod tests {
                 .body,
             "new note\n"
         );
+        node.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn synchronized_config_is_verified_and_materialized() -> anyhow::Result<()> {
+        let _guard = crate::iroh_node::IROH_TEST_LOCK.lock().await;
+        let directory = tempfile::tempdir()?;
+        let node = IrohNode::persistent(directory.path().join("iroh")).await?;
+        let workspace = node.create_workspace().await?;
+        let records = WorkspaceRecords::new(&workspace);
+        let source = b"(workspace-config \"{}\")\n".to_vec();
+        records
+            .put_config(
+                "exo.scm",
+                source.clone(),
+                Hlc {
+                    physical_ms: 4_000_000_000_000,
+                    logical: 0,
+                    actor_id: records.actor_id(),
+                },
+                BTreeSet::new(),
+            )
+            .await?;
+        let index = LocalIndex::open(directory.path().join("index.sqlite"))?;
+        let projection =
+            WorkspaceProjection::open(&workspace, &index, directory.path().join("projection"))?;
+        let report = projection.refresh().await?;
+        assert_eq!(report.config_materialization.materialized.len(), 1);
+        let path = projection.root().join("exo.scm");
+        assert_eq!(std::fs::read(&path)?, source);
+        let edited = b"(workspace-config \"{\\\"query_limit\\\":10}\")\n".to_vec();
+        std::fs::write(&path, &edited)?;
+        let applied = projection
+            .apply_events(&[ProjectionEvent::Upsert(path)])
+            .await?;
+        assert_eq!(applied.committed.len(), 1);
+        assert_eq!(records.list_configs().await?[0].bytes, edited);
         node.shutdown().await?;
         Ok(())
     }

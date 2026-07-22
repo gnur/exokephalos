@@ -1,12 +1,14 @@
 //! Shared domain, storage, and synchronization contracts for exokephalos.
 
 pub mod backup;
+pub mod behavior;
 pub mod domain;
 pub mod encryption;
 pub mod hlc;
 pub mod id;
 #[cfg(feature = "iroh-sync")]
 pub mod iroh_node;
+pub mod legacy_config;
 pub mod local_index;
 pub mod markdown;
 pub mod projection;
@@ -15,6 +17,8 @@ pub mod records;
 pub mod resolution;
 #[cfg(feature = "iroh-sync")]
 pub mod rotation;
+#[cfg(feature = "steel")]
+pub mod steel_runtime;
 pub mod sync_state;
 pub mod watcher;
 pub mod wikilink;

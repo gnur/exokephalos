@@ -71,6 +71,8 @@ pub enum DomainError {
     InvalidNoteId(String),
     #[error("invalid materialized path: {0}")]
     InvalidPath(String),
+    #[error("asset path must be below assets/: {0}")]
+    InvalidAssetPath(String),
     #[error("frontmatter contains a non-finite number")]
     NonFiniteNumber,
     #[error("revision author does not match HLC actor")]
@@ -124,6 +126,13 @@ impl NoteRevision {
             return Err(DomainError::AuthorMismatch);
         }
         validate_relative_path(&self.materialized_path)?;
+        if Path::new(&self.materialized_path)
+            .components()
+            .next()
+            .is_some_and(|component| component.as_os_str() == "assets")
+        {
+            return Err(DomainError::InvalidPath(self.materialized_path.clone()));
+        }
         self.frontmatter
             .values()
             .try_for_each(FrontmatterValue::validate)
@@ -234,6 +243,17 @@ pub struct AssetRecord {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ConfigRevision {
+    pub schema: SchemaVersion,
+    pub path: String,
+    pub blob_hash: String,
+    pub size: u64,
+    pub hlc: Hlc,
+    pub author_id: ActorId,
+    pub predecessors: BTreeSet<RevisionId>,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Tombstone {
     pub schema: SchemaVersion,
     pub target_id: String,
@@ -242,7 +262,7 @@ pub struct Tombstone {
     pub hlc: Hlc,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct DeviceRecord {
     pub schema: SchemaVersion,
     pub endpoint_id: String,
@@ -276,7 +296,45 @@ impl AssetRecord {
         if self.mime.is_empty() {
             return Err(DomainError::EmptyField { field: "mime" });
         }
-        validate_relative_path(&self.materialized_path)
+        validate_relative_path(&self.materialized_path)?;
+        if Path::new(&self.materialized_path)
+            .components()
+            .next()
+            .is_none_or(|component| component.as_os_str() != "assets")
+        {
+            return Err(DomainError::InvalidAssetPath(
+                self.materialized_path.clone(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl ConfigRevision {
+    pub fn validate(&self) -> Result<(), DomainError> {
+        validate_schema(self.schema)?;
+        validate_relative_path(&self.path)?;
+        if self.blob_hash.is_empty() {
+            return Err(DomainError::EmptyField { field: "blob_hash" });
+        }
+        if self.author_id != self.hlc.actor_id {
+            return Err(DomainError::AuthorMismatch);
+        }
+        Ok(())
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, DomainError> {
+        self.validate()?;
+        let mut bytes = Vec::new();
+        ciborium::into_writer(self, &mut bytes)
+            .map_err(|error| DomainError::Serialization(error.to_string()))?;
+        Ok(bytes)
+    }
+
+    pub fn id(&self) -> Result<RevisionId, DomainError> {
+        Ok(RevisionId::new(
+            blake3::hash(&self.canonical_bytes()?).to_hex().to_string(),
+        ))
     }
 }
 

@@ -21,6 +21,9 @@ use iroh_gossip::net::Gossip;
 
 const ENDPOINT_KEY_FILE: &str = "endpoint.key";
 
+#[cfg(test)]
+pub(crate) static IROH_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// A persistent endpoint hosting Docs, Blobs, and Gossip on one router.
 #[derive(Debug)]
 pub struct IrohNode {
@@ -104,6 +107,11 @@ impl IrohNode {
         Ok(self.docs.open(id).await?.map(|doc| self.workspace(doc)))
     }
 
+    pub async fn open_workspace_str(&self, id: &str) -> Result<Option<IrohWorkspace>> {
+        let id = NamespaceId::from_str(id).context("parse workspace ID")?;
+        self.open_workspace(id).await
+    }
+
     pub async fn import_workspace(&self, ticket: &str) -> Result<IrohWorkspace> {
         let ticket = DocTicket::from_str(ticket).context("parse workspace ticket")?;
         let doc = self
@@ -166,6 +174,30 @@ impl IrohWorkspace {
             .await
             .context("write workspace entry")?;
         Ok(hash.to_string())
+    }
+
+    /// Store bytes as a durable blob and publish a Docs hash reference under `key`.
+    pub async fn put_blob(
+        &self,
+        key: impl Into<Vec<u8>>,
+        value: impl Into<Vec<u8>>,
+    ) -> Result<String> {
+        let key = key.into();
+        let value = value.into();
+        let size = u64::try_from(value.len()).context("blob size exceeds u64")?;
+        let tag = format!("exo/{}/{}", self.id(), blake3::hash(&key).to_hex());
+        let hash_and_format = self
+            .blobs
+            .blobs()
+            .add_bytes(value)
+            .with_named_tag(tag)
+            .await
+            .context("store workspace blob")?;
+        self.doc
+            .set_hash(self.author, key, hash_and_format.hash, size)
+            .await
+            .context("publish workspace blob reference")?;
+        Ok(hash_and_format.hash.to_string())
     }
 
     pub async fn get(&self, key: impl AsRef<[u8]>) -> Result<Option<Vec<u8>>> {
@@ -264,6 +296,7 @@ mod tests {
 
     #[tokio::test]
     async fn two_peers_sync_and_second_peer_survives_restart() -> Result<()> {
+        let _guard = IROH_TEST_LOCK.lock().await;
         let first_dir = tempfile::tempdir()?;
         let second_dir = tempfile::tempdir()?;
 
@@ -311,6 +344,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_only_ticket_cannot_write() -> Result<()> {
+        let _guard = IROH_TEST_LOCK.lock().await;
         let owner_dir = tempfile::tempdir()?;
         let reader_dir = tempfile::tempdir()?;
         let owner = IrohNode::persistent(owner_dir.path()).await?;

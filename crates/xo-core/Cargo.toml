@@ -29,6 +29,7 @@ iroh = { workspace = true, optional = true }
 iroh-blobs = { workspace = true, optional = true }
 iroh-docs = { workspace = true, optional = true }
 iroh-gossip = { workspace = true, optional = true }
+notify.workspace = true
 rand.workspace = true
 regex.workspace = true
 rusqlite.workspace = true

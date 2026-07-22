@@ -252,4 +252,155 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn concurrent_delete_and_edit_retain_both_outcomes() {
+        let base = revision("a", 0, BTreeSet::new());
+        let base_id = base.id().unwrap();
+        let deletion = base
+            .delete(
+                Hlc {
+                    physical_ms: 200,
+                    logical: 0,
+                    actor_id: ActorId::new("a"),
+                },
+                ActorId::new("a"),
+            )
+            .unwrap();
+        let edit = base
+            .revise(
+                base.frontmatter.clone(),
+                "edited",
+                base.materialized_path.clone(),
+                Hlc {
+                    physical_ms: 200,
+                    logical: 0,
+                    actor_id: ActorId::new("b"),
+                },
+                ActorId::new("b"),
+                false,
+            )
+            .unwrap();
+        let deletion_id = deletion.id().unwrap();
+        let edit_id = edit.id().unwrap();
+        let revisions = BTreeMap::from([
+            (base_id, base),
+            (deletion_id.clone(), deletion),
+            (edit_id.clone(), edit),
+        ]);
+        let heads = [
+            Head {
+                note_id: NoteId::new("note002"),
+                author_id: ActorId::new("a"),
+                revision_id: deletion_id.clone(),
+            },
+            Head {
+                note_id: NoteId::new("note002"),
+                author_id: ActorId::new("b"),
+                revision_id: edit_id.clone(),
+            },
+        ];
+        let resolved = resolve_heads(&revisions, &heads).unwrap();
+        assert_eq!(resolved.winning_revision, edit_id);
+        assert_eq!(
+            resolved.conflict.unwrap().concurrent_revisions,
+            BTreeSet::from([deletion_id])
+        );
+    }
+
+    #[test]
+    fn concurrent_rename_and_edit_are_reported_and_restore_is_history() {
+        let base = revision("a", 0, BTreeSet::new());
+        let base_id = base.id().unwrap();
+        let rename = base
+            .rename(
+                "archive/renamed.md",
+                Hlc {
+                    physical_ms: 200,
+                    logical: 0,
+                    actor_id: ActorId::new("a"),
+                },
+                ActorId::new("a"),
+            )
+            .unwrap();
+        let edit = base
+            .revise(
+                base.frontmatter.clone(),
+                "edited",
+                base.materialized_path.clone(),
+                Hlc {
+                    physical_ms: 200,
+                    logical: 0,
+                    actor_id: ActorId::new("b"),
+                },
+                ActorId::new("b"),
+                false,
+            )
+            .unwrap();
+        let rename_id = rename.id().unwrap();
+        let edit_id = edit.id().unwrap();
+        let revisions = BTreeMap::from([
+            (base_id, base.clone()),
+            (rename_id.clone(), rename),
+            (edit_id.clone(), edit),
+        ]);
+        let heads = [
+            Head {
+                note_id: base.note_id.clone(),
+                author_id: ActorId::new("a"),
+                revision_id: rename_id,
+            },
+            Head {
+                note_id: base.note_id.clone(),
+                author_id: ActorId::new("b"),
+                revision_id: edit_id,
+            },
+        ];
+        assert!(
+            resolve_heads(&revisions, &heads)
+                .unwrap()
+                .conflict
+                .is_some()
+        );
+
+        let deletion = base
+            .delete(
+                Hlc {
+                    physical_ms: 300,
+                    logical: 0,
+                    actor_id: ActorId::new("a"),
+                },
+                ActorId::new("a"),
+            )
+            .unwrap();
+        let deletion_id = deletion.id().unwrap();
+        let restored = deletion
+            .restore(
+                Hlc {
+                    physical_ms: 301,
+                    logical: 0,
+                    actor_id: ActorId::new("a"),
+                },
+                ActorId::new("a"),
+            )
+            .unwrap();
+        let restored_id = restored.id().unwrap();
+        let chain = BTreeMap::from([
+            (base.id().unwrap(), base.clone()),
+            (deletion_id, deletion),
+            (restored_id.clone(), restored),
+        ]);
+        validate_revision_graph(&chain).unwrap();
+        let resolved = resolve_heads(
+            &chain,
+            &[Head {
+                note_id: base.note_id,
+                author_id: ActorId::new("a"),
+                revision_id: restored_id,
+            }],
+        )
+        .unwrap();
+        assert!(resolved.visible.is_some());
+        assert!(resolved.conflict.is_none());
+    }
 }

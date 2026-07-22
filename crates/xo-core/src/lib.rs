@@ -1,5 +1,6 @@
 //! Shared domain, storage, and synchronization contracts for exokephalos.
 
+pub mod backup;
 pub mod domain;
 pub mod encryption;
 pub mod hlc;
@@ -12,11 +13,15 @@ pub mod projection;
 #[cfg(feature = "iroh-sync")]
 pub mod records;
 pub mod resolution;
+pub mod sync_state;
+pub mod watcher;
 pub mod wikilink;
+#[cfg(feature = "iroh-sync")]
+pub mod workspace_projection;
 
 pub use domain::{
-    ActorId, AssetId, AssetRecord, Conflict, DeviceRecord, DomainError, Head, Note, NoteId,
-    NoteRevision, RevisionId, SchemaVersion, Tombstone, WorkspaceDescriptor, WorkspaceId,
+    ActorId, AssetId, AssetRecord, ConfigRevision, Conflict, DeviceRecord, DomainError, Head, Note,
+    NoteId, NoteRevision, RevisionId, SchemaVersion, Tombstone, WorkspaceDescriptor, WorkspaceId,
 };
 pub use hlc::{Hlc, HlcClock};
 pub use resolution::{ResolvedNote, RevisionGraphError, resolve_heads, validate_revision_graph};

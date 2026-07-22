@@ -5,8 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use xo_core::iroh_node::IrohNode;
+use xo_core::projection::{ProjectedAsset, ProjectionState};
 use xo_core::records::WorkspaceRecords;
-use xo_core::{ActorId, CURRENT_SCHEMA, HlcClock, NoteRevision};
+use xo_core::{ActorId, AssetId, CURRENT_SCHEMA, HlcClock, Note, NoteRevision};
 
 #[derive(Debug, Parser)]
 #[command(name = "xo-admin", version, about = "Workspace administration")]
@@ -25,6 +26,46 @@ enum Command {
         source: PathBuf,
         /// New persistent Iroh state directory, which must be outside the source.
         state_dir: PathBuf,
+    },
+    /// Create and verify an offline backup of a stopped peer state directory.
+    Backup {
+        state_dir: PathBuf,
+        destination: PathBuf,
+    },
+    /// Verify every file in a backup against its manifest.
+    VerifyBackup { backup: PathBuf },
+    /// Restore a verified backup into a new or empty state directory.
+    Restore { backup: PathBuf, state_dir: PathBuf },
+    /// Create a workspace invitation from an offline peer state directory.
+    Invite {
+        state_dir: PathBuf,
+        workspace: String,
+        #[arg(long)]
+        read_only: bool,
+    },
+    /// List replicated workspace devices.
+    DeviceList {
+        state_dir: PathBuf,
+        workspace: String,
+    },
+    /// Retire a device in replicated workspace metadata.
+    RetireDevice {
+        state_dir: PathBuf,
+        workspace: String,
+        endpoint: String,
+    },
+    /// Print record and projection diagnostics for a workspace.
+    Diagnostics {
+        state_dir: PathBuf,
+        workspace: String,
+    },
+    /// Update replicated relay mode and bootstrap peers.
+    SetRelay {
+        state_dir: PathBuf,
+        workspace: String,
+        mode: String,
+        #[arg(long = "bootstrap-peer")]
+        bootstrap_peers: Vec<String>,
     },
 }
 
@@ -45,8 +86,147 @@ async fn main() -> Result<()> {
             println!("workspace_id={}", imported.workspace_id);
             println!("ticket={}", imported.ticket);
             println!("imported={}", imported.imported);
+            println!("assets={}", imported.assets);
+        }
+        Command::Backup {
+            state_dir,
+            destination,
+        } => {
+            let manifest = xo_core::backup::create_backup(state_dir, destination)?;
+            println!("files={}", manifest.entries.len());
+        }
+        Command::VerifyBackup { backup } => {
+            let manifest = xo_core::backup::verify_backup(backup)?;
+            println!("valid=true files={}", manifest.entries.len());
+        }
+        Command::Restore { backup, state_dir } => {
+            let manifest = xo_core::backup::restore_backup(backup, state_dir)?;
+            println!("restored={}", manifest.entries.len());
+        }
+        Command::Invite {
+            state_dir,
+            workspace,
+            read_only,
+        } => {
+            let node = IrohNode::persistent(state_dir).await?;
+            let workspace = node
+                .open_workspace_str(&workspace)
+                .await?
+                .context("workspace is not present in this peer")?;
+            println!("ticket={}", workspace.share(!read_only).await?);
+            node.shutdown().await?;
+        }
+        Command::DeviceList {
+            state_dir,
+            workspace,
+        } => {
+            let node = IrohNode::persistent(state_dir).await?;
+            let workspace = node
+                .open_workspace_str(&workspace)
+                .await?
+                .context("workspace is not present in this peer")?;
+            for device in WorkspaceRecords::new(&workspace).list_devices().await? {
+                println!("{}", serde_json::to_string(&device)?);
+            }
+            node.shutdown().await?;
+        }
+        Command::RetireDevice {
+            state_dir,
+            workspace,
+            endpoint,
+        } => {
+            retire_device(&state_dir, &workspace, &endpoint).await?;
+        }
+        Command::Diagnostics {
+            state_dir,
+            workspace,
+        } => {
+            print_diagnostics(&state_dir, &workspace).await?;
+        }
+        Command::SetRelay {
+            state_dir,
+            workspace,
+            mode,
+            bootstrap_peers,
+        } => {
+            set_relay(&state_dir, &workspace, mode, bootstrap_peers).await?;
         }
     }
+    Ok(())
+}
+
+async fn print_diagnostics(state_dir: &Path, workspace_id: &str) -> Result<()> {
+    let node = IrohNode::persistent(state_dir).await?;
+    let workspace = node
+        .open_workspace_str(workspace_id)
+        .await?
+        .context("workspace is not present in this peer")?;
+    let snapshot = WorkspaceRecords::new(&workspace).snapshot().await?;
+    println!(
+        "notes={} assets={} configs={} devices={} diagnostics={}",
+        snapshot.notes.len(),
+        snapshot.assets.len(),
+        snapshot.configs.len(),
+        snapshot.devices.len(),
+        snapshot.diagnostics.len()
+    );
+    for diagnostic in snapshot.diagnostics {
+        eprintln!(
+            "{} [{}]: {}",
+            diagnostic.path, diagnostic.code, diagnostic.message
+        );
+    }
+    node.shutdown().await?;
+    Ok(())
+}
+
+async fn set_relay(
+    state_dir: &Path,
+    workspace_id: &str,
+    mode: String,
+    bootstrap_peers: Vec<String>,
+) -> Result<()> {
+    let node = IrohNode::persistent(state_dir).await?;
+    let workspace = node
+        .open_workspace_str(workspace_id)
+        .await?
+        .context("workspace is not present in this peer")?;
+    let records = WorkspaceRecords::new(&workspace);
+    let mut descriptor = records
+        .descriptor()
+        .await?
+        .context("workspace has no replicated descriptor")?;
+    descriptor.relay_mode = mode;
+    descriptor.bootstrap_peers = bootstrap_peers;
+    records.put_descriptor(&descriptor).await?;
+    println!("relay_mode={}", descriptor.relay_mode);
+    node.shutdown().await?;
+    Ok(())
+}
+
+async fn retire_device(state_dir: &Path, workspace_id: &str, endpoint: &str) -> Result<()> {
+    let node = IrohNode::persistent(state_dir).await?;
+    let workspace = node
+        .open_workspace_str(workspace_id)
+        .await?
+        .context("workspace is not present in this peer")?;
+    let records = WorkspaceRecords::new(&workspace);
+    let mut device = records
+        .list_devices()
+        .await?
+        .into_iter()
+        .find(|device| device.endpoint_id == endpoint)
+        .context("device is not present in this workspace")?;
+    let wall_clock_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before Unix epoch")?
+        .as_millis()
+        .try_into()
+        .context("system time does not fit in an HLC timestamp")?;
+    device.retired_at = Some(HlcClock::new(records.actor_id()).next(wall_clock_ms));
+    records.put_device(&device).await?;
+    println!("retired={endpoint}");
+    node.shutdown().await?;
     Ok(())
 }
 
@@ -55,6 +235,7 @@ struct ImportResult {
     workspace_id: String,
     ticket: String,
     imported: usize,
+    assets: usize,
 }
 
 async fn import_workspace(source: &Path, state_dir: &Path) -> Result<ImportResult> {
@@ -90,6 +271,7 @@ async fn import_workspace(source: &Path, state_dir: &Path) -> Result<ImportResul
             report.diagnostics.len()
         );
     }
+    let source_assets = scan_assets(&source)?;
 
     let node = IrohNode::persistent(&state_dir).await?;
     let workspace = node.create_workspace().await?;
@@ -117,13 +299,148 @@ async fn import_workspace(source: &Path, state_dir: &Path) -> Result<ImportResul
             })
             .await?;
     }
+    let mut imported_assets = Vec::new();
+    for asset in source_assets {
+        let record = records
+            .put_asset(asset.id, asset.mime, asset.path, asset.bytes)
+            .await?;
+        imported_assets.push(
+            records
+                .get_asset(&record.id)
+                .await?
+                .context("imported asset record disappeared")?,
+        );
+    }
+    verify_roundtrip(&records, &report.notes, &imported_assets).await?;
     let result = ImportResult {
         workspace_id: workspace.id().to_string(),
         ticket: workspace.share(true).await?,
         imported: report.notes.len(),
+        assets: imported_assets.len(),
     };
     node.shutdown().await?;
     Ok(result)
+}
+
+#[derive(Debug)]
+struct SourceAsset {
+    id: AssetId,
+    path: String,
+    mime: String,
+    bytes: Vec<u8>,
+}
+
+fn scan_assets(source: &Path) -> Result<Vec<SourceAsset>> {
+    let assets_root = source.join("assets");
+    if !assets_root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut paths = Vec::new();
+    collect_assets(source, &assets_root, &mut paths)?;
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| {
+            let relative = path
+                .strip_prefix(source)
+                .context("asset is outside source workspace")?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let bytes = std::fs::read(&path)?;
+            let mut identity = relative.as_bytes().to_vec();
+            identity.push(0);
+            identity.extend_from_slice(&bytes);
+            Ok(SourceAsset {
+                id: AssetId::new(blake3::hash(&identity).to_hex().to_string()),
+                mime: asset_mime(&path).to_owned(),
+                path: relative,
+                bytes,
+            })
+        })
+        .collect()
+}
+
+fn collect_assets(source: &Path, directory: &Path, paths: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            bail!("asset symlinks are not imported: {}", path.display());
+        }
+        if file_type.is_dir() {
+            let relative = path.strip_prefix(source).unwrap_or(&path);
+            if relative.components().any(|component| {
+                component
+                    .as_os_str()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with('.'))
+            }) {
+                continue;
+            }
+            collect_assets(source, &path, paths)?;
+        } else if file_type.is_file() {
+            paths.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn asset_mime(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("svg") => "image/svg+xml",
+        Some("pdf") => "application/pdf",
+        Some("txt" | "md") => "text/plain",
+        Some("json") => "application/json",
+        _ => "application/octet-stream",
+    }
+}
+
+async fn verify_roundtrip(
+    records: &WorkspaceRecords<'_>,
+    expected_notes: &[Note],
+    expected_assets: &[ProjectedAsset],
+) -> Result<()> {
+    let snapshot = records.snapshot().await?;
+    if !snapshot.diagnostics.is_empty() {
+        bail!(
+            "authoritative import verification produced {} diagnostic(s)",
+            snapshot.diagnostics.len()
+        );
+    }
+    let clean = tempfile::tempdir()?;
+    let projection = ProjectionState::open(clean.path())?;
+    let note_report = projection.reconcile(&snapshot.notes)?;
+    let asset_report = projection.reconcile_assets(&snapshot.assets)?;
+    if !note_report.diagnostics.is_empty() || !asset_report.diagnostics.is_empty() {
+        bail!("clean projection verification produced diagnostics");
+    }
+    let projected = xo_core::projection::scan(projection.root())?;
+    if projected.notes != expected_notes || !projected.diagnostics.is_empty() {
+        bail!("clean Markdown projection differs from the imported source");
+    }
+    if snapshot.assets != expected_assets {
+        bail!("authoritative assets differ from the imported source");
+    }
+    for asset in expected_assets {
+        let bytes = std::fs::read(projection.root().join(&asset.record.materialized_path))?;
+        if bytes != asset.bytes {
+            bail!(
+                "projected asset differs: {}",
+                asset.record.materialized_path
+            );
+        }
+    }
+    Ok(())
 }
 
 fn normalized_absolute(path: &Path) -> Result<PathBuf> {
@@ -221,10 +538,16 @@ mod tests {
         };
         xo_core::projection::materialize(&source, &note)?;
         let before = std::fs::read(source.join(&note.path))?;
+        let asset_path = source.join("assets/images/cover.png");
+        std::fs::create_dir_all(asset_path.parent().context("asset parent")?)?;
+        std::fs::write(&asset_path, b"legacy asset")?;
+        let asset_before = std::fs::read(&asset_path)?;
 
         let imported = import_workspace(&source, &directory.path().join("native-state")).await?;
         assert_eq!(imported.imported, 1);
+        assert_eq!(imported.assets, 1);
         assert_eq!(std::fs::read(source.join(&note.path))?, before);
+        assert_eq!(std::fs::read(asset_path)?, asset_before);
         assert!(!source.join(".exo").exists());
         Ok(())
     }

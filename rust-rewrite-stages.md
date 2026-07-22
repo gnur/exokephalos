@@ -7,8 +7,9 @@ A stage is complete only when every task and its exit gate are checked.
 
 - Stage 0 is in progress: native persistence, capabilities, and compatibility fixtures pass; relay-only validation remains.
 - Stage 1 is in progress: validation and immutable revision operations exist; shared service APIs, helpers, and Go-generated crypto fixtures remain.
-- Stage 2 is in progress: authoritative index rebuilds, durable write suppression, and read-only legacy import now exist; projection watching and local mutation conversion remain.
-- Stage 3 is in progress: typed revision/head records now sit on the replicated Iroh foundation; the remaining record kinds and convergence workflows remain.
+- Stage 2 is in progress: all implementation tasks now pass, including verified asset projection and a 278-note clean round trip; the exit gate remains open until synchronized legacy configuration also round-trips.
+- Stage 3 is in progress: the partition/restart exit gate and conflict matrix pass; interrupted Blob transfer remains.
+- Stage 4 is in progress: verified backup/restore and core operator and relay commands exist; authenticated operations, retirement enforcement, and namespace rotation remain.
 - Stages 4–10 retain only the previously listed foundations and placeholders.
 
 ## Stage 0 — Architecture and compatibility proof
@@ -57,14 +58,14 @@ A stage is complete only when every task and its exit gate are checked.
 
 - [x] Add a disposable SQLite index for IDs, paths, titles, types, tags, hashes, and diagnostics.
 - [x] Rebuild the complete index from authoritative Docs and Blob state.
-- [ ] Materialize winning note heads into recursive Markdown paths.
-- [ ] Materialize assets below the workspace `assets/` directory.
+- [x] Materialize winning note heads into recursive Markdown paths.
+- [x] Materialize assets below the workspace `assets/` directory.
 - [x] Perform atomic same-directory projection writes.
 - [x] Retain expected-write hashes for crash recovery and watcher suppression.
-- [ ] Add a recursive debounced filesystem watcher.
+- [x] Add a recursive debounced filesystem watcher.
 - [x] Ignore `.exo/` and other hidden local-only directories while scanning.
-- [ ] Suppress watcher events caused by remote materialization.
-- [ ] Convert local creates, edits, deletes, and renames into immutable revisions.
+- [x] Suppress watcher events caused by remote materialization.
+- [x] Convert local creates, edits, deletes, and renames into immutable revisions.
 - [x] Diagnose duplicate IDs and malformed Markdown without silently rewriting them.
 - [x] Implement `xo-admin import-workspace` without modifying its source workspace.
 - [x] Implement a read-only `xo-admin audit-workspace` command.
@@ -80,29 +81,32 @@ A stage is complete only when every task and its exit gate are checked.
 - [x] Create and import read-write workspace tickets.
 - [x] Replicate generic Docs values and associated Blob content between two peers.
 - [x] Add exokephalos-specific immutable revision and per-author head repositories.
-- [ ] Add configuration, asset, tombstone, and device record repositories.
+- [x] Add verified asset metadata and Blob repositories.
+- [x] Add configuration, tombstone, and device record repositories.
 - [x] Add read-only invitation creation and enforcement tests.
-- [ ] Add bootstrap-peer and discovery configuration.
-- [ ] Track durable operations, retries, missing blobs, connectivity, and convergence state.
-- [ ] Add offline edit and reconnect synchronization.
-- [ ] Add three-peer partition and convergence tests.
-- [ ] Test concurrent edit, delete/edit, rename/edit, restore, and interrupted Blob transfer scenarios.
-- [ ] Expose stable command and event APIs for native frontends.
+- [x] Add bootstrap-peer and discovery configuration.
+- [x] Track durable operations, retries, missing blobs, connectivity, and convergence state.
+- [x] Add offline edit and reconnect synchronization.
+- [x] Add three-peer partition and convergence tests.
+- [x] Test concurrent edit, delete/edit, rename/edit, and restore scenarios.
+- [ ] Test interrupted Blob transfer and resume.
+- [x] Expose stable command and event APIs for native frontends.
 
 **Exit gate**
 
-- [ ] Three independently persisted peers converge after partitions and restarts while retaining losing concurrent revisions.
+- [x] Three independently persisted peers converge after partitions and restarts while retaining losing concurrent revisions.
 
 ## Stage 4 — Central peer, backup, and device security
 
 - [x] Start `xo-syncd` as a persistent Iroh Docs/Blobs/Gossip protocol host.
 - [ ] Add structured logs, health checks, metrics, and authenticated operator endpoints.
-- [ ] Add invitation, device-list, retirement, diagnostics, and relay commands to `xo-admin`.
+- [x] Add invitation, device-list, retirement, and diagnostics commands to `xo-admin`.
+- [x] Add relay administration commands to `xo-admin`.
 - [ ] Enforce signed normal-retirement cutoffs while reading author records.
 - [ ] Implement hard revocation through namespace rotation and reinvitation.
-- [ ] Implement verified backup creation.
-- [ ] Implement restore into a clean state directory.
-- [ ] Verify restored peers can serve every referenced Blob and rejoin active peers.
+- [x] Implement verified backup creation.
+- [x] Implement restore into a clean state directory.
+- [x] Verify restored peers can serve every referenced Blob and rejoin active peers.
 
 **Exit gate**
 

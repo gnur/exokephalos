@@ -163,7 +163,7 @@ A stage is complete only when every task and its exit gate are checked.
 
 ### Stage 6 controls and test coverage
 
-- `xo tui --state-dir PATH --workspace ID --projection PATH` opens a local workspace; `--ticket TICKET` imports and connects an invitation.
+- `xo` opens directly in TUI mode. It reads `~/.config/xo/config.scm`; `xo config-init` prints the default document, while a fresh state directory creates a local workspace automatically. `--state-dir`, `--workspace`, and `--projection` override persistent defaults; the non-persistent `--ticket` option is used only to join an Iroh invitation.
 - `Tab`/`Shift-Tab` move panes; configured view keys and `0` select views; `]` cycles subviews; `/`, `t`, and `s` control title search, conjunctive tag filtering, and sorting.
 - `c`, `e`, `d`, and `u` create, edit, delete, and restore; `a` opens the fuzzy action picker; `p` unlocks encrypted preview; `x`, `v`, and `y` open conflicts/history, devices, and sync details; `r` refreshes and `R` retries a durable operation.
 - `offline_tui_edit_reconnects_retains_conflict_and_converges` takes the primary peer offline, commits independent primary and central edits, reconnects, proves both peers retain the conflict, and verifies the immutable history converges.

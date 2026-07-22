@@ -25,6 +25,8 @@ pub enum SteelConfigError {
     Evaluation(String),
     #[error("configuration must return descriptor JSON through workspace-config/workspace-module")]
     InvalidResult,
+    #[error("invalid native xo configuration at byte {offset}: {message}")]
+    NativeConfig { offset: usize, message: String },
     #[error("invalid behavior descriptor: {0}")]
     Descriptor(#[from] serde_json::Error),
     #[error(transparent)]
@@ -62,8 +64,27 @@ fn evaluate(
     constructor: &str,
     now: &str,
 ) -> Result<WorkspaceBehavior, SteelConfigError> {
+    Ok(serde_json::from_str(&evaluate_descriptor(
+        source,
+        constructor,
+        now,
+    )?)?)
+}
+
+/// Evaluate one exact descriptor constructor and return its JSON payload.
+///
+/// The source is admitted only when it consists of a single constructor call
+/// with one string literal, preventing ambient Steel capabilities from running.
+pub fn evaluate_descriptor(
+    source: &str,
+    constructor: &str,
+    now: &str,
+) -> Result<String, SteelConfigError> {
     if source.len() > MAX_CONFIG_BYTES {
         return Err(SteelConfigError::TooLarge);
+    }
+    if !matches!(constructor, "workspace-config" | "workspace-module") {
+        return Err(SteelConfigError::InvalidResult);
     }
     // The descriptor boundary deliberately excludes eval/module loading. This
     // also makes the exact behavior portable to clients that do not embed Steel.
@@ -88,7 +109,28 @@ fn evaluate(
     if json != expected_json {
         return Err(SteelConfigError::InvalidResult);
     }
-    Ok(serde_json::from_str(&json)?)
+    Ok(json)
+}
+
+/// Evaluate the native `~/.config/xo/config.scm` schema.
+///
+/// Only the five named field forms are admitted. The parsed values are rebuilt
+/// into a canonical program before Steel evaluates them, so arbitrary ambient
+/// expressions can never execute.
+pub fn evaluate_xo_config(source: &str) -> Result<String, SteelConfigError> {
+    if source.len() > MAX_CONFIG_BYTES {
+        return Err(SteelConfigError::TooLarge);
+    }
+    let fields = NativeXoParser::new(source).parse()?;
+    let canonical = fields.canonical();
+    let mut engine = sandbox("fixed");
+    let values = engine
+        .run(canonical)
+        .map_err(|error| SteelConfigError::Evaluation(error.to_string()))?;
+    match values.last() {
+        Some(SteelVal::StringV(value)) => Ok(value.to_string()),
+        _ => Err(SteelConfigError::InvalidResult),
+    }
 }
 
 fn sandbox(now: &str) -> Engine {
@@ -96,6 +138,22 @@ fn sandbox(now: &str) -> Engine {
     engine
         .register_fn("workspace-config", |json: String| json)
         .register_fn("workspace-module", |json: String| json)
+        .register_fn("schema", |value: isize| value.to_string())
+        .register_fn("state-dir", |value: String| value)
+        .register_fn("workspace", optional_config_value)
+        .register_fn("projection", |value: String| value)
+        .register_fn(
+            "xo-config",
+            |schema: String, state_dir: String, workspace: String, projection: String| {
+                serde_json::json!({
+                    "schema": schema.parse::<u16>().unwrap_or_default(),
+                    "state_dir": state_dir,
+                    "workspace": (!workspace.is_empty()).then_some(workspace),
+                    "projection": projection,
+                })
+                .to_string()
+            },
+        )
         .register_fn("exo-has-tag", |tags: String, tag: String| {
             tags.split(',').map(str::trim).any(|value| value == tag)
         })
@@ -108,6 +166,226 @@ fn sandbox(now: &str) -> Engine {
     let now = now.to_owned();
     engine.register_fn("exo-now", move || now.clone());
     engine
+}
+
+fn optional_config_value(value: SteelVal) -> String {
+    match value {
+        SteelVal::StringV(value) => value.to_string(),
+        _ => String::new(),
+    }
+}
+
+#[derive(Debug)]
+struct NativeXoFields {
+    schema: u16,
+    state_dir: String,
+    workspace: Option<String>,
+    projection: String,
+}
+
+impl NativeXoFields {
+    fn canonical(&self) -> String {
+        let string = |value: &str| {
+            serde_json::to_string(value).expect("native config strings are serializable")
+        };
+        let optional = |value: Option<&str>| value.map_or_else(|| "#f".to_owned(), string);
+        format!(
+            "(xo-config (schema {}) (state-dir {}) (workspace {}) (projection {}))",
+            self.schema,
+            string(&self.state_dir),
+            optional(self.workspace.as_deref()),
+            string(&self.projection),
+        )
+    }
+}
+
+struct NativeXoParser<'a> {
+    source: &'a str,
+    position: usize,
+}
+
+impl<'a> NativeXoParser<'a> {
+    const fn new(source: &'a str) -> Self {
+        Self {
+            source,
+            position: 0,
+        }
+    }
+
+    fn parse(mut self) -> Result<NativeXoFields, SteelConfigError> {
+        self.expect_char('(')?;
+        self.expect_token("xo-config")?;
+        let mut schema = None;
+        let mut state_dir = None;
+        let mut workspace = None;
+        let mut projection = None;
+        loop {
+            self.skip_ignored();
+            if self.peek() == Some(')') {
+                self.bump();
+                break;
+            }
+            self.expect_char('(')?;
+            let key = self.token()?;
+            match key.as_str() {
+                "schema" => set_once(&mut schema, self.integer()?, "schema", self.position)?,
+                "state-dir" => {
+                    set_once(&mut state_dir, self.string()?, "state-dir", self.position)?;
+                }
+                "workspace" => set_once(
+                    &mut workspace,
+                    self.optional_string()?,
+                    "workspace",
+                    self.position,
+                )?,
+                "projection" => {
+                    set_once(&mut projection, self.string()?, "projection", self.position)?;
+                }
+                _ => return self.error(format!("unknown field {key}")),
+            }
+            self.expect_char(')')?;
+        }
+        self.skip_ignored();
+        if self.position != self.source.len() {
+            return self.error("unexpected trailing form");
+        }
+        Ok(NativeXoFields {
+            schema: required(schema, "schema", self.position)?,
+            state_dir: required(state_dir, "state-dir", self.position)?,
+            workspace: required(workspace, "workspace", self.position)?,
+            projection: required(projection, "projection", self.position)?,
+        })
+    }
+
+    fn integer(&mut self) -> Result<u16, SteelConfigError> {
+        let value = self.token()?;
+        value.parse().map_err(|_| SteelConfigError::NativeConfig {
+            offset: self.position,
+            message: "schema must be an unsigned 16-bit integer".to_owned(),
+        })
+    }
+
+    fn optional_string(&mut self) -> Result<Option<String>, SteelConfigError> {
+        self.skip_ignored();
+        if self.peek() == Some('"') {
+            self.string().map(Some)
+        } else if self.token()? == "#f" {
+            Ok(None)
+        } else {
+            self.error("optional values must be a string or #f")
+        }
+    }
+
+    fn string(&mut self) -> Result<String, SteelConfigError> {
+        self.skip_ignored();
+        let start = self.position;
+        if self.bump() != Some('"') {
+            return self.error("expected string");
+        }
+        let mut escaped = false;
+        while let Some(value) = self.bump() {
+            if escaped {
+                escaped = false;
+            } else if value == '\\' {
+                escaped = true;
+            } else if value == '"' {
+                return serde_json::from_str(&self.source[start..self.position]).map_err(|_| {
+                    SteelConfigError::NativeConfig {
+                        offset: start,
+                        message: "invalid string escape".to_owned(),
+                    }
+                });
+            }
+        }
+        self.error("unterminated string")
+    }
+
+    fn token(&mut self) -> Result<String, SteelConfigError> {
+        self.skip_ignored();
+        let start = self.position;
+        while self
+            .peek()
+            .is_some_and(|value| !value.is_whitespace() && !matches!(value, '(' | ')' | ';'))
+        {
+            self.bump();
+        }
+        if start == self.position {
+            return self.error("expected identifier or value");
+        }
+        Ok(self.source[start..self.position].to_owned())
+    }
+
+    fn expect_token(&mut self, expected: &str) -> Result<(), SteelConfigError> {
+        let actual = self.token()?;
+        if actual == expected {
+            Ok(())
+        } else {
+            self.error(format!("expected {expected}, found {actual}"))
+        }
+    }
+
+    fn expect_char(&mut self, expected: char) -> Result<(), SteelConfigError> {
+        self.skip_ignored();
+        if self.bump() == Some(expected) {
+            Ok(())
+        } else {
+            self.error(format!("expected {expected}"))
+        }
+    }
+
+    fn skip_ignored(&mut self) {
+        loop {
+            while self.peek().is_some_and(char::is_whitespace) {
+                self.bump();
+            }
+            if self.peek() != Some(';') {
+                break;
+            }
+            while self.peek().is_some_and(|value| value != '\n') {
+                self.bump();
+            }
+        }
+    }
+
+    fn peek(&self) -> Option<char> {
+        self.source[self.position..].chars().next()
+    }
+
+    fn bump(&mut self) -> Option<char> {
+        let value = self.peek()?;
+        self.position += value.len_utf8();
+        Some(value)
+    }
+
+    fn error<T>(&self, message: impl Into<String>) -> Result<T, SteelConfigError> {
+        Err(SteelConfigError::NativeConfig {
+            offset: self.position,
+            message: message.into(),
+        })
+    }
+}
+
+fn set_once<T>(
+    slot: &mut Option<T>,
+    value: T,
+    field: &str,
+    offset: usize,
+) -> Result<(), SteelConfigError> {
+    if slot.replace(value).is_some() {
+        Err(SteelConfigError::NativeConfig {
+            offset,
+            message: format!("duplicate field {field}"),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn required<T>(value: Option<T>, field: &str, offset: usize) -> Result<T, SteelConfigError> {
+    value.ok_or_else(|| SteelConfigError::NativeConfig {
+        offset,
+        message: format!("missing field {field}"),
+    })
 }
 
 fn update_tags(tags: &str, tag: &str, add: bool) -> String {
@@ -219,6 +497,12 @@ mod tests {
                 "adapter exposed {probe}"
             );
         }
+        let native_attack = r#"(xo-config
+            (schema 1)
+            (state-dir (env-var "HOME"))
+            (workspace #f)
+            (projection "."))"#;
+        assert!(evaluate_xo_config(native_attack).is_err());
     }
 
     #[test]

@@ -6516,6 +6516,8 @@ dependencies = [
  "crossterm",
  "ratatui",
  "rpassword",
+ "serde",
+ "serde_json",
  "tempfile",
  "time",
  "tokio",

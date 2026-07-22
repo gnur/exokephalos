@@ -1,4 +1,5 @@
 mod app;
+mod config;
 mod session;
 
 use std::io::{self, stdout};
@@ -7,6 +8,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use app::{App, Mode, external_edit_with, render};
 use clap::{Parser, Subcommand};
+use config::{CliOverrides, XoConfig, config_path, home_dir};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -28,30 +30,35 @@ use zeroize::Zeroizing;
     about = "Offline-first personal knowledge workspace"
 )]
 struct Cli {
+    /// Override the persistent Iroh state directory from config.scm.
+    #[arg(long)]
+    state_dir: Option<PathBuf>,
+    /// Override the workspace ID from config.scm.
+    #[arg(long, conflicts_with = "ticket")]
+    workspace: Option<String>,
+    /// Import/connect a ticket instead of opening the configured workspace.
+    #[arg(long, conflicts_with = "workspace")]
+    ticket: Option<String>,
+    /// Override the local Markdown projection directory from config.scm.
+    #[arg(long)]
+    projection: Option<PathBuf>,
     #[command(subcommand)]
     command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Open an existing or newly invited replicated workspace in the TUI.
-    Tui {
-        #[arg(long)]
-        state_dir: PathBuf,
-        #[arg(long)]
-        workspace: Option<String>,
-        #[arg(long)]
-        ticket: Option<String>,
-        #[arg(long, default_value = ".")]
-        projection: PathBuf,
-    },
+    /// Print a default ~/.config/xo/config.scm document to stdout.
+    ConfigInit,
     /// Validate that a Markdown document can be read by the Rust core.
     Validate { path: PathBuf },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    match Cli::parse().command {
+    let cli = Cli::parse();
+    match cli.command {
+        Some(Command::ConfigInit) => print!("{}", XoConfig::default().document()?),
         Some(Command::Validate { path }) => {
             let content = std::fs::read_to_string(&path)?;
             let document = xo_core::markdown::parse(&content)?;
@@ -62,23 +69,25 @@ async fn main() -> Result<()> {
                 document.body.len()
             );
         }
-        Some(Command::Tui {
-            state_dir,
-            workspace,
-            ticket,
-            projection,
-        }) => {
+        None => {
+            let home = home_dir()?;
+            let ticket = cli.ticket;
+            let config = XoConfig::load(&config_path(&home), &home)?.apply(
+                CliOverrides {
+                    state_dir: cli.state_dir,
+                    workspace: cli.workspace,
+                    projection: cli.projection,
+                },
+                &home,
+            );
             run_tui(
-                &state_dir,
-                workspace.as_deref(),
+                &config.state_dir,
+                config.workspace.as_deref(),
                 ticket.as_deref(),
-                projection,
+                config.projection,
             )
             .await?;
         }
-        None => println!(
-            "Use `xo tui --state-dir PATH --workspace ID --projection PATH` (or --ticket TICKET)."
-        ),
     }
     Ok(())
 }
@@ -433,4 +442,38 @@ fn sync_summary(app: &App) -> String {
             .map(|value| value.missing_blobs.join(", "))
             .unwrap_or_default()
     )
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn no_subcommand_selects_the_tui_mode() {
+        let cli = Cli::try_parse_from(["xo"]).unwrap();
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn tui_flags_are_available_without_a_tui_subcommand() {
+        let cli = Cli::try_parse_from([
+            "xo",
+            "--state-dir",
+            "/state",
+            "--workspace",
+            "workspace-id",
+            "--projection",
+            "/notes",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.state_dir.as_deref(),
+            Some(std::path::Path::new("/state"))
+        );
+        assert_eq!(cli.workspace.as_deref(), Some("workspace-id"));
+        assert_eq!(
+            cli.projection.as_deref(),
+            Some(std::path::Path::new("/notes"))
+        );
+    }
 }

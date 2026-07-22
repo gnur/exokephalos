@@ -12,6 +12,8 @@ use xo_core::{
     ActorId, CURRENT_SCHEMA, DeviceRecord, HlcClock, Note, NoteId, NoteRevision, RevisionId,
 };
 
+const ACTIVE_WORKSPACE_FILE: &str = "active-workspace";
+
 pub struct WorkspaceSession {
     node: IrohNode,
     workspace: IrohWorkspace,
@@ -29,19 +31,17 @@ impl WorkspaceSession {
         projection: PathBuf,
     ) -> Result<Self> {
         let node = IrohNode::persistent(state_dir).await?;
-        let workspace = if let Some(ticket) = ticket {
-            node.import_workspace(ticket).await?
-        } else {
-            node.open_workspace_str(workspace_id.context("--workspace or --ticket is required")?)
-                .await?
-                .context("workspace is not present in this peer")?
-        };
+        let workspace = select_workspace(&node, state_dir, workspace_id, ticket).await?;
         if let Some(ticket) = ticket {
             workspace.start_sync(ticket).await?;
         }
         let actor = ActorId::new(workspace.author_id().to_string());
         let sync_state = SyncStateStore::open(state_dir.join("tui-sync.sqlite"))?;
-        sync_state.set_connectivity(&Connectivity::Connecting)?;
+        sync_state.set_connectivity(if ticket.is_some() {
+            &Connectivity::Connecting
+        } else {
+            &Connectivity::Offline
+        })?;
         Ok(Self {
             projection: ProjectionState::open(projection)?,
             node,
@@ -155,6 +155,56 @@ impl WorkspaceSession {
     }
 }
 
+async fn select_workspace(
+    node: &IrohNode,
+    state_dir: &Path,
+    requested: Option<&str>,
+    ticket: Option<&str>,
+) -> Result<IrohWorkspace> {
+    let workspace = if let Some(ticket) = ticket {
+        node.import_workspace(ticket).await?
+    } else if let Some(workspace_id) = requested {
+        node.open_workspace_str(workspace_id)
+            .await?
+            .context("workspace is not present in this peer")?
+    } else if let Some(workspace) = open_active_workspace(node, state_dir).await? {
+        workspace
+    } else {
+        let workspace_ids = node.workspace_ids().await?;
+        match workspace_ids.as_slice() {
+            [] => node.create_workspace().await?,
+            [workspace_id] => node
+                .open_workspace_str(workspace_id)
+                .await?
+                .context("the local workspace disappeared")?,
+            _ => anyhow::bail!(
+                "multiple local workspaces exist; choose one once with --workspace WORKSPACE_ID"
+            ),
+        }
+    };
+    std::fs::write(
+        state_dir.join(ACTIVE_WORKSPACE_FILE),
+        workspace.id().to_string(),
+    )?;
+    Ok(workspace)
+}
+
+async fn open_active_workspace(node: &IrohNode, state_dir: &Path) -> Result<Option<IrohWorkspace>> {
+    let active = match std::fs::read_to_string(state_dir.join(ACTIVE_WORKSPACE_FILE)) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let active = active.trim();
+    if active.is_empty() {
+        return Ok(None);
+    }
+    node.open_workspace_str(active)
+        .await?
+        .with_context(|| format!("active workspace {active} is not present in this peer"))
+        .map(Some)
+}
+
 fn now_ms() -> Result<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -172,6 +222,29 @@ mod tests {
     use xo_core::iroh_node::IrohNode;
     use xo_core::records::WorkspaceRecords;
     use xo_core::{Hlc, NoteId};
+
+    #[tokio::test]
+    async fn fresh_local_start_creates_and_reopens_an_active_workspace() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state = directory.path().join("state");
+        let projection = directory.path().join("notes");
+        let first = WorkspaceSession::open(&state, None, None, projection.clone()).await?;
+        let workspace_id = first.workspace_id();
+        assert_eq!(
+            first.sync_state.status()?.connectivity,
+            Connectivity::Offline
+        );
+        first.shutdown().await?;
+
+        let reopened = WorkspaceSession::open(&state, None, None, projection).await?;
+        assert_eq!(reopened.workspace_id(), workspace_id);
+        assert_eq!(
+            std::fs::read_to_string(state.join(ACTIVE_WORKSPACE_FILE))?,
+            workspace_id
+        );
+        reopened.shutdown().await?;
+        Ok(())
+    }
 
     #[tokio::test]
     #[allow(clippy::too_many_lines)]

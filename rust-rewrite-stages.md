@@ -8,8 +8,8 @@ A stage is complete only when every task and its exit gate are checked.
 - Stage 0 is in progress: native persistence, capabilities, and compatibility fixtures pass; relay-only validation remains.
 - Stage 1 is in progress: validation and immutable revision operations exist; shared service APIs, helpers, and Go-generated crypto fixtures remain.
 - Stage 2 is in progress: all implementation tasks now pass, including verified asset projection and a 278-note clean round trip; the exit gate remains open until synchronized legacy configuration also round-trips.
-- Stage 3 is in progress: the partition/restart exit gate and conflict matrix pass; interrupted Blob transfer remains.
-- Stage 4 is in progress: verified backup/restore and core operator and relay commands exist; authenticated operations, retirement enforcement, and namespace rotation remain.
+- Stage 3 is complete: native peers converge across partitions and restarts, retain conflicts, and resume verified partial Blob transfers.
+- Stage 4 is in progress: verified backup/restore, signed retirement cutoffs, structured operations, and core operator and relay commands exist; namespace rotation remains.
 - Stages 4–10 retain only the previously listed foundations and placeholders.
 
 ## Stage 0 — Architecture and compatibility proof
@@ -89,7 +89,7 @@ A stage is complete only when every task and its exit gate are checked.
 - [x] Add offline edit and reconnect synchronization.
 - [x] Add three-peer partition and convergence tests.
 - [x] Test concurrent edit, delete/edit, rename/edit, and restore scenarios.
-- [ ] Test interrupted Blob transfer and resume.
+- [x] Test interrupted Blob transfer and resume.
 - [x] Expose stable command and event APIs for native frontends.
 
 **Exit gate**
@@ -99,10 +99,10 @@ A stage is complete only when every task and its exit gate are checked.
 ## Stage 4 — Central peer, backup, and device security
 
 - [x] Start `xo-syncd` as a persistent Iroh Docs/Blobs/Gossip protocol host.
-- [ ] Add structured logs, health checks, metrics, and authenticated operator endpoints.
+- [x] Add structured logs, health checks, metrics, and authenticated operator endpoints.
 - [x] Add invitation, device-list, retirement, and diagnostics commands to `xo-admin`.
 - [x] Add relay administration commands to `xo-admin`.
-- [ ] Enforce signed normal-retirement cutoffs while reading author records.
+- [x] Enforce signed normal-retirement cutoffs while reading author records.
 - [ ] Implement hard revocation through namespace rotation and reinvitation.
 - [x] Implement verified backup creation.
 - [x] Implement restore into a clean state directory.

@@ -5793,7 +5793,16 @@ name = "xo-syncd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "clap",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "rand 0.9.5",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tempfile",
  "tokio",
  "xo-core",
 ]

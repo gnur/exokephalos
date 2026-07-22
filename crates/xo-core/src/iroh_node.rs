@@ -93,6 +93,18 @@ impl IrohNode {
         &self.state_dir
     }
 
+    pub async fn workspace_ids(&self) -> Result<Vec<String>> {
+        let workspaces = self.docs.list().await.context("list workspaces")?;
+        futures_lite::pin!(workspaces);
+        let mut ids = Vec::new();
+        while let Some(workspace) = workspaces.next().await {
+            let (id, _) = workspace.context("read workspace listing")?;
+            ids.push(id.to_string());
+        }
+        ids.sort();
+        Ok(ids)
+    }
+
     #[must_use]
     pub fn docs(&self) -> &DocsApi {
         self.docs.api()
@@ -140,6 +152,13 @@ pub struct IrohWorkspace {
     doc: Doc,
     blobs: BlobStore,
     author: AuthorId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SignedWorkspaceValue {
+    pub key: Vec<u8>,
+    pub value: Vec<u8>,
+    pub author: String,
 }
 
 impl IrohWorkspace {
@@ -201,6 +220,11 @@ impl IrohWorkspace {
     }
 
     pub async fn get(&self, key: impl AsRef<[u8]>) -> Result<Option<Vec<u8>>> {
+        Ok(self.get_signed(key).await?.map(|entry| entry.value))
+    }
+
+    /// Return a latest value together with its verified Iroh Docs signing author.
+    pub async fn get_signed(&self, key: impl AsRef<[u8]>) -> Result<Option<SignedWorkspaceValue>> {
         let query = Query::single_latest_per_key().key_exact(key).build();
         let Some(entry) = self
             .doc
@@ -216,11 +240,25 @@ impl IrohWorkspace {
             .get_bytes(entry.content_hash())
             .await
             .context("read workspace entry blob")?;
-        Ok(Some(bytes.to_vec()))
+        Ok(Some(SignedWorkspaceValue {
+            key: entry.key().to_vec(),
+            value: bytes.to_vec(),
+            author: entry.author().to_string(),
+        }))
     }
 
     /// Return the latest value for every key below `prefix`, ordered by key.
     pub async fn list(&self, prefix: impl AsRef<[u8]>) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        Ok(self
+            .list_signed(prefix)
+            .await?
+            .into_iter()
+            .map(|entry| (entry.key, entry.value))
+            .collect())
+    }
+
+    /// Return latest values together with their verified Iroh Docs signing authors.
+    pub async fn list_signed(&self, prefix: impl AsRef<[u8]>) -> Result<Vec<SignedWorkspaceValue>> {
         let query = Query::single_latest_per_key().key_prefix(prefix).build();
         let entries = self
             .doc
@@ -237,9 +275,13 @@ impl IrohWorkspace {
                 .get_bytes(entry.content_hash())
                 .await
                 .context("read workspace entry blob")?;
-            values.push((entry.key().to_vec(), bytes.to_vec()));
+            values.push(SignedWorkspaceValue {
+                key: entry.key().to_vec(),
+                value: bytes.to_vec(),
+                author: entry.author().to_string(),
+            });
         }
-        values.sort_by(|left, right| left.0.cmp(&right.0));
+        values.sort_by(|left, right| left.key.cmp(&right.key));
         Ok(values)
     }
 
@@ -291,6 +333,10 @@ fn write_secret_file(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+
+    use iroh_blobs::Hash;
+    use iroh_blobs::api::blobs::BlobStatus;
+    use iroh_blobs::protocol::{ChunkRanges, ChunkRangesExt};
 
     use super::*;
 
@@ -363,6 +409,74 @@ mod tests {
 
         reader.shutdown().await?;
         owner.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn partial_blob_survives_restart_and_resumes_during_sync() -> Result<()> {
+        let _guard = IROH_TEST_LOCK.lock().await;
+        let source_dir = tempfile::tempdir()?;
+        let receiver_dir = tempfile::tempdir()?;
+        let source = IrohNode::persistent(source_dir.path()).await?;
+        let workspace = source.create_workspace().await?;
+        let bytes = (0_u8..=250)
+            .cycle()
+            .take(4 * 1024 * 1024)
+            .collect::<Vec<_>>();
+        let hash = Hash::from_str(
+            &workspace
+                .put_blob("asset-blob/large", bytes.clone())
+                .await?,
+        )?;
+        let ticket = workspace.share(true).await?;
+
+        // Persist only verified beginning and ending ranges, equivalent to a transfer being
+        // interrupted after some chunks reached the receiver.
+        let ranges = ChunkRanges::bytes(..256 * 1024) | ChunkRanges::last_chunk();
+        let partial_bao = workspace
+            .blobs
+            .blobs()
+            .export_bao(hash, ranges.clone())
+            .bao_to_vec()
+            .await?;
+        let receiver = IrohNode::persistent(receiver_dir.path()).await?;
+        receiver
+            .blobs
+            .blobs()
+            .import_bao_bytes(hash, ranges, partial_bao)
+            .await?;
+        assert!(matches!(
+            receiver.blobs.blobs().status(hash).await?,
+            BlobStatus::Partial { .. }
+        ));
+        receiver.shutdown().await?;
+        drop(receiver);
+
+        let receiver = IrohNode::persistent(receiver_dir.path()).await?;
+        assert!(matches!(
+            receiver.blobs.blobs().status(hash).await?,
+            BlobStatus::Partial { .. }
+        ));
+        let imported = receiver.import_workspace(&ticket).await?;
+        let mut completed_bytes = None;
+        for _ in 0..200 {
+            match imported.get("asset-blob/large").await {
+                Ok(Some(value)) => {
+                    completed_bytes = Some(value);
+                    break;
+                }
+                Ok(None) | Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+            }
+        }
+        assert_eq!(completed_bytes.as_deref(), Some(bytes.as_slice()));
+        assert_eq!(
+            receiver.blobs.blobs().status(hash).await?,
+            BlobStatus::Complete {
+                size: bytes.len() as u64
+            }
+        );
+        receiver.shutdown().await?;
+        source.shutdown().await?;
         Ok(())
     }
 }

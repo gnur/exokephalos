@@ -44,6 +44,10 @@ pub enum RecordError {
     MissingRevision(RevisionId),
     #[error("record key does not match its value: {0}")]
     KeyMismatch(String),
+    #[error("record signer does not match its claimed author: {0}")]
+    SignerMismatch(String),
+    #[error("write by retired author is after its cutoff: {0}")]
+    RetiredWrite(ActorId),
     #[error("asset blob is unavailable: {0}")]
     MissingBlob(AssetId),
     #[error("asset blob does not match its record: {0}")]
@@ -91,6 +95,8 @@ impl<'a> WorkspaceRecords<'a> {
     }
 
     pub async fn put_revision(&self, revision: &NoteRevision) -> Result<RevisionId, RecordError> {
+        self.ensure_local_author(&revision.author_id, &revision.hlc)
+            .await?;
         let revision_id = revision.id()?;
         self.workspace
             .put(
@@ -103,6 +109,12 @@ impl<'a> WorkspaceRecords<'a> {
 
     pub async fn set_head(&self, head: &Head) -> Result<(), RecordError> {
         head.validate()?;
+        if head.author_id != self.actor_id() {
+            return Err(RecordError::SignerMismatch(head_key(
+                &head.note_id,
+                &head.author_id,
+            )));
+        }
         if self
             .workspace
             .get(revision_key(&head.note_id, &head.revision_id))
@@ -135,11 +147,19 @@ impl<'a> WorkspaceRecords<'a> {
     pub async fn load_note(&self, note_id: &NoteId) -> Result<Option<ResolvedNote>, RecordError> {
         let prefix = format!("{NOTE_PREFIX}{note_id}/");
         let mut group = NoteRecords::default();
-        for (key, value) in self.workspace.list(prefix).await? {
-            let key = String::from_utf8(key).map_err(|error| {
+        let cutoffs = self.retirement_cutoffs().await?;
+        for entry in self.workspace.list_signed(prefix).await? {
+            let key = String::from_utf8(entry.key).map_err(|error| {
                 RecordError::InvalidKey(String::from_utf8_lossy(error.as_bytes()).into_owned())
             })?;
-            decode_record(&key, &value, Some(note_id), &mut group)?;
+            decode_record(
+                &key,
+                &entry.value,
+                &ActorId::new(entry.author),
+                Some(note_id),
+                &cutoffs,
+                &mut group,
+            )?;
         }
         resolve_group(&group)
     }
@@ -149,17 +169,29 @@ impl<'a> WorkspaceRecords<'a> {
         note_id: &NoteId,
         revision_id: &RevisionId,
     ) -> Result<Option<NoteRevision>, RecordError> {
-        let Some(bytes) = self
+        let Some(entry) = self
             .workspace
-            .get(revision_key(note_id, revision_id))
+            .get_signed(revision_key(note_id, revision_id))
             .await?
         else {
             return Ok(None);
         };
-        let revision: NoteRevision = decode(&bytes)?;
+        let revision: NoteRevision = decode(&entry.value)?;
         revision.validate()?;
         if revision.note_id != *note_id || revision.id()? != *revision_id {
             return Err(RecordError::KeyMismatch(revision_key(note_id, revision_id)));
+        }
+        verify_signer(
+            &revision_key(note_id, revision_id),
+            &revision.author_id,
+            &ActorId::new(entry.author),
+        )?;
+        if !self
+            .retirement_cutoffs()
+            .await?
+            .allows(&revision.author_id, &revision.hlc)
+        {
+            return Ok(None);
         }
         Ok(Some(revision))
     }
@@ -236,6 +268,7 @@ impl<'a> WorkspaceRecords<'a> {
         hlc: Hlc,
         predecessors: std::collections::BTreeSet<RevisionId>,
     ) -> Result<ProjectedConfig, RecordError> {
+        self.ensure_local_author(&hlc.actor_id, &hlc).await?;
         let path = path.into();
         let size = u64::try_from(bytes.len())
             .map_err(|_| RecordError::Encoding("configuration size exceeds u64".to_owned()))?;
@@ -269,13 +302,18 @@ impl<'a> WorkspaceRecords<'a> {
 
     pub async fn list_configs(&self) -> Result<Vec<ProjectedConfig>, RecordError> {
         let mut winners = BTreeMap::<String, ProjectedConfig>::new();
-        for (key, value) in self.workspace.list(CONFIG_PREFIX).await? {
-            let key = String::from_utf8_lossy(&key).into_owned();
-            let record: ConfigRevision = decode(&value)?;
+        let cutoffs = self.retirement_cutoffs().await?;
+        for entry in self.workspace.list_signed(CONFIG_PREFIX).await? {
+            let key = String::from_utf8_lossy(&entry.key).into_owned();
+            let record: ConfigRevision = decode(&entry.value)?;
             record.validate()?;
             let revision_id = record.id()?;
             if key != config_key(&record, &revision_id) {
                 return Err(RecordError::KeyMismatch(key));
+            }
+            verify_signer(&key, &record.author_id, &ActorId::new(entry.author))?;
+            if !cutoffs.allows(&record.author_id, &record.hlc) {
+                continue;
             }
             let bytes = self
                 .workspace
@@ -305,6 +343,8 @@ impl<'a> WorkspaceRecords<'a> {
 
     pub async fn put_tombstone(&self, record: &Tombstone) -> Result<(), RecordError> {
         record.validate()?;
+        self.ensure_local_author(&record.author_id, &record.hlc)
+            .await?;
         self.workspace
             .put(tombstone_key(record), encode(record)?)
             .await?;
@@ -312,11 +352,28 @@ impl<'a> WorkspaceRecords<'a> {
     }
 
     pub async fn list_tombstones(&self) -> Result<Vec<Tombstone>, RecordError> {
-        list_typed(self.workspace, TOMBSTONE_PREFIX, Tombstone::validate).await
+        let cutoffs = self.retirement_cutoffs().await?;
+        let mut records = Vec::new();
+        for entry in self.workspace.list_signed(TOMBSTONE_PREFIX).await? {
+            let key = String::from_utf8_lossy(&entry.key).into_owned();
+            let record: Tombstone = decode(&entry.value)?;
+            record.validate()?;
+            verify_signer(&key, &record.author_id, &ActorId::new(entry.author))?;
+            if cutoffs.allows(&record.author_id, &record.hlc) {
+                records.push(record);
+            }
+        }
+        records.sort();
+        Ok(records)
     }
 
     pub async fn put_device(&self, record: &DeviceRecord) -> Result<(), RecordError> {
         record.validate()?;
+        let expected_signer = record
+            .retired_at
+            .as_ref()
+            .map_or(&record.author_id, |cutoff| &cutoff.actor_id);
+        verify_signer(&device_key(record), expected_signer, &self.actor_id())?;
         self.workspace
             .put(device_key(record), encode(record)?)
             .await?;
@@ -324,7 +381,23 @@ impl<'a> WorkspaceRecords<'a> {
     }
 
     pub async fn list_devices(&self) -> Result<Vec<DeviceRecord>, RecordError> {
-        list_typed(self.workspace, DEVICE_PREFIX, DeviceRecord::validate).await
+        let mut records = Vec::new();
+        for entry in self.workspace.list_signed(DEVICE_PREFIX).await? {
+            let key = String::from_utf8_lossy(&entry.key).into_owned();
+            let record: DeviceRecord = decode(&entry.value)?;
+            record.validate()?;
+            if key != device_key(&record) {
+                return Err(RecordError::KeyMismatch(key));
+            }
+            let expected_signer = record
+                .retired_at
+                .as_ref()
+                .map_or(&record.author_id, |cutoff| &cutoff.actor_id);
+            verify_signer(&key, expected_signer, &ActorId::new(entry.author))?;
+            records.push(record);
+        }
+        records.sort();
+        Ok(records)
     }
 
     pub async fn put_descriptor(
@@ -347,13 +420,30 @@ impl<'a> WorkspaceRecords<'a> {
         Ok(Some(descriptor))
     }
 
+    async fn retirement_cutoffs(&self) -> Result<RetirementCutoffs, RecordError> {
+        Ok(RetirementCutoffs::from_devices(&self.list_devices().await?))
+    }
+
+    async fn ensure_local_author(&self, author: &ActorId, hlc: &Hlc) -> Result<(), RecordError> {
+        verify_signer("local write", author, &self.actor_id())?;
+        if self.retirement_cutoffs().await?.allows(author, hlc) {
+            Ok(())
+        } else {
+            Err(RecordError::RetiredWrite(author.clone()))
+        }
+    }
+
     /// Resolve every note from Docs/Blobs while retaining invalid-record diagnostics.
     pub async fn snapshot(&self) -> Result<WorkspaceSnapshot, RecordError> {
         let mut groups = BTreeMap::<NoteId, NoteRecords>::new();
-        let mut snapshot = WorkspaceSnapshot::default();
+        let mut snapshot = WorkspaceSnapshot {
+            devices: self.list_devices().await?,
+            ..WorkspaceSnapshot::default()
+        };
+        let cutoffs = RetirementCutoffs::from_devices(&snapshot.devices);
 
-        for (raw_key, value) in self.workspace.list(NOTE_PREFIX).await? {
-            let key = String::from_utf8_lossy(&raw_key).into_owned();
+        for entry in self.workspace.list_signed(NOTE_PREFIX).await? {
+            let key = String::from_utf8_lossy(&entry.key).into_owned();
             let Some(note_id) = note_id_from_key(&key) else {
                 snapshot.diagnostics.push(record_diagnostic(
                     &key,
@@ -362,7 +452,14 @@ impl<'a> WorkspaceRecords<'a> {
                 continue;
             };
             let group = groups.entry(note_id.clone()).or_default();
-            if let Err(error) = decode_record(&key, &value, Some(&note_id), group) {
+            if let Err(error) = decode_record(
+                &key,
+                &entry.value,
+                &ActorId::new(entry.author),
+                Some(&note_id),
+                &cutoffs,
+                group,
+            ) {
                 snapshot
                     .diagnostics
                     .push(record_diagnostic(&key, &error.to_string()));
@@ -400,7 +497,6 @@ impl<'a> WorkspaceRecords<'a> {
         }
         snapshot.configs = self.list_configs().await?;
         snapshot.tombstones = self.list_tombstones().await?;
-        snapshot.devices = self.list_devices().await?;
         snapshot.descriptor = self.descriptor().await?;
         Ok(snapshot)
     }
@@ -420,6 +516,48 @@ impl<'a> WorkspaceRecords<'a> {
 struct NoteRecords {
     revisions: BTreeMap<RevisionId, NoteRevision>,
     heads: Vec<Head>,
+    retired_revisions: BTreeMap<RevisionId, NoteRevision>,
+}
+
+#[derive(Default)]
+struct RetirementCutoffs(BTreeMap<ActorId, Hlc>);
+
+impl RetirementCutoffs {
+    fn from_devices(devices: &[DeviceRecord]) -> Self {
+        let mut cutoffs = BTreeMap::<ActorId, Hlc>::new();
+        for device in devices {
+            let Some(cutoff) = &device.retired_at else {
+                continue;
+            };
+            cutoffs
+                .entry(device.author_id.clone())
+                .and_modify(|current| {
+                    if event_time(cutoff) < event_time(current) {
+                        *current = cutoff.clone();
+                    }
+                })
+                .or_insert_with(|| cutoff.clone());
+        }
+        Self(cutoffs)
+    }
+
+    fn allows(&self, author: &ActorId, hlc: &Hlc) -> bool {
+        self.0
+            .get(author)
+            .is_none_or(|cutoff| event_time(hlc) <= event_time(cutoff))
+    }
+}
+
+fn event_time(hlc: &Hlc) -> (u64, u32) {
+    (hlc.physical_ms, hlc.logical)
+}
+
+fn verify_signer(key: &str, claimed: &ActorId, signer: &ActorId) -> Result<(), RecordError> {
+    if claimed == signer {
+        Ok(())
+    } else {
+        Err(RecordError::SignerMismatch(key.to_owned()))
+    }
 }
 
 fn revision_key(note_id: &NoteId, revision_id: &RevisionId) -> String {
@@ -470,7 +608,9 @@ fn note_id_from_key(key: &str) -> Option<NoteId> {
 fn decode_record(
     key: &str,
     value: &[u8],
+    signer: &ActorId,
     expected_note: Option<&NoteId>,
+    cutoffs: &RetirementCutoffs,
     group: &mut NoteRecords,
 ) -> Result<(), RecordError> {
     let parts = key.split('/').collect::<Vec<_>>();
@@ -489,7 +629,12 @@ fn decode_record(
             if revision.note_id != note_id || revision_id.as_str() != parts[3] {
                 return Err(RecordError::KeyMismatch(key.to_owned()));
             }
-            group.revisions.insert(revision_id, revision);
+            verify_signer(key, &revision.author_id, signer)?;
+            if cutoffs.allows(&revision.author_id, &revision.hlc) {
+                group.revisions.insert(revision_id, revision);
+            } else {
+                group.retired_revisions.insert(revision_id, revision);
+            }
         }
         "head" => {
             let head: Head = decode(value)?;
@@ -497,6 +642,7 @@ fn decode_record(
             if head.note_id != note_id || head.author_id.as_str() != parts[3] {
                 return Err(RecordError::KeyMismatch(key.to_owned()));
             }
+            verify_signer(key, &head.author_id, signer)?;
             group.heads.push(head);
         }
         _ => return Err(RecordError::InvalidKey(key.to_owned())),
@@ -506,12 +652,39 @@ fn decode_record(
 
 fn resolve_group(group: &NoteRecords) -> Result<Option<ResolvedNote>, RecordError> {
     validate_revision_graph(&group.revisions)?;
+    let mut heads = Vec::new();
     for head in &group.heads {
+        if group.retired_revisions.contains_key(&head.revision_id) {
+            let mut pending = vec![head.revision_id.clone()];
+            let mut visited = std::collections::BTreeSet::new();
+            while let Some(revision_id) = pending.pop() {
+                if !visited.insert(revision_id.clone()) {
+                    continue;
+                }
+                if group.revisions.contains_key(&revision_id) {
+                    heads.push(Head {
+                        note_id: head.note_id.clone(),
+                        author_id: head.author_id.clone(),
+                        revision_id,
+                    });
+                } else if let Some(revision) = group.retired_revisions.get(&revision_id) {
+                    pending.extend(revision.predecessors.iter().cloned());
+                }
+            }
+        } else {
+            heads.push(head.clone());
+        }
+    }
+    heads.sort_by(|left, right| {
+        (&left.author_id, &left.revision_id).cmp(&(&right.author_id, &right.revision_id))
+    });
+    heads.dedup();
+    for head in &heads {
         if !group.revisions.contains_key(&head.revision_id) {
             return Err(RecordError::MissingRevision(head.revision_id.clone()));
         }
     }
-    Ok(resolve_heads(&group.revisions, &group.heads))
+    Ok(resolve_heads(&group.revisions, &heads))
 }
 
 fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, RecordError> {
@@ -523,24 +696,6 @@ fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, RecordError> {
 
 fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, RecordError> {
     ciborium::from_reader(bytes).map_err(|error| RecordError::Decoding(error.to_string()))
-}
-
-async fn list_typed<T>(
-    workspace: &IrohWorkspace,
-    prefix: &str,
-    validate: fn(&T) -> Result<(), DomainError>,
-) -> Result<Vec<T>, RecordError>
-where
-    T: DeserializeOwned + Ord,
-{
-    let mut records = Vec::new();
-    for (_, bytes) in workspace.list(prefix).await? {
-        let record: T = decode(&bytes)?;
-        validate(&record)?;
-        records.push(record);
-    }
-    records.sort();
-    Ok(records)
 }
 
 fn record_diagnostic(path: &str, message: &str) -> Diagnostic {
@@ -736,7 +891,147 @@ mod tests {
         Ok(())
     }
 
+    async fn wait_for_device(
+        records: WorkspaceRecords<'_>,
+        author: &ActorId,
+    ) -> anyhow::Result<DeviceRecord> {
+        for _ in 0..200 {
+            match records.list_devices().await {
+                Ok(devices) => {
+                    if let Some(device) = devices
+                        .into_iter()
+                        .find(|device| &device.author_id == author)
+                    {
+                        return Ok(device);
+                    }
+                }
+                Err(RecordError::Transport(_)) => {}
+                Err(error) => return Err(error.into()),
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        anyhow::bail!("device did not replicate")
+    }
+
+    async fn wait_for_retained_revision(
+        records: WorkspaceRecords<'_>,
+        revision_id: &RevisionId,
+    ) -> anyhow::Result<ResolvedNote> {
+        for _ in 0..200 {
+            let retired = match records.list_devices().await {
+                Ok(devices) => devices.iter().any(|device| device.retired_at.is_some()),
+                Err(RecordError::Transport(_)) => false,
+                Err(error) => return Err(error.into()),
+            };
+            if retired {
+                match records.load_note(&NoteId::new("note002")).await {
+                    Ok(Some(resolved)) if resolved.winning_revision == *revision_id => {
+                        return Ok(resolved);
+                    }
+                    Ok(_) | Err(RecordError::Transport(_)) => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        anyhow::bail!("retirement cutoff did not converge")
+    }
+
+    #[tokio::test]
+    async fn signed_retirement_ignores_later_writes_and_retains_history() -> anyhow::Result<()> {
+        let _guard = crate::iroh_node::IROH_TEST_LOCK.lock().await;
+        let directory = tempfile::tempdir()?;
+        let a_dir = directory.path().join("a");
+        let b_dir = directory.path().join("b");
+        let a = IrohNode::persistent(&a_dir).await?;
+        let workspace_a = a.create_workspace().await?;
+        let workspace_id = workspace_a.id();
+        let ticket = workspace_a.share(true).await?;
+        let b = IrohNode::persistent(&b_dir).await?;
+        let workspace_b = b.import_workspace(&ticket).await?;
+        let records_b = WorkspaceRecords::new(&workspace_b);
+        let author_b = records_b.actor_id();
+        records_b
+            .put_device(&DeviceRecord {
+                schema: CURRENT_SCHEMA,
+                endpoint_id: b.endpoint_id().to_string(),
+                author_id: author_b.clone(),
+                label: "device B".to_owned(),
+                capabilities: BTreeSet::from(["write".to_owned()]),
+                last_seen_ms: Some(100),
+                retired_at: None,
+            })
+            .await?;
+        let before = isolated_revision_at(author_b.clone(), "before retirement", 100, None);
+        let before_id = records_b.commit_revision(&before).await?;
+
+        let records_a = WorkspaceRecords::new(&workspace_a);
+        let device_b = wait_for_device(records_a, &author_b).await?;
+        b.shutdown().await?;
+        a.shutdown().await?;
+        drop((workspace_a, workspace_b, a, b));
+
+        let a = IrohNode::persistent(&a_dir).await?;
+        let workspace_a = a.open_workspace(workspace_id).await?.expect("workspace A");
+        let records_a = WorkspaceRecords::new(&workspace_a);
+        let cutoff = Hlc {
+            physical_ms: 200,
+            logical: 0,
+            actor_id: records_a.actor_id(),
+        };
+        records_a
+            .put_device(&DeviceRecord {
+                retired_at: Some(cutoff),
+                ..device_b
+            })
+            .await?;
+        a.shutdown().await?;
+        drop((workspace_a, a));
+
+        // B has not received the retirement and can still create a signed offline write.
+        let b = IrohNode::persistent(&b_dir).await?;
+        let workspace_b = b.open_workspace(workspace_id).await?.expect("workspace B");
+        let after =
+            isolated_revision_at(author_b, "after retirement", 300, Some(before_id.clone()));
+        let after_id = WorkspaceRecords::new(&workspace_b)
+            .commit_revision(&after)
+            .await?;
+        b.shutdown().await?;
+        drop((workspace_b, b));
+
+        let a = IrohNode::persistent(&a_dir).await?;
+        let workspace_a = a.open_workspace(workspace_id).await?.expect("workspace A");
+        let reconnect = workspace_a.share(true).await?;
+        let b = IrohNode::persistent(&b_dir).await?;
+        let workspace_b = b.open_workspace(workspace_id).await?.expect("workspace B");
+        workspace_b.start_sync(&reconnect).await?;
+        let records_a = WorkspaceRecords::new(&workspace_a);
+        let resolved = wait_for_retained_revision(records_a, &before_id).await?;
+        assert_eq!(
+            resolved.visible.expect("historical revision").body,
+            "before retirement"
+        );
+        assert!(
+            records_a
+                .get_revision(&NoteId::new("note002"), &after_id)
+                .await?
+                .is_none()
+        );
+        b.shutdown().await?;
+        a.shutdown().await?;
+        Ok(())
+    }
+
     fn isolated_revision(actor: ActorId, body: &str) -> NoteRevision {
+        isolated_revision_at(actor, body, 100, None)
+    }
+
+    fn isolated_revision_at(
+        actor: ActorId,
+        body: &str,
+        physical_ms: u64,
+        predecessor: Option<RevisionId>,
+    ) -> NoteRevision {
         NoteRevision {
             schema: CURRENT_SCHEMA,
             note_id: NoteId::new("note002"),
@@ -747,12 +1042,12 @@ mod tests {
             body: body.to_owned(),
             materialized_path: "notes/concurrent.md".to_owned(),
             hlc: Hlc {
-                physical_ms: 100,
+                physical_ms,
                 logical: 0,
                 actor_id: actor.clone(),
             },
             author_id: actor,
-            predecessors: BTreeSet::new(),
+            predecessors: predecessor.into_iter().collect(),
             deleted: false,
         }
     }

@@ -9,6 +9,8 @@ pub mod iroh_node;
 pub mod local_index;
 pub mod markdown;
 pub mod projection;
+#[cfg(feature = "iroh-sync")]
+pub mod records;
 pub mod resolution;
 pub mod wikilink;
 

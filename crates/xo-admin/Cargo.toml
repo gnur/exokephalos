@@ -7,9 +7,13 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 clap.workspace = true
-xo-core = { path = "../xo-core" }
+tokio.workspace = true
+xo-core = { path = "../xo-core", features = ["iroh-sync"] }
 
 [lints]
 workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true

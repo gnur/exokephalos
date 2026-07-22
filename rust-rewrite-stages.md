@@ -7,8 +7,9 @@ A stage is complete only when every task and its exit gate are checked.
 
 - Stage 0 is in progress: native persistence, capabilities, and compatibility fixtures pass; relay-only validation remains.
 - Stage 1 is in progress: validation and immutable revision operations exist; shared service APIs, helpers, and Go-generated crypto fixtures remain.
-- Stage 2 is in progress: the derived SQLite index and safe projection scanner/materializer exist; authoritative rebuilds and watching remain.
-- Stages 3–10 retain only the previously listed foundations and placeholders.
+- Stage 2 is in progress: authoritative index rebuilds, durable write suppression, and read-only legacy import now exist; projection watching and local mutation conversion remain.
+- Stage 3 is in progress: typed revision/head records now sit on the replicated Iroh foundation; the remaining record kinds and convergence workflows remain.
+- Stages 4–10 retain only the previously listed foundations and placeholders.
 
 ## Stage 0 — Architecture and compatibility proof
 
@@ -55,17 +56,17 @@ A stage is complete only when every task and its exit gate are checked.
 ## Stage 2 — Persistent local workspace and projection
 
 - [x] Add a disposable SQLite index for IDs, paths, titles, types, tags, hashes, and diagnostics.
-- [ ] Rebuild the complete index from authoritative Docs and Blob state.
+- [x] Rebuild the complete index from authoritative Docs and Blob state.
 - [ ] Materialize winning note heads into recursive Markdown paths.
 - [ ] Materialize assets below the workspace `assets/` directory.
 - [x] Perform atomic same-directory projection writes.
-- [ ] Retain expected-write hashes for crash recovery and watcher suppression.
+- [x] Retain expected-write hashes for crash recovery and watcher suppression.
 - [ ] Add a recursive debounced filesystem watcher.
 - [x] Ignore `.exo/` and other hidden local-only directories while scanning.
 - [ ] Suppress watcher events caused by remote materialization.
 - [ ] Convert local creates, edits, deletes, and renames into immutable revisions.
 - [x] Diagnose duplicate IDs and malformed Markdown without silently rewriting them.
-- [ ] Implement `xo-admin import-workspace` without modifying its source workspace.
+- [x] Implement `xo-admin import-workspace` without modifying its source workspace.
 - [x] Implement a read-only `xo-admin audit-workspace` command.
 - [x] Audit all 278 Markdown files in `oldcodebase/example-repo` successfully.
 
@@ -78,7 +79,8 @@ A stage is complete only when every task and its exit gate are checked.
 - [x] Support persistent Iroh endpoint and Docs author identities.
 - [x] Create and import read-write workspace tickets.
 - [x] Replicate generic Docs values and associated Blob content between two peers.
-- [ ] Add exokephalos-specific revision, head, configuration, asset, tombstone, and device record repositories.
+- [x] Add exokephalos-specific immutable revision and per-author head repositories.
+- [ ] Add configuration, asset, tombstone, and device record repositories.
 - [x] Add read-only invitation creation and enforcement tests.
 - [ ] Add bootstrap-peer and discovery configuration.
 - [ ] Track durable operations, retries, missing blobs, connectivity, and convergence state.

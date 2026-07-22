@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use anyhow::{Context, Result, bail};
+use futures_lite::StreamExt;
 use iroh::endpoint::presets;
 use iroh::protocol::Router;
 use iroh::{Endpoint, EndpointId, SecretKey};
@@ -139,6 +140,11 @@ impl IrohWorkspace {
         self.doc.id()
     }
 
+    #[must_use]
+    pub fn author_id(&self) -> AuthorId {
+        self.author
+    }
+
     pub async fn share(&self, writable: bool) -> Result<String> {
         let mode = if writable {
             ShareMode::Write
@@ -179,6 +185,30 @@ impl IrohWorkspace {
             .await
             .context("read workspace entry blob")?;
         Ok(Some(bytes.to_vec()))
+    }
+
+    /// Return the latest value for every key below `prefix`, ordered by key.
+    pub async fn list(&self, prefix: impl AsRef<[u8]>) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        let query = Query::single_latest_per_key().key_prefix(prefix).build();
+        let entries = self
+            .doc
+            .get_many(query)
+            .await
+            .context("query workspace entries")?;
+        futures_lite::pin!(entries);
+        let mut values = Vec::new();
+        while let Some(entry) = entries.next().await {
+            let entry = entry.context("read workspace entry")?;
+            let bytes = self
+                .blobs
+                .blobs()
+                .get_bytes(entry.content_hash())
+                .await
+                .context("read workspace entry blob")?;
+            values.push((entry.key().to_vec(), bytes.to_vec()));
+        }
+        values.sort_by(|left, right| left.0.cmp(&right.0));
+        Ok(values)
     }
 
     pub async fn start_sync(&self, ticket: &str) -> Result<()> {

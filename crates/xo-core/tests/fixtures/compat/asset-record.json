@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "id": "image001",
+  "blob_hash": "77a7d6bc57e93e491c15d29cf8e2c859b3c84ae391be6a405b3d1c58c1f74a89",
+  "mime": "image/png",
+  "size": 68,
+  "materialized_path": "assets/example.png"
+}

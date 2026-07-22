@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use thiserror::Error;
+
 use crate::{Conflict, Head, NoteRevision, RevisionId};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -7,6 +9,43 @@ pub struct ResolvedNote {
     pub winning_revision: RevisionId,
     pub visible: Option<NoteRevision>,
     pub conflict: Option<Conflict>,
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum RevisionGraphError {
+    #[error("stored revision ID does not match revision content: {0}")]
+    IdentityMismatch(RevisionId),
+    #[error("revision {revision} has missing predecessor {predecessor}")]
+    MissingPredecessor {
+        revision: RevisionId,
+        predecessor: RevisionId,
+    },
+    #[error("revision {revision} references a predecessor from another note")]
+    CrossNotePredecessor { revision: RevisionId },
+}
+
+pub fn validate_revision_graph(
+    revisions: &BTreeMap<RevisionId, NoteRevision>,
+) -> Result<(), RevisionGraphError> {
+    for (revision_id, revision) in revisions {
+        if revision.id().ok().as_ref() != Some(revision_id) {
+            return Err(RevisionGraphError::IdentityMismatch(revision_id.clone()));
+        }
+        for predecessor_id in &revision.predecessors {
+            let predecessor = revisions.get(predecessor_id).ok_or_else(|| {
+                RevisionGraphError::MissingPredecessor {
+                    revision: revision_id.clone(),
+                    predecessor: predecessor_id.clone(),
+                }
+            })?;
+            if predecessor.note_id != revision.note_id {
+                return Err(RevisionGraphError::CrossNotePredecessor {
+                    revision: revision_id.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Resolve asserted per-author heads using HLC then actor identity ordering.
@@ -85,7 +124,7 @@ mod tests {
     fn revision(actor: &str, logical: u32, predecessors: BTreeSet<RevisionId>) -> NoteRevision {
         NoteRevision {
             schema: SchemaVersion(1),
-            note_id: NoteId::new("note001"),
+            note_id: NoteId::new("note002"),
             frontmatter: Frontmatter::new(),
             body: actor.to_owned(),
             materialized_path: "notes/note.md".to_owned(),
@@ -109,12 +148,12 @@ mod tests {
         let revisions = BTreeMap::from([(a_id.clone(), a), (b_id.clone(), b)]);
         let heads = vec![
             Head {
-                note_id: NoteId::new("note001"),
+                note_id: NoteId::new("note002"),
                 author_id: ActorId::new("a"),
                 revision_id: a_id.clone(),
             },
             Head {
-                note_id: NoteId::new("note001"),
+                note_id: NoteId::new("note002"),
                 author_id: ActorId::new("b"),
                 revision_id: b_id.clone(),
             },
@@ -137,12 +176,12 @@ mod tests {
         let revisions = BTreeMap::from([(base_id.clone(), base), (next_id.clone(), next)]);
         let heads = vec![
             Head {
-                note_id: NoteId::new("note001"),
+                note_id: NoteId::new("note002"),
                 author_id: ActorId::new("old"),
                 revision_id: base_id,
             },
             Head {
-                note_id: NoteId::new("note001"),
+                note_id: NoteId::new("note002"),
                 author_id: ActorId::new("a"),
                 revision_id: next_id,
             },
@@ -152,6 +191,65 @@ mod tests {
                 .unwrap()
                 .conflict
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn resolution_is_independent_of_head_arrival_order() {
+        let a = revision("a", 0, BTreeSet::new());
+        let b = revision("b", 0, BTreeSet::new());
+        let c = revision("c", 0, BTreeSet::new());
+        let a_id = a.id().unwrap();
+        let b_id = b.id().unwrap();
+        let c_id = c.id().unwrap();
+        let revisions = BTreeMap::from([(a_id.clone(), a), (b_id.clone(), b), (c_id.clone(), c)]);
+        let heads = [
+            Head {
+                note_id: NoteId::new("note002"),
+                author_id: ActorId::new("a"),
+                revision_id: a_id,
+            },
+            Head {
+                note_id: NoteId::new("note002"),
+                author_id: ActorId::new("b"),
+                revision_id: b_id,
+            },
+            Head {
+                note_id: NoteId::new("note002"),
+                author_id: ActorId::new("c"),
+                revision_id: c_id.clone(),
+            },
+        ];
+        let permutations = [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ];
+        for order in permutations {
+            let ordered = order.map(|index| heads[index].clone());
+            assert_eq!(
+                resolve_heads(&revisions, &ordered)
+                    .unwrap()
+                    .winning_revision,
+                c_id
+            );
+        }
+    }
+
+    #[test]
+    fn graph_validation_rejects_missing_predecessors() {
+        let revision = revision("a", 1, BTreeSet::from([RevisionId::new("missing")]));
+        let revision_id = revision.id().unwrap();
+        let graph = BTreeMap::from([(revision_id.clone(), revision)]);
+        assert_eq!(
+            validate_revision_graph(&graph),
+            Err(RevisionGraphError::MissingPredecessor {
+                revision: revision_id,
+                predecessor: RevisionId::new("missing"),
+            })
         );
     }
 }

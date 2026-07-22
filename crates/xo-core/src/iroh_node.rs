@@ -278,6 +278,29 @@ mod tests {
         restarted.shutdown().await?;
         Ok(())
     }
+
+    #[tokio::test]
+    async fn read_only_ticket_cannot_write() -> Result<()> {
+        let owner_dir = tempfile::tempdir()?;
+        let reader_dir = tempfile::tempdir()?;
+        let owner = IrohNode::persistent(owner_dir.path()).await?;
+        let workspace = owner.create_workspace().await?;
+        workspace.put("note/test/revision/one", "owner").await?;
+        let ticket = workspace.share(false).await?;
+
+        let reader = IrohNode::persistent(reader_dir.path()).await?;
+        let imported = reader.import_workspace(&ticket).await?;
+        assert!(
+            imported
+                .put("note/test/revision/two", "reader")
+                .await
+                .is_err()
+        );
+
+        reader.shutdown().await?;
+        owner.shutdown().await?;
+        Ok(())
+    }
 }
 
 #[cfg(not(unix))]

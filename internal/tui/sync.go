@@ -48,18 +48,8 @@ func startSyncCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) tea.
 		if status != "approved" {
 			return syncMsg{status: "pending approval", retryStart: true}
 		}
-		changes, err := syncsvc.BuildLocalChanges(baseDir, c, true)
-		if err != nil {
-			return syncMsg{status: "error", err: err}
-		}
-		if err := syncsvc.EnqueueChanges(c, changes); err != nil {
-			return syncMsg{status: "error", err: err}
-		}
 		if err := c.SetSyncStarted(true); err != nil {
 			return syncMsg{status: "error", err: err}
-		}
-		if _, err := syncV2(baseDir, appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
-			return syncMsg{status: "offline", err: err, retrySync: true}
 		}
 		cfgChanged, err := syncV2(baseDir, appCfg.Sync.ServerURL, clientID, priv, c)
 		if err != nil {
@@ -88,9 +78,6 @@ func syncStartupCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) te
 		if clientID == "" {
 			host, _ := os.Hostname()
 			clientID = host
-		}
-		if _, err := syncV2(baseDir, appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
-			return syncMsg{status: "offline", err: err, retrySync: true}
 		}
 		cfgChanged, err := syncV2(baseDir, appCfg.Sync.ServerURL, clientID, priv, c)
 		if err != nil {
@@ -122,9 +109,6 @@ func reconcileSyncCmd(baseDir string, c *cache.Cache, appCfg *config.AppConfig) 
 		if clientID == "" {
 			host, _ := os.Hostname()
 			clientID = host
-		}
-		if _, err := syncV2(baseDir, appCfg.Sync.ServerURL, clientID, priv, c); err != nil {
-			return syncMsg{status: "offline", err: err, retrySync: true}
 		}
 		cfgChanged, err := syncV2(baseDir, appCfg.Sync.ServerURL, clientID, priv, c)
 		if err != nil {
@@ -627,40 +611,104 @@ func contentHashString(content string) string {
 }
 
 // syncV2 keeps Markdown as the local projection while using the operation feed
-// as the authority. Legacy outbox rows are deliberately translated here rather
-// than discarded: an interrupted upgrade can retry the exact same operation.
+// as the authority. The first v2 reconciliation retires legacy pending rows so
+// the server projection, rather than an ambiguous legacy revision, wins.
 func syncV2(baseDir, serverURL, clientID string, priv ed25519.PrivateKey, c *cache.Cache) (bool, error) {
-	epoch, cursor, remote, err := v2Bootstrap(serverURL, clientID, priv)
+	configChanged := false
+	serverEpoch, _, remote, err := v2Bootstrap(serverURL, clientID, priv)
 	if err != nil {
 		return false, err
 	}
-	if err := applyV2Operations(baseDir, c, remote); err != nil {
+	epoch, cursor, _, _, err := c.SyncV2State()
+	if err != nil {
 		return false, err
 	}
+	bootstrap := epoch == "" || epoch != serverEpoch
+	if bootstrap {
+		// The migration is deliberately server-authoritative. Legacy rows are
+		// retained for history but never allowed to overwrite v2 records.
+		if err := c.RetireLegacyOutbox(); err != nil {
+			return false, err
+		}
+		epoch, cursor = serverEpoch, 0
+		if err := applyV2Operations(baseDir, serverURL, clientID, priv, c, remote); err != nil {
+			return false, err
+		}
+		configChanged = configChanged || containsV2Config(remote)
+	}
+	// Pull until the server's high-water cursor is committed locally.
+	for {
+		more, next, err := v2Pull(serverURL, clientID, priv, cursor)
+		if err != nil {
+			return false, err
+		}
+		if err := applyV2Operations(baseDir, serverURL, clientID, priv, c, more); err != nil {
+			return false, err
+		}
+		configChanged = configChanged || containsV2Config(more)
+		if next <= cursor {
+			break
+		}
+		cursor = next
+		if err := c.SetSyncV2State(epoch, cursor); err != nil {
+			return false, err
+		}
+		if len(more) < 500 {
+			break
+		}
+	}
+	// Legacy writers still feed the cache during this transition. Convert each
+	// new row once into a durable v2 receipt before attempting network I/O.
 	entries, err := c.PendingOutbox(100)
 	if err != nil {
 		return false, err
 	}
-	if len(entries) > 0 {
-		ops := make([]syncsvc.SyncOperation, 0, len(entries))
-		ids := make([]int64, 0, len(entries))
-		for _, entry := range entries {
-			var ch syncsvc.Change
-			if err := json.Unmarshal([]byte(entry.Payload), &ch); err != nil {
-				_ = c.MarkOutboxFailed(entry.ID, err.Error())
+	for _, entry := range entries {
+		var ch syncsvc.Change
+		if err := json.Unmarshal([]byte(entry.Payload), &ch); err != nil {
+			_ = c.MarkOutboxFailed(entry.ID, err.Error())
+			continue
+		}
+		p, l, err := c.NextSyncV2HLC(clientID)
+		if err != nil {
+			return false, err
+		}
+		kind, target := ch.TargetKind, ch.ID
+		if kind == "" {
+			kind = "item"
+		}
+		if target == "" {
+			target = ch.Path
+		}
+		deleteOp := ch.Op == "delete" || strings.HasPrefix(ch.Op, "delete_")
+		idHash := sha256.Sum256([]byte(epoch + "\x00" + clientID + "\x00" + fmt.Sprintf("%d", entry.ID)))
+		op := syncsvc.SyncOperation{ID: hex.EncodeToString(idHash[:]), Epoch: epoch, ActorID: clientID, Kind: kind, Target: target, Delete: deleteOp, Path: ch.Path, Version: syncsvc.HLC{PhysicalMS: p, Logical: l, ActorID: clientID}, Frontmatter: ch.Frontmatter, Body: ch.Body, Content: ch.Content, Hash: ch.Hash, MIME: ch.MIME, Size: ch.Size}
+		payload, _ := json.Marshal(op)
+		if err := c.EnqueueSyncV2Operation(op.ID, string(payload)); err != nil {
+			return false, err
+		}
+		_ = c.MarkOutboxSynced(entry.ID)
+	}
+	pending, err := c.PendingSyncV2Operations(100)
+	if err != nil {
+		return false, err
+	}
+	if len(pending) > 0 {
+		ops := make([]syncsvc.SyncOperation, 0, len(pending))
+		ids := make([]string, 0, len(pending))
+		for _, pendingOp := range pending {
+			var op syncsvc.SyncOperation
+			if err := json.Unmarshal([]byte(pendingOp.Payload), &op); err != nil {
+				_ = c.MarkSyncV2Operation(pendingOp.ID, "failed", err.Error())
 				continue
 			}
-			kind, target := ch.TargetKind, ch.ID
-			if kind == "" {
-				kind = "item"
+			if op.Kind == "asset" && !op.Delete {
+				if err := uploadSyncAsset(serverURL, clientID, priv, baseDir, op.Path); err != nil {
+					_ = c.MarkSyncV2Operation(op.ID, "failed", err.Error())
+					continue
+				}
 			}
-			if target == "" {
-				target = ch.Path
-			}
-			deleteOp := ch.Op == "delete" || strings.HasPrefix(ch.Op, "delete_")
-			idHash := sha256.Sum256([]byte(epoch + "\x00" + clientID + "\x00" + fmt.Sprintf("%d", entry.ID)))
-			ops = append(ops, syncsvc.SyncOperation{ID: hex.EncodeToString(idHash[:]), Epoch: epoch, ActorID: clientID, Kind: kind, Target: target, Delete: deleteOp, Path: ch.Path, Version: syncsvc.HLC{PhysicalMS: entry.CreatedAt.UnixMilli(), Logical: entry.ID, ActorID: clientID}, Frontmatter: ch.Frontmatter, Body: ch.Body, Content: ch.Content, Hash: ch.Hash, MIME: ch.MIME, Size: ch.Size})
-			ids = append(ids, entry.ID)
+			ops, ids = append(ops, op), append(ids, pendingOp.ID)
 		}
 		if len(ops) > 0 {
 			body, _ := json.Marshal(map[string]interface{}{"operations": ops})
@@ -688,32 +736,32 @@ func syncV2(baseDir, serverURL, clientID string, priv ed25519.PrivateKey, c *cac
 			for i, op := range ops {
 				r := byID[op.ID]
 				if r.Status == "applied" || r.Status == "superseded" {
-					_ = c.MarkOutboxSynced(ids[i])
+					_ = c.MarkSyncV2Operation(ids[i], "synced", "")
 					if r.Cursor > cursor {
 						cursor = r.Cursor
 					}
 				} else {
-					_ = c.MarkOutboxFailed(ids[i], r.Error)
+					_ = c.MarkSyncV2Operation(ids[i], "failed", r.Error)
 				}
 			}
 		}
 	}
-	more, next, err := v2Pull(serverURL, clientID, priv, cursor)
-	if err != nil {
-		return false, err
-	}
-	if err := applyV2Operations(baseDir, c, more); err != nil {
-		return false, err
-	}
-	if next > cursor {
-		cursor = next
-	}
 	if err := v2Ack(serverURL, clientID, priv, cursor); err != nil {
 		return false, err
 	}
-	_ = c.SetMeta("sync_v2_epoch", epoch)
-	_ = c.SetMeta("sync_v2_cursor", fmt.Sprintf("%d", cursor))
-	return false, nil
+	if err := c.SetSyncV2State(epoch, cursor); err != nil {
+		return false, err
+	}
+	return configChanged, nil
+}
+
+func containsV2Config(ops []syncsvc.SyncOperation) bool {
+	for _, op := range ops {
+		if op.Kind == "config" {
+			return true
+		}
+	}
+	return false
 }
 
 func v2Bootstrap(serverURL, clientID string, priv ed25519.PrivateKey) (string, int64, []syncsvc.SyncOperation, error) {
@@ -767,28 +815,74 @@ func v2Ack(serverURL, clientID string, priv ed25519.PrivateKey, cursor int64) er
 	}
 	return nil
 }
-func applyV2Operations(baseDir string, c *cache.Cache, ops []syncsvc.SyncOperation) error {
+func applyV2Operations(baseDir, serverURL, clientID string, priv ed25519.PrivateKey, c *cache.Cache, ops []syncsvc.SyncOperation) error {
 	for _, op := range ops {
-		if op.Kind != "item" {
+		_ = c.ObserveSyncV2HLC(op.Version.PhysicalMS, op.Version.Logical)
+		relPath := op.Path
+		if op.Kind == "item" && op.Delete && relPath == "" {
+			if item, err := c.GetByID(op.Target); err == nil {
+				relPath, _ = filepath.Rel(baseDir, item.Path)
+			}
+		}
+		if relPath == "" {
 			continue
 		}
-		path := filepath.Join(baseDir, filepath.FromSlash(op.Path))
-		if op.Path == "" {
+		path := filepath.Clean(filepath.Join(baseDir, filepath.FromSlash(relPath)))
+		if !strings.HasPrefix(path, filepath.Clean(baseDir)+string(filepath.Separator)) {
 			continue
 		}
-		if op.Delete {
-			_ = os.Remove(path)
-			_ = c.NotifyDeleteNoOutbox(path)
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			return err
-		}
-		if err := markdown.WriteFrontmatter(path, op.Frontmatter, op.Body); err != nil {
-			return err
-		}
-		if err := c.NotifyWriteNoOutbox(path); err != nil {
-			return err
+		switch op.Kind {
+		case "item":
+			if op.Delete {
+				c.SuppressRemoteWrite(path)
+				_ = os.Remove(path)
+				_ = c.NotifyDeleteNoOutbox(path)
+				continue
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				return err
+			}
+			c.SuppressRemoteWrite(path)
+			if err := markdown.WriteFrontmatter(path, op.Frontmatter, op.Body); err != nil {
+				return err
+			}
+			if err := c.NotifyWriteNoOutbox(path); err != nil {
+				return err
+			}
+		case "config":
+			if !config.IsWorkspacePath(op.Target) {
+				continue
+			}
+			if op.Delete {
+				_ = os.Remove(path)
+				_ = c.SetMeta(configHashMetaKey(op.Target), "")
+				continue
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(path, []byte(op.Content), 0644); err != nil {
+				return err
+			}
+			_ = c.SetMeta(configHashMetaKey(op.Target), contentHashString(op.Content))
+		case "asset":
+			if _, err := assets.Path(baseDir, op.Target); err != nil {
+				continue
+			}
+			if op.Delete {
+				if assetPath, err := assets.Path(baseDir, op.Target); err == nil {
+					_ = os.Remove(assetPath)
+				}
+				continue
+			}
+			local, err := assets.Inspect(baseDir, op.Target)
+			if err == nil && local.Hash == op.Hash {
+				continue
+			}
+			if err := downloadSyncAsset(serverURL, clientID, priv, baseDir, op.Target); err != nil {
+				return err
+			}
+			_ = c.SetMeta("sync_v2_asset:"+op.Target, op.Hash)
 		}
 	}
 	return nil

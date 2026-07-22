@@ -1,5 +1,6 @@
-import { db, setRevision } from './db';
-import { bootstrap, pushChanges } from './api';
+import { db, ensureSyncDevice, nextSyncVersion, observeSyncVersion, setRevision } from './db';
+import { acknowledgeSyncCursor, bootstrap, pullSyncOperations, pushSyncOperations, syncV2Bootstrap } from './api';
+import type { Item, SyncOperation } from './types';
 
 let syncing = false;
 
@@ -21,29 +22,46 @@ export async function syncOutbox() {
   if (syncing || !navigator.onLine) return;
   syncing = true;
   try {
-    const pending = await db.outbox.where('status').anyOf('pending', 'failed').sortBy('created_at');
-    if (pending.length === 0) return;
-    const now = new Date().toISOString();
-    await db.outbox.bulkPut(pending.map((entry) => ({ ...entry, status: 'syncing' as const, updated_at: now })));
-    const result = await pushChanges(pending);
-    const accepted = new Set(result.accepted ?? []);
-    const rejected = new Map((result.rejected ?? []).map((entry) => [entry.id, entry.error]));
-    await db.transaction('rw', db.outbox, db.meta, async () => {
+    const boot = await syncV2Bootstrap();
+    const savedEpoch = (await db.meta.get('sync_v2_epoch'))?.value;
+    let cursor = Number((await db.meta.get('sync_v2_cursor'))?.value ?? 0);
+    if (savedEpoch !== boot.epoch) {
+      // Browser migration is server-authoritative, matching the TUI cutover.
+      const legacy = await db.outbox.where('status').anyOf('pending', 'failed').toArray();
+      await db.outbox.bulkPut(legacy.map((entry) => ({ ...entry, status: 'synced' as const, error: 'retired by sync v2 upgrade', updated_at: new Date().toISOString() })));
+      cursor = 0;
+      await db.meta.put({ key: 'sync_v2_epoch', value: boot.epoch });
+    }
+    for (;;) {
+      const page = await pullSyncOperations(cursor);
+      await applyOperations(page.operations);
+      if (page.cursor <= cursor) break;
+      cursor = page.cursor;
+      await db.meta.put({ key: 'sync_v2_cursor', value: cursor });
+      if (page.operations.length < 500) break;
+    }
+    const device = await ensureSyncDevice();
+    const legacy = await db.outbox.where('status').anyOf('pending', 'failed').sortBy('created_at');
+    for (const entry of legacy) {
+      const version = await nextSyncVersion();
+      const operation: SyncOperation = { id: entry.id, epoch: boot.epoch, actor_id: device.id, kind: 'item', target: entry.item_id, delete: entry.op === 'delete_item', path: entry.path, version: { ...version, actor_id: device.id }, frontmatter: entry.frontmatter, body: entry.body };
+      await db.syncOps.put({ id: operation.id, source_id: entry.id, operation, status: 'pending', attempts: 0, created_at: entry.created_at, updated_at: new Date().toISOString() });
+      await db.outbox.put({ ...entry, status: 'synced', error: undefined, updated_at: new Date().toISOString() });
+    }
+    const pending = await db.syncOps.where('status').anyOf('pending', 'failed').sortBy('created_at');
+    if (pending.length) {
+      const result = await pushSyncOperations(pending.map((entry) => entry.operation));
+      const byID = new Map(result.results.map((entry) => [entry.id, entry]));
       for (const entry of pending) {
-        if (accepted.has(entry.id)) {
-          await db.outbox.put({ ...entry, status: 'synced', error: undefined, updated_at: new Date().toISOString() });
-        } else {
-          await db.outbox.put({
-            ...entry,
-            status: 'failed',
-            attempts: entry.attempts + 1,
-            error: rejected.get(entry.id) ?? 'change was not accepted',
-            updated_at: new Date().toISOString(),
-          });
-        }
+        const outcome = byID.get(entry.id);
+        if (outcome?.status === 'applied' || outcome?.status === 'superseded') {
+          await db.syncOps.put({ ...entry, status: 'synced', error: undefined, updated_at: new Date().toISOString() });
+          cursor = Math.max(cursor, outcome.cursor ?? 0);
+        } else await db.syncOps.put({ ...entry, status: 'failed', attempts: entry.attempts + 1, error: outcome?.error ?? 'operation was not accepted', updated_at: new Date().toISOString() });
       }
-      await setRevision(result.revision);
-    });
+      await db.meta.put({ key: 'sync_v2_cursor', value: cursor });
+    }
+    await acknowledgeSyncCursor(cursor);
     await refreshFromServer();
   } catch (error) {
     const syncingEntries = await db.outbox.where('status').equals('syncing').toArray();
@@ -60,6 +78,19 @@ export async function syncOutbox() {
   } finally {
     syncing = false;
   }
+}
+
+async function applyOperations(operations: SyncOperation[]) {
+  await db.transaction('rw', db.items, db.meta, async () => {
+    for (const op of operations) {
+      await observeSyncVersion(op.version.physical_ms, op.version.logical);
+      if (op.kind !== 'item') continue;
+      if (op.delete) { await db.items.delete(op.target); continue; }
+      const fm = op.frontmatter ?? {};
+      const item: Item = { id: op.target, path: op.path ?? '', type: String(fm.type ?? ''), title: String(fm.title ?? op.target), subtitle: '', tags: Array.isArray(fm.tags) ? fm.tags.map(String) : [], frontmatter: fm, body: op.body ?? '', raw: '' };
+      await db.items.put(item);
+    }
+  });
 }
 
 export function startSyncRuntime(onStatus: (status: 'online' | 'offline' | 'syncing') => void) {

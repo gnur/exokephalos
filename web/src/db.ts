@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie';
-import type { Action, Item, OutboxEntry, SyncDevice, View } from './types';
+import type { Action, Item, OutboxEntry, SyncDevice, SyncOutboxOperation, View } from './types';
 
 export type Meta = {
   key: string;
@@ -12,6 +12,7 @@ export class ExoDB extends Dexie {
   views!: EntityTable<View, 'id'>;
   actions!: EntityTable<Action, 'name'>;
   meta!: EntityTable<Meta, 'key'>;
+	  syncOps!: EntityTable<SyncOutboxOperation, 'id'>;
 
   constructor() {
     super('exokephalos');
@@ -25,6 +26,12 @@ export class ExoDB extends Dexie {
 		this.version(2).stores({
 			items: 'id, type, title, path, updated_at, deleted',
 			outbox: 'id, item_id, status, created_at, updated_at',
+			views: 'id', actions: 'name', meta: 'key',
+		});
+		this.version(3).stores({
+			items: 'id, type, title, path, updated_at, deleted',
+			outbox: 'id, item_id, status, created_at, updated_at',
+			syncOps: 'id, source_id, status, created_at, updated_at',
 			views: 'id', actions: 'name', meta: 'key',
 		});
   }
@@ -49,6 +56,22 @@ export async function renameSyncDevice(label: string) {
   device.label = label.trim() || device.label;
   await db.meta.put({ key: 'sync_device', value: device });
   return device;
+}
+
+export async function nextSyncVersion(): Promise<{ physical_ms: number; logical: number }> {
+  const device = await ensureSyncDevice();
+  const now = Date.now();
+  if (now > device.physical_ms) { device.physical_ms = now; device.logical = 0; } else { device.logical++; }
+  await db.meta.put({ key: 'sync_device', value: device });
+  return { physical_ms: device.physical_ms, logical: device.logical };
+}
+
+export async function observeSyncVersion(physical_ms: number, logical: number) {
+  const device = await ensureSyncDevice();
+  if (physical_ms > device.physical_ms || (physical_ms === device.physical_ms && logical > device.logical)) {
+    device.physical_ms = physical_ms; device.logical = logical;
+    await db.meta.put({ key: 'sync_device', value: device });
+  }
 }
 
 export const db = new ExoDB();

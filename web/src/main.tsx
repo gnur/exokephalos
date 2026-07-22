@@ -5,7 +5,7 @@ import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { Check, CloudOff, Menu, Plus, RefreshCw, Search, Settings, Tags, Trash2, X } from 'lucide-react';
 import { parse as parseYAML, stringify as stringifyYAML } from 'yaml';
-import { approveSyncClient, changePassword, createAPIKey, importURL, listAPIKeys, listConfigs, listItemActions, listSyncClients, revokeAPIKey, revokeSyncClient, runAction, updateConfig, uploadAsset } from './api';
+import { approveSyncClient, changePassword, compactSyncV2Tombstones, createAPIKey, importURL, listAPIKeys, listConfigs, listItemActions, listSyncClients, listSyncV2Devices, retireSyncV2Device, revokeAPIKey, revokeSyncClient, runAction, updateConfig, uploadAsset } from './api';
 import { db } from './db';
 const encryption = () => import('./encryption');
 import { refreshFromServer, startSyncRuntime, syncOutbox } from './sync';
@@ -14,7 +14,7 @@ import './styles.css';
 
 type Screen = 'items' | 'create' | 'settings';
 type Pane = 'tags' | 'items' | 'editor';
-type SettingsTab = 'api-keys' | 'password' | 'sync-clients' | 'sync-status' | 'config-settings';
+type SettingsTab = 'api-keys' | 'password' | 'sync-clients' | 'sync-status' | 'config-settings' | 'sync-v2';
 
 function itemTitle(item: Item) {
   return item.title || String(item.frontmatter.title ?? item.id);
@@ -702,6 +702,9 @@ function SettingsView({ entries, syncStatus }: { entries: OutboxEntry[]; syncSta
   const [apiKeyExpiresAt, setAPIKeyExpiresAt] = useState(defaultAPIKeyExpiry());
   const [newAPIKey, setNewAPIKey] = useState('');
   const [message, setMessage] = useState('');
+  const [devices, setDevices] = useState<Array<{ id: string; label: string; kind: string; created_at: string; retired_at: string }>>([]);
+
+  async function loadDevices() { try { setDevices((await listSyncV2Devices()).devices); } catch { setDevices([]); } }
 
   async function loadClients() {
     try {
@@ -740,6 +743,7 @@ function SettingsView({ entries, syncStatus }: { entries: OutboxEntry[]; syncSta
     void loadClients();
     void loadAPIKeys();
     void loadConfigs();
+		void loadDevices();
     const onServerChange = (event: Event) => {
       const detail = (event as CustomEvent<{ target_kind?: string }>).detail;
       if (!detail?.target_kind || detail.target_kind === 'client') void loadClients();
@@ -791,6 +795,7 @@ function SettingsView({ entries, syncStatus }: { entries: OutboxEntry[]; syncSta
         <button className={tab === 'password' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('password')}>Password</button>
         <button className={tab === 'sync-clients' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('sync-clients')}>Sync clients</button>
         <button className={tab === 'sync-status' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('sync-status')}>Sync status</button>
+		<button className={tab === 'sync-v2' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('sync-v2')}>Sync v2</button>
         <button className={tab === 'config-settings' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('config-settings')}>Fennel/Lua settings</button>
       </div>
 
@@ -862,6 +867,16 @@ function SettingsView({ entries, syncStatus }: { entries: OutboxEntry[]; syncSta
           <OutboxView entries={entries} />
         </div>
       ) : null}
+
+		{tab === 'sync-v2' ? (
+			<div className="settings-section">
+				<h2>Sync v2 devices</h2>
+				<p className="notice">Retire only devices that will never reconnect. Compaction permanently removes acknowledged tombstones.</p>
+				<button className="button" onClick={() => { if (window.confirm('Permanently compact tombstones acknowledged by every active device?')) void compactSyncV2Tombstones().then((r) => { setMessage(`Compacted ${r.compacted} tombstones`); void loadDevices(); }); }}>Compact tombstones</button>
+				<div className="outbox-list">{devices.map((device) => <div className="outbox-row" key={device.id}><div><strong>{device.label}</strong><span>{device.id} · {device.kind}{device.retired_at ? ` · retired ${formatDate(device.retired_at)}` : ''}</span></div>{!device.retired_at ? <button className="button" onClick={() => { if (window.confirm(`Retire ${device.label}? This device will no longer hold tombstones.`)) void retireSyncV2Device(device.id).then(loadDevices); }}>Retire</button> : null}</div>)}</div>
+				{message ? <p className="notice">{message}</p> : null}
+			</div>
+		) : null}
 
       {tab === 'config-settings' ? (
         <div className="settings-section">

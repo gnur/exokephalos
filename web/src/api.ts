@@ -23,6 +23,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new Error(message);
   }
+	if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 
@@ -57,6 +58,31 @@ export function pushSyncOperations(operations: SyncOperation[]) {
     });
   });
 }
+
+export function syncV2Bootstrap() {
+  return import('./db').then(async ({ ensureSyncDevice }) => {
+    const device = await ensureSyncDevice();
+    return api<{ epoch: string; cursor: number; operations: SyncOperation[] }>('/api/app/sync/v2/bootstrap', { headers: { 'X-Exo-Device-ID': device.id } });
+  });
+}
+
+export function pullSyncOperations(cursor: number) {
+  return import('./db').then(async ({ ensureSyncDevice }) => {
+    const device = await ensureSyncDevice();
+    return api<{ cursor: number; operations: SyncOperation[] }>(`/api/app/sync/v2/pull?cursor=${cursor}`, { headers: { 'X-Exo-Device-ID': device.id } });
+  });
+}
+
+export function acknowledgeSyncCursor(cursor: number) {
+  return import('./db').then(async ({ ensureSyncDevice }) => {
+    const device = await ensureSyncDevice();
+    await api<unknown>('/api/app/sync/v2/ack', { method: 'POST', headers: { 'X-Exo-Device-ID': device.id }, body: JSON.stringify({ cursor }) });
+  });
+}
+
+export function listSyncV2Devices() { return api<{ devices: Array<{ id: string; label: string; kind: string; created_at: string; retired_at: string }> }>('/api/app/sync/v2/devices'); }
+export function retireSyncV2Device(id: string) { return api<{ ok: true }>(`/api/app/sync/v2/devices/${encodeURIComponent(id)}/retire`, { method: 'POST' }); }
+export function compactSyncV2Tombstones() { return api<{ compacted: number }>('/api/app/sync/v2/compact', { method: 'POST' }); }
 
 export function listSyncClients() {
   return api<{ clients: SyncClient[] }>('/api/app/sync-clients');

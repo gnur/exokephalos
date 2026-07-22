@@ -65,6 +65,8 @@ type OperationResult struct {
 	Cursor int64  `json:"cursor,omitempty"`
 }
 
+type SyncDevice struct{ ID, Label, Kind, CreatedAt, RetiredAt string }
+
 func (s *Server) migrateV2() error {
 	for _, q := range []string{
 		`CREATE TABLE IF NOT EXISTS sync_epoch (id INTEGER PRIMARY KEY CHECK(id=1), epoch TEXT NOT NULL, created_at TEXT NOT NULL)`,
@@ -99,7 +101,24 @@ func (s *Server) Epoch() (string, error) {
 	return epoch, err
 }
 
+// ResetV2Epoch removes only v2 protocol state. Callers must require explicit
+// confirmation and then seed a complete replacement projection immediately.
+func (s *Server) ResetV2Epoch() error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	for _, table := range []string{"sync_epoch", "sync_records", "sync_feed", "sync_operations", "sync_acks", "sync_devices"} {
+		if _, err := tx.Exec("DELETE FROM " + table); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Server) PushOperations(actor string, ops []SyncOperation) ([]OperationResult, error) {
+	_, _ = s.db.Exec(`INSERT INTO sync_devices(id,label,kind,created_at) VALUES(?,?,?,?) ON CONFLICT(id) DO NOTHING`, actor, actor, "client", time.Now().UTC().Format(time.RFC3339Nano))
 	epoch, err := s.Epoch()
 	if err != nil {
 		return nil, err
@@ -173,6 +192,23 @@ func (s *Server) PushOperations(actor string, ops []SyncOperation) ([]OperationR
 	return results, nil
 }
 
+func (s *Server) SyncDevices() ([]SyncDevice, error) {
+	rows, err := s.db.Query(`SELECT id,label,kind,created_at,retired_at FROM sync_devices ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var devices []SyncDevice
+	for rows.Next() {
+		var d SyncDevice
+		if err := rows.Scan(&d.ID, &d.Label, &d.Kind, &d.CreatedAt, &d.RetiredAt); err != nil {
+			return nil, err
+		}
+		devices = append(devices, d)
+	}
+	return devices, rows.Err()
+}
+
 func (s *Server) applyOperationProjection(op SyncOperation) error {
 	change := Change{Path: op.Path}
 	switch op.Kind {
@@ -215,7 +251,10 @@ func (s *Server) PullOperations(after int64, limit int) ([]SyncOperation, int64,
 	if limit <= 0 || limit > 1000 {
 		limit = 500
 	}
-	rows, err := s.db.Query(`SELECT r.payload,f.cursor FROM sync_feed f JOIN sync_records r ON r.operation=f.operation WHERE f.cursor>? ORDER BY f.cursor LIMIT ?`, after, limit)
+	// sync_records is the canonical projection.  Reading it rather than joining
+	// feed rows to the current operation avoids sparse, superseded feed entries
+	// making a client stop pagination before it has seen a newer target value.
+	rows, err := s.db.Query(`SELECT payload,cursor FROM sync_records WHERE cursor>? ORDER BY cursor LIMIT ?`, after, limit)
 	if err != nil {
 		return nil, after, err
 	}
@@ -233,7 +272,19 @@ func (s *Server) PullOperations(after int64, limit int) ([]SyncOperation, int64,
 		}
 		out = append(out, op)
 	}
-	return out, cursor, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, after, err
+	}
+	// An acknowledgement may advance across superseded feed entries: all live
+	// records at or below this watermark have been returned above.
+	var highWater sql.NullInt64
+	if err := s.db.QueryRow(`SELECT MAX(cursor) FROM sync_feed`).Scan(&highWater); err != nil {
+		return nil, after, err
+	}
+	if len(out) < limit && highWater.Valid {
+		cursor = highWater.Int64
+	}
+	return out, cursor, nil
 }
 func (s *Server) Acknowledge(actor string, cursor int64) error {
 	_, err := s.db.Exec(`INSERT INTO sync_acks(actor_id,cursor) VALUES(?,?) ON CONFLICT(actor_id) DO UPDATE SET cursor=MAX(cursor,excluded.cursor)`, actor, cursor)

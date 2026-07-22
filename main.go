@@ -66,6 +66,10 @@ func main() {
 		runExport(dir)
 		return
 	}
+	if len(os.Args) > 2 && os.Args[1] == "sync" && os.Args[2] == "seed" {
+		runSyncSeed(dir)
+		return
+	}
 
 	appMode := "tui"
 	if len(os.Args) > 1 && os.Args[1] == "serve" {
@@ -117,12 +121,90 @@ func printHelp() {
 		"xo import <dir> <type>   Import Markdown into the workspace\n" +
 		"xo export <dir> [--type <type>]\n" +
 		"                         Export workspace Markdown\n" +
+		"xo sync seed --source <dir> --yes\n" +
+		"                         Replace the local server v2 epoch from one workspace\n" +
 		"xo helix-init            Write Helix LSP settings for EXO_DIR\n" +
 		"xo version, xo --version Print build version\n" +
 		"xo help, xo --help, xo -h\n" +
 		"                         Print this guide\n\n" +
 		"Environment:\n" +
 		"  EXO_DIR                Workspace directory; defaults to ./example-repo\n")
+}
+
+func runSyncSeed(targetDir string) {
+	var source string
+	confirmed := false
+	for i := 3; i < len(os.Args); i++ {
+		if os.Args[i] == "--source" && i+1 < len(os.Args) {
+			source = os.Args[i+1]
+			i++
+		} else if os.Args[i] == "--yes" {
+			confirmed = true
+		}
+	}
+	if source == "" || !confirmed {
+		fmt.Fprintln(os.Stderr, "Usage: xo sync seed --source <workspace> --yes")
+		os.Exit(2)
+	}
+	info, err := os.Stat(source)
+	if err != nil || !info.IsDir() {
+		fmt.Fprintf(os.Stderr, "Error: invalid source workspace: %s\n", source)
+		os.Exit(1)
+	}
+	appCfg, err := config.LoadApp(targetDir, "serve")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading server configuration: %v\n", err)
+		os.Exit(1)
+	}
+	c, err := cache.New(source)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening source workspace: %v\n", err)
+		os.Exit(1)
+	}
+	defer c.Close()
+	changes, err := syncsvc.BuildLocalChanges(source, c, true)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading source workspace: %v\n", err)
+		os.Exit(1)
+	}
+	s, err := syncsvc.NewServer(appCfg.Server.DBPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening sync server: %v\n", err)
+		os.Exit(1)
+	}
+	defer s.Close()
+	s.SetBaseDir(targetDir)
+	if err := s.ResetV2Epoch(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error resetting v2 epoch: %v\n", err)
+		os.Exit(1)
+	}
+	epoch, err := s.Epoch()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating v2 epoch: %v\n", err)
+		os.Exit(1)
+	}
+	ops := make([]syncsvc.SyncOperation, 0, len(changes))
+	now := time.Now().UTC().UnixMilli()
+	for i, ch := range changes {
+		kind, target := ch.TargetKind, ch.ID
+		if target == "" {
+			target = ch.Path
+		}
+		del := strings.HasPrefix(ch.Op, "delete_")
+		ops = append(ops, syncsvc.SyncOperation{ID: fmt.Sprintf("seed-%d", i), Epoch: epoch, ActorID: "seed", Kind: kind, Target: target, Delete: del, Path: ch.Path, Version: syncsvc.HLC{PhysicalMS: now, Logical: int64(i), ActorID: "seed"}, Frontmatter: ch.Frontmatter, Body: ch.Body, Content: ch.Content, Hash: ch.Hash, MIME: ch.MIME, Size: ch.Size})
+	}
+	results, err := s.PushOperations("seed", ops)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error seeding v2 operations: %v\n", err)
+		os.Exit(1)
+	}
+	applied := 0
+	for _, result := range results {
+		if result.Status == "applied" {
+			applied++
+		}
+	}
+	fmt.Printf("Seeded v2 epoch %s from %s: %d/%d operations applied.\n", epoch, source, applied, len(ops))
 }
 
 func runServer(appCfg *config.AppConfig, dir string) {
@@ -178,6 +260,11 @@ func runServer(appCfg *config.AppConfig, dir string) {
 	mux.HandleFunc("POST /api/app/changes", h.AppChanges)
 	mux.HandleFunc("GET /api/app/sync/v2/bootstrap", h.AppSyncV2Bootstrap)
 	mux.HandleFunc("POST /api/app/sync/v2/push", h.AppSyncV2Push)
+	mux.HandleFunc("GET /api/app/sync/v2/pull", h.AppSyncV2Pull)
+	mux.HandleFunc("POST /api/app/sync/v2/ack", h.AppSyncV2Ack)
+	mux.HandleFunc("GET /api/app/sync/v2/devices", h.AppSyncV2Devices)
+	mux.HandleFunc("POST /api/app/sync/v2/devices/{id}/retire", h.AppSyncV2RetireDevice)
+	mux.HandleFunc("POST /api/app/sync/v2/compact", h.AppSyncV2Compact)
 	mux.HandleFunc("GET /api/app/configs", h.AppConfigs)
 	mux.HandleFunc("PUT /api/app/configs/{path}", h.AppConfigUpdate)
 	mux.HandleFunc("GET /api/app/sync-clients", h.AppSyncClients)

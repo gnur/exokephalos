@@ -668,4 +668,37 @@ This is a legacy body.
 	}
 }
 
-
+func TestSyncV2StateAndHLCPersist(t *testing.T) {
+	c, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := c.SetSyncV2State("epoch-a", 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ObserveSyncV2HLC(100, 4); err != nil {
+		t.Fatal(err)
+	}
+	p, l, err := c.NextSyncV2HLC("device")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p < 100 || (p == 100 && l != 5) {
+		t.Fatalf("next HLC = (%d,%d)", p, l)
+	}
+	epoch, cursor, _, _, err := c.SyncV2State()
+	if err != nil || epoch != "epoch-a" || cursor != 7 {
+		t.Fatalf("state = %q,%d,%v", epoch, cursor, err)
+	}
+	if err := c.EnqueueSyncV2Operation("op-1", `{}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EnqueueSyncV2Operation("op-1", `{}`); err != nil {
+		t.Fatal(err)
+	}
+	ops, err := c.PendingSyncV2Operations(10)
+	if err != nil || len(ops) != 1 {
+		t.Fatalf("operations = %#v, %v", ops, err)
+	}
+}

@@ -90,6 +90,31 @@ func TestV2RejectsWrongEpochWithoutBlockingOtherOperations(t *testing.T) {
 	}
 }
 
+func TestV2PullUsesCurrentProjectionAndAdvancesPastSupersededFeed(t *testing.T) {
+	s, err := NewServer(filepath.Join(t.TempDir(), "server.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	epoch, _ := s.Epoch()
+	first := SyncOperation{ID: "first", Epoch: epoch, ActorID: "a", Kind: "item", Target: "one", Path: "one.md", Version: HLC{PhysicalMS: 1, ActorID: "a"}, Frontmatter: map[string]interface{}{"id": "one", "type": "note"}, Body: "old"}
+	second := first
+	second.ID = "second"
+	second.Version.PhysicalMS = 2
+	second.Body = "new"
+	other := SyncOperation{ID: "other", Epoch: epoch, ActorID: "a", Kind: "item", Target: "two", Path: "two.md", Version: HLC{PhysicalMS: 3, ActorID: "a"}, Frontmatter: map[string]interface{}{"id": "two", "type": "note"}}
+	if _, err := s.PushOperations("a", []SyncOperation{first, second, other}); err != nil {
+		t.Fatal(err)
+	}
+	ops, cursor, err := s.PullOperations(0, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != 2 || ops[0].Body != "new" || cursor != 3 {
+		t.Fatalf("ops=%#v cursor=%d", ops, cursor)
+	}
+}
+
 func TestV2TombstoneCompactsOnlyAfterEveryActiveAcknowledgement(t *testing.T) {
 	s, err := NewServer(filepath.Join(t.TempDir(), "server.sqlite"))
 	if err != nil {

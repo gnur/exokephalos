@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/gnur/exokephalos/internal/assets"
 	"github.com/gnur/exokephalos/internal/id"
 	"github.com/gnur/exokephalos/internal/markdown"
@@ -39,9 +40,12 @@ type OutboxEntry struct {
 
 // Cache is a SQLite-backed cache of local markdown files and sync state.
 type Cache struct {
-	mu      sync.Mutex
-	db      *sql.DB
-	baseDir string
+	mu           sync.Mutex
+	db           *sql.DB
+	baseDir      string
+	watcher      *fsnotify.Watcher
+	stopWatch    chan struct{}
+	remoteWrites map[string]time.Time
 }
 
 // AssetMetadata is the local, syncable description of an image asset.
@@ -49,6 +53,13 @@ type AssetMetadata struct {
 	Path, Hash, MIME string
 	Size             int64
 	Deleted          bool
+}
+
+// V2Operation is a durable client-side sync operation. Payload is deliberately
+// opaque to the cache so protocol details remain owned by syncsvc.
+type V2Operation struct {
+	ID, Payload, Status string
+	Attempts            int
 }
 
 // New creates a SQLite-backed cache in baseDir/.exo/cache.sqlite and scans the
@@ -63,12 +74,16 @@ func New(baseDir string) (*Cache, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening cache sqlite: %w", err)
 	}
-	c := &Cache{db: db, baseDir: baseDir}
+	c := &Cache{db: db, baseDir: baseDir, stopWatch: make(chan struct{}), remoteWrites: make(map[string]time.Time)}
 	if err := c.migrate(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	if err := c.Sync(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := c.startWatcher(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -79,7 +94,92 @@ func (c *Cache) Close() error {
 	if c == nil || c.db == nil {
 		return nil
 	}
+	if c.stopWatch != nil {
+		close(c.stopWatch)
+		c.stopWatch = nil
+	}
+	if c.watcher != nil {
+		_ = c.watcher.Close()
+	}
 	return c.db.Close()
+}
+
+func (c *Cache) startWatcher() error {
+	w, err := fsnotify.NewWatcher()
+	if err != nil {
+		return err
+	}
+	c.watcher = w
+	if err := filepath.WalkDir(c.baseDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			return nil
+		}
+		if path != c.baseDir && (strings.HasPrefix(d.Name(), ".") || scanner.SkipDirs[d.Name()]) {
+			return filepath.SkipDir
+		}
+		return w.Add(path)
+	}); err != nil {
+		_ = w.Close()
+		return err
+	}
+	go c.watchFilesystem()
+	return nil
+}
+
+func (c *Cache) watchFilesystem() {
+	pending := map[string]struct{}{}
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-c.stopWatch:
+			return
+		case event, ok := <-c.watcher.Events:
+			if !ok {
+				return
+			}
+			if event.Op&fsnotify.Create != 0 {
+				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
+					_ = c.watcher.Add(event.Name)
+					continue
+				}
+			}
+			if filepath.Ext(event.Name) == ".md" {
+				pending[event.Name] = struct{}{}
+			}
+		case <-tick.C:
+			for path := range pending {
+				delete(pending, path)
+				c.mu.Lock()
+				until := c.remoteWrites[path]
+				if !until.IsZero() && time.Now().Before(until) {
+					c.mu.Unlock()
+					if _, err := os.Stat(path); err == nil {
+						_ = c.NotifyWriteNoOutbox(path)
+					} else {
+						_ = c.NotifyDeleteNoOutbox(path)
+					}
+					continue
+				}
+				delete(c.remoteWrites, path)
+				c.mu.Unlock()
+				if _, err := os.Stat(path); err == nil {
+					_ = c.NotifyWrite(path)
+				} else {
+					_ = c.NotifyDelete(path)
+				}
+			}
+		case <-c.watcher.Errors: // A later scan/reconcile repairs missed events.
+		}
+	}
+}
+
+// SuppressRemoteWrite prevents an incoming v2 projection update from being
+// immediately re-enqueued by the filesystem watcher.
+func (c *Cache) SuppressRemoteWrite(absPath string) {
+	c.mu.Lock()
+	c.remoteWrites[absPath] = time.Now().Add(2 * time.Second)
+	c.mu.Unlock()
 }
 
 func (c *Cache) DB() *sql.DB {
@@ -132,6 +232,15 @@ func (c *Cache) migrate() error {
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS sync_v2_operations (
+			id TEXT PRIMARY KEY,
+			payload TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			attempts INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sync_v2_operations_status ON sync_v2_operations(status, created_at)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := c.db.Exec(stmt); err != nil {
@@ -139,6 +248,115 @@ func (c *Cache) migrate() error {
 		}
 	}
 	return nil
+}
+
+// SyncV2State returns the durable epoch, feed cursor, and local HLC state.
+func (c *Cache) SyncV2State() (epoch string, cursor, physical, logical int64, err error) {
+	epoch, err = c.Meta("sync_v2_epoch")
+	if err != nil {
+		return
+	}
+	for _, pair := range []struct {
+		key string
+		dst *int64
+	}{{"sync_v2_cursor", &cursor}, {"sync_v2_hlc_physical", &physical}, {"sync_v2_hlc_logical", &logical}} {
+		var raw string
+		raw, err = c.Meta(pair.key)
+		if err != nil {
+			return
+		}
+		if raw != "" {
+			_, err = fmt.Sscan(raw, pair.dst)
+			if err != nil {
+				return
+			}
+		}
+	}
+	return
+}
+
+func (c *Cache) SetSyncV2State(epoch string, cursor int64) error {
+	if err := c.SetMeta("sync_v2_epoch", epoch); err != nil {
+		return err
+	}
+	return c.SetMeta("sync_v2_cursor", fmt.Sprint(cursor))
+}
+
+// NextSyncV2HLC advances a persisted hybrid logical clock. Call Observe for
+// every accepted remote version so future local operations cannot go backward.
+func (c *Cache) NextSyncV2HLC(actor string) (physical, logical int64, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var p, l int64
+	_, _ = fmt.Sscan(c.metaLocked("sync_v2_hlc_physical"), &p)
+	_, _ = fmt.Sscan(c.metaLocked("sync_v2_hlc_logical"), &l)
+	now := time.Now().UTC().UnixMilli()
+	if now > p {
+		p, l = now, 0
+	} else {
+		l++
+	}
+	err = c.setMetaLocked("sync_v2_hlc_physical", fmt.Sprint(p))
+	if err == nil {
+		err = c.setMetaLocked("sync_v2_hlc_logical", fmt.Sprint(l))
+	}
+	return p, l, err
+}
+
+func (c *Cache) ObserveSyncV2HLC(physical, logical int64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var p, l int64
+	_, _ = fmt.Sscan(c.metaLocked("sync_v2_hlc_physical"), &p)
+	_, _ = fmt.Sscan(c.metaLocked("sync_v2_hlc_logical"), &l)
+	if physical > p || (physical == p && logical > l) {
+		p, l = physical, logical
+	}
+	if err := c.setMetaLocked("sync_v2_hlc_physical", fmt.Sprint(p)); err != nil {
+		return err
+	}
+	return c.setMetaLocked("sync_v2_hlc_logical", fmt.Sprint(l))
+}
+
+func (c *Cache) metaLocked(key string) string {
+	var v string
+	_ = c.db.QueryRow(`SELECT value FROM meta WHERE key=?`, key).Scan(&v)
+	return v
+}
+func (c *Cache) setMetaLocked(key, value string) error {
+	_, err := c.db.Exec(`INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
+	return err
+}
+
+func (c *Cache) EnqueueSyncV2Operation(id, payload string) error {
+	_, err := c.db.Exec(`INSERT INTO sync_v2_operations(id,payload,status,created_at) VALUES(?,?,'pending',?) ON CONFLICT(id) DO NOTHING`, id, payload, time.Now().UTC().Format(time.RFC3339Nano))
+	return err
+}
+func (c *Cache) PendingSyncV2Operations(limit int) ([]V2Operation, error) {
+	rows, err := c.db.Query(`SELECT id,payload,status,attempts FROM sync_v2_operations WHERE status IN ('pending','failed') ORDER BY created_at LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []V2Operation
+	for rows.Next() {
+		var op V2Operation
+		if err := rows.Scan(&op.ID, &op.Payload, &op.Status, &op.Attempts); err != nil {
+			return nil, err
+		}
+		out = append(out, op)
+	}
+	return out, rows.Err()
+}
+func (c *Cache) MarkSyncV2Operation(id, status, failure string) error {
+	_, err := c.db.Exec(`UPDATE sync_v2_operations SET status=?, attempts=attempts+CASE WHEN ?='failed' THEN 1 ELSE 0 END, last_error=? WHERE id=?`, status, status, failure, id)
+	return err
+}
+
+// RetireLegacyOutbox makes the server-authoritative v2 upgrade explicit.
+func (c *Cache) RetireLegacyOutbox() error {
+	_, err := c.db.Exec(`UPDATE outbox SET status='retired', last_error='retired by sync v2 upgrade' WHERE status IN ('pending','failed')`)
+	return err
 }
 
 // Sync scans markdown files, updates SQLite, and tombstones rows whose files

@@ -97,6 +97,17 @@ export type SyncOperation = {
 
 export type SyncDevice = { id: string; label: string; logical: number; physical_ms: number };
 
+export type SyncOutboxOperation = {
+  id: string;
+  source_id: string;
+  operation: SyncOperation;
+  status: OutboxStatus;
+  attempts: number;
+  error?: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type SyncClient = {
   id: string;
   label: string;

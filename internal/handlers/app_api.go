@@ -191,6 +191,91 @@ func (h *Handlers) AppSyncV2Bootstrap(w http.ResponseWriter, r *http.Request) {
 	writeAppJSON(w, map[string]interface{}{"protocol": syncsvc.SyncProtocolVersion, "epoch": epoch, "cursor": cursor, "operations": ops})
 }
 
+func (h *Handlers) AppSyncV2Pull(w http.ResponseWriter, r *http.Request) {
+	if h.SyncServer == nil {
+		writeAPIError(w, "sync server is not enabled", http.StatusNotFound)
+		return
+	}
+	cursor, err := strconv.ParseInt(r.URL.Query().Get("cursor"), 10, 64)
+	if err != nil || cursor < 0 {
+		writeAPIError(w, "invalid cursor", http.StatusBadRequest)
+		return
+	}
+	ops, next, err := h.SyncServer.PullOperations(cursor, 0)
+	if err != nil {
+		writeAPIError(w, "reading sync operations", 500)
+		return
+	}
+	writeAppJSON(w, map[string]interface{}{"cursor": next, "operations": ops})
+}
+
+func (h *Handlers) AppSyncV2Ack(w http.ResponseWriter, r *http.Request) {
+	if h.SyncServer == nil {
+		writeAPIError(w, "sync server is not enabled", http.StatusNotFound)
+		return
+	}
+	actor := strings.TrimSpace(r.Header.Get("X-Exo-Device-ID"))
+	if actor == "" {
+		writeAPIError(w, "missing browser device identity", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Cursor int64 `json:"cursor"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Cursor < 0 {
+		writeAPIError(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if err := h.SyncServer.Acknowledge(actor, req.Cursor); err != nil {
+		writeAPIError(w, "acknowledging sync operations", 500)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handlers) AppSyncV2Devices(w http.ResponseWriter, r *http.Request) {
+	if h.SyncServer == nil {
+		writeAPIError(w, "sync server is not enabled", http.StatusNotFound)
+		return
+	}
+	devices, err := h.SyncServer.SyncDevices()
+	if err != nil {
+		writeAPIError(w, "reading sync devices", 500)
+		return
+	}
+	writeAppJSON(w, map[string]interface{}{"devices": devices})
+}
+
+func (h *Handlers) AppSyncV2RetireDevice(w http.ResponseWriter, r *http.Request) {
+	if h.SyncServer == nil {
+		writeAPIError(w, "sync server is not enabled", http.StatusNotFound)
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		writeAPIError(w, "missing device", 400)
+		return
+	}
+	if err := h.SyncServer.RetireDevice(id); err != nil {
+		writeAPIError(w, "retiring sync device", 500)
+		return
+	}
+	writeAppJSON(w, map[string]bool{"ok": true})
+}
+
+func (h *Handlers) AppSyncV2Compact(w http.ResponseWriter, r *http.Request) {
+	if h.SyncServer == nil {
+		writeAPIError(w, "sync server is not enabled", http.StatusNotFound)
+		return
+	}
+	n, err := h.SyncServer.CompactTombstones()
+	if err != nil {
+		writeAPIError(w, "compacting tombstones", 500)
+		return
+	}
+	writeAppJSON(w, map[string]int64{"compacted": n})
+}
+
 func (h *Handlers) AppSyncClients(w http.ResponseWriter, r *http.Request) {
 	if h.SyncServer == nil {
 		writeAppJSON(w, map[string]interface{}{"clients": []syncsvc.Client{}})

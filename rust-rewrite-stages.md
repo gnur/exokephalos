@@ -9,8 +9,8 @@ A stage is complete only when every task and its exit gate are checked.
 - Stage 1 is in progress: validation and immutable revision operations exist; shared service APIs, helpers, and Go-generated crypto fixtures remain.
 - Stage 2 is in progress: all implementation tasks now pass, including verified asset projection and a 278-note clean round trip; the exit gate remains open until synchronized legacy configuration also round-trips.
 - Stage 3 is complete: native peers converge across partitions and restarts, retain conflicts, and resume verified partial Blob transfers.
-- Stage 4 is in progress: verified backup/restore, signed retirement cutoffs, structured operations, and core operator and relay commands exist; namespace rotation remains.
-- Stages 4–10 retain only the previously listed foundations and placeholders.
+- Stage 4 is complete: central-peer operations, backup/restore, signed retirement, and namespace rotation/reinvitation pass their security and recovery scenarios.
+- Stages 5–10 retain only the previously listed foundations and placeholders.
 
 ## Stage 0 — Architecture and compatibility proof
 
@@ -103,14 +103,22 @@ A stage is complete only when every task and its exit gate are checked.
 - [x] Add invitation, device-list, retirement, and diagnostics commands to `xo-admin`.
 - [x] Add relay administration commands to `xo-admin`.
 - [x] Enforce signed normal-retirement cutoffs while reading author records.
-- [ ] Implement hard revocation through namespace rotation and reinvitation.
+- [x] Implement hard revocation through namespace rotation and reinvitation.
 - [x] Implement verified backup creation.
 - [x] Implement restore into a clean state directory.
 - [x] Verify restored peers can serve every referenced Blob and rejoin active peers.
 
 **Exit gate**
 
-- [ ] A clean machine restores a backup, serves all blobs, converges with an active peer, and ignores post-retirement writes.
+- [x] A clean machine restores a backup, serves all blobs, converges with an active peer, and ignores post-retirement writes.
+
+### Stage 4 test coverage
+
+- `verified_backup_restores_exact_bytes_and_rejects_corruption` verifies every manifest size and BLAKE3 digest, restores identical bytes, and rejects a corrupted payload.
+- `restored_peer_serves_blobs_and_rejoins_an_active_peer` restores a clean peer, reads its backed-up Blob, reconnects it, confirms a later signed revision physically replicated, and proves the retirement cutoff keeps the earlier accepted revision visible.
+- `signed_retirement_ignores_later_writes_and_retains_history` creates an offline post-cutoff write, reconnects both peers, and proves the signed write is retained in transport but excluded from resolution.
+- `rotation_reinvites_active_peer_and_excludes_retired_peer` checkpoints accepted notes, assets, and configuration into a fresh namespace, reinvites an active peer, denies the retired peer access, and proves writes to the archived namespace cannot enter the rotated namespace.
+- The `xo-syncd` operator tests verify token creation and reuse, reject weak tokens, require authentication for status and metrics, validate Prometheus output, and exercise the live HTTP listener.
 
 ## Stage 5 — Steel workspace behavior
 

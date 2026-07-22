@@ -223,12 +223,16 @@ fn set_mode(_path: &Path, _mode: Option<u32>) -> Result<(), std::io::Error> {
 mod tests {
     use super::*;
     #[cfg(feature = "iroh-sync")]
+    use std::collections::BTreeSet;
+    #[cfg(feature = "iroh-sync")]
     use std::time::Duration;
 
     #[cfg(feature = "iroh-sync")]
     use crate::iroh_node::IrohNode;
     #[cfg(feature = "iroh-sync")]
     use crate::records::WorkspaceRecords;
+    #[cfg(feature = "iroh-sync")]
+    use crate::{ActorId, CURRENT_SCHEMA, DeviceRecord, Hlc, NoteId, NoteRevision, RevisionId};
 
     #[test]
     fn verified_backup_restores_exact_bytes_and_rejects_corruption() {
@@ -271,15 +275,93 @@ mod tests {
     }
 
     #[cfg(feature = "iroh-sync")]
+    async fn wait_for_device(
+        records: WorkspaceRecords<'_>,
+        author: &ActorId,
+    ) -> anyhow::Result<DeviceRecord> {
+        for _ in 0..100 {
+            match records.list_devices().await {
+                Ok(devices) => {
+                    if let Some(device) = devices
+                        .into_iter()
+                        .find(|device| &device.author_id == author)
+                    {
+                        return Ok(device);
+                    }
+                }
+                Err(crate::records::RecordError::Transport(_)) => {}
+                Err(error) => return Err(error.into()),
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        anyhow::bail!("device did not become available")
+    }
+
+    #[cfg(feature = "iroh-sync")]
+    fn revision(
+        actor: ActorId,
+        body: &str,
+        physical_ms: u64,
+        predecessor: Option<RevisionId>,
+    ) -> NoteRevision {
+        NoteRevision {
+            schema: CURRENT_SCHEMA,
+            note_id: NoteId::new("note002"),
+            frontmatter: crate::domain::Frontmatter::new(),
+            body: body.to_owned(),
+            materialized_path: "notes/restored.md".to_owned(),
+            hlc: Hlc {
+                physical_ms,
+                logical: 0,
+                actor_id: actor.clone(),
+            },
+            author_id: actor,
+            predecessors: predecessor.into_iter().collect(),
+            deleted: false,
+        }
+    }
+
+    #[cfg(feature = "iroh-sync")]
+    async fn wait_for_raw_record(
+        workspace: &crate::iroh_node::IrohWorkspace,
+        key: &str,
+    ) -> anyhow::Result<()> {
+        for _ in 0..100 {
+            match workspace.get(key).await {
+                Ok(Some(_)) => return Ok(()),
+                Ok(None) | Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+            }
+        }
+        anyhow::bail!("raw record did not replicate")
+    }
+
+    #[cfg(feature = "iroh-sync")]
     #[tokio::test]
     async fn restored_peer_serves_blobs_and_rejoins_an_active_peer() -> anyhow::Result<()> {
         let _guard = crate::iroh_node::IROH_TEST_LOCK.lock().await;
 
         let directory = tempfile::tempdir()?;
-        let active = IrohNode::persistent(directory.path().join("active")).await?;
+        let active_dir = directory.path().join("active");
+        let active = IrohNode::persistent(&active_dir).await?;
         let workspace = active.create_workspace().await?;
         let workspace_id = workspace.id();
-        WorkspaceRecords::new(&workspace)
+        let active_records = WorkspaceRecords::new(&workspace);
+        let active_author = active_records.actor_id();
+        active_records
+            .put_device(&DeviceRecord {
+                schema: CURRENT_SCHEMA,
+                endpoint_id: active.endpoint_id().to_string(),
+                author_id: active_author.clone(),
+                label: "active".to_owned(),
+                capabilities: BTreeSet::from(["write".to_owned()]),
+                last_seen_ms: Some(100),
+                retired_at: None,
+            })
+            .await?;
+        let before_id = active_records
+            .commit_revision(&revision(active_author.clone(), "accepted", 100, None))
+            .await?;
+        active_records
             .put_asset(
                 crate::AssetId::new("image001"),
                 "image/png",
@@ -291,10 +373,17 @@ mod tests {
         let replica_dir = directory.path().join("replica");
         let replica = IrohNode::persistent(&replica_dir).await?;
         let imported = replica.import_workspace(&ticket).await?;
-        assert_eq!(
-            wait_for_asset(WorkspaceRecords::new(&imported)).await?,
-            b"backed up blob"
-        );
+        let replica_records = WorkspaceRecords::new(&imported);
+        assert_eq!(wait_for_asset(replica_records).await?, b"backed up blob");
+        let mut active_device = wait_for_device(replica_records, &active_author).await?;
+        active.shutdown().await?;
+        drop((workspace, active));
+        active_device.retired_at = Some(Hlc {
+            physical_ms: 200,
+            logical: 0,
+            actor_id: replica_records.actor_id(),
+        });
+        replica_records.put_device(&active_device).await?;
         replica.shutdown().await?;
         drop((imported, replica));
 
@@ -312,19 +401,43 @@ mod tests {
             b"backed up blob"
         );
 
+        let active = IrohNode::persistent(&active_dir).await?;
+        let workspace = active
+            .open_workspace(workspace_id)
+            .await?
+            .expect("active workspace");
+        let after_id = WorkspaceRecords::new(&workspace)
+            .commit_revision(&revision(
+                active_author,
+                "rejected after retirement",
+                300,
+                Some(before_id.clone()),
+            ))
+            .await?;
         workspace.put("health/rejoin", "connected").await?;
         restored_workspace
             .start_sync(&workspace.share(true).await?)
             .await?;
         let mut rejoined = false;
-        for _ in 0..100 {
-            if restored_workspace.get("health/rejoin").await?.is_some() {
+        for _ in 0..200 {
+            if let Ok(Some(_)) = restored_workspace.get("health/rejoin").await {
                 rejoined = true;
                 break;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         assert!(rejoined);
+        wait_for_raw_record(
+            &restored_workspace,
+            &format!("note/note002/revision/{after_id}"),
+        )
+        .await?;
+        let resolved = WorkspaceRecords::new(&restored_workspace)
+            .load_note(&NoteId::new("note002"))
+            .await?
+            .expect("retained pre-retirement note");
+        assert_eq!(resolved.winning_revision, before_id);
+        assert_eq!(resolved.visible.expect("visible note").body, "accepted");
         restored.shutdown().await?;
         active.shutdown().await?;
         Ok(())

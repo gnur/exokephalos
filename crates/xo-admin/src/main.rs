@@ -54,6 +54,11 @@ enum Command {
         workspace: String,
         endpoint: String,
     },
+    /// Checkpoint accepted state into a fresh namespace and print reinvitations.
+    RotateNamespace {
+        state_dir: PathBuf,
+        workspace: String,
+    },
     /// Print record and projection diagnostics for a workspace.
     Diagnostics {
         state_dir: PathBuf,
@@ -136,6 +141,12 @@ async fn main() -> Result<()> {
             endpoint,
         } => {
             retire_device(&state_dir, &workspace, &endpoint).await?;
+        }
+        Command::RotateNamespace {
+            state_dir,
+            workspace,
+        } => {
+            rotate_namespace(&state_dir, &workspace).await?;
         }
         Command::Diagnostics {
             state_dir,
@@ -226,6 +237,32 @@ async fn retire_device(state_dir: &Path, workspace_id: &str, endpoint: &str) -> 
     device.retired_at = Some(HlcClock::new(records.actor_id()).next(wall_clock_ms));
     records.put_device(&device).await?;
     println!("retired={endpoint}");
+    node.shutdown().await?;
+    Ok(())
+}
+
+async fn rotate_namespace(state_dir: &Path, workspace_id: &str) -> Result<()> {
+    let node = IrohNode::persistent(state_dir).await?;
+    let workspace = node
+        .open_workspace_str(workspace_id)
+        .await?
+        .context("workspace is not present in this peer")?;
+    let wall_clock_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before Unix epoch")?
+        .as_millis()
+        .try_into()
+        .context("system time does not fit in an HLC timestamp")?;
+    let rotation = xo_core::rotation::rotate_workspace(&node, &workspace, wall_clock_ms).await?;
+    println!("archived_workspace_id={}", rotation.archived_workspace_id);
+    println!("workspace_id={}", rotation.workspace_id);
+    println!("ticket={}", rotation.writable_ticket);
+    println!("migrated_notes={}", rotation.migrated_notes);
+    println!("migrated_assets={}", rotation.migrated_assets);
+    println!("migrated_configs={}", rotation.migrated_configs);
+    for endpoint in rotation.reinvite_endpoints {
+        println!("reinvite_endpoint={endpoint}");
+    }
     node.shutdown().await?;
     Ok(())
 }

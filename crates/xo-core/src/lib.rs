@@ -13,6 +13,8 @@ pub mod projection;
 #[cfg(feature = "iroh-sync")]
 pub mod records;
 pub mod resolution;
+#[cfg(feature = "iroh-sync")]
+pub mod rotation;
 pub mod sync_state;
 pub mod watcher;
 pub mod wikilink;

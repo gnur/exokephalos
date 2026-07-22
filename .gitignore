@@ -29,3 +29,6 @@ oldcodebase/__pycache__/
 oldcodebase/plugin-scripts/
 oldcodebase/test-results
 oldcodebase/web/dist
+
+/target/
+/.exo/

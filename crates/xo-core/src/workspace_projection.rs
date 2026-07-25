@@ -259,7 +259,7 @@ impl<'a> WorkspaceProjection<'a> {
 }
 
 fn is_config_path(path: &str) -> bool {
-    path == "exo.scm"
+    matches!(path, "xo.scm" | "exo.scm")
         || (path.starts_with("modules/")
             && Path::new(path)
                 .extension()

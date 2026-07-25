@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use xo_core::behavior::WorkspaceBehavior;
+use xo_core::behavior::{Predicate, ViewDescriptor, WorkspaceBehavior};
 use xo_core::iroh_node::{IrohNode, IrohWorkspace};
 use xo_core::projection::ProjectionState;
 use xo_core::records::{WorkspaceRecords, WorkspaceSnapshot};
@@ -65,29 +65,51 @@ impl WorkspaceSession {
         Ok(snapshot)
     }
 
-    pub async fn behavior(&self) -> Result<WorkspaceBehavior> {
-        let configs = WorkspaceRecords::new(&self.workspace)
-            .list_configs()
-            .await?;
+    pub async fn behavior(&mut self) -> Result<WorkspaceBehavior> {
+        let records = WorkspaceRecords::new(&self.workspace);
+        let configs = records.list_configs().await?;
         let mut modules = BTreeMap::new();
-        let mut main = None;
-        for config in configs {
-            let source = String::from_utf8(config.bytes)
+        let mut xo_main = None;
+        let mut legacy_main = None;
+        for config in &configs {
+            let source = String::from_utf8(config.bytes.clone())
                 .with_context(|| format!("configuration {} is not UTF-8", config.record.path))?;
-            if config.record.path == "exo.scm" {
-                main = Some(source);
-            } else {
-                modules.insert(config.record.path, source);
+            match config.record.path.as_str() {
+                "xo.scm" => xo_main = Some(source),
+                "exo.scm" => legacy_main = Some(source),
+                _ => {
+                    modules.insert(config.record.path.clone(), source);
+                }
             }
         }
-        match main {
-            Some(source) => Ok(xo_core::steel_runtime::SteelWorkspace::load(
+        let mut behavior = match xo_main.or(legacy_main) {
+            Some(source) => xo_core::steel_runtime::SteelWorkspace::load(
                 &source,
                 &modules,
                 "1970-01-01T00:00:00Z",
-            )?),
-            None => Ok(WorkspaceBehavior::default()),
+            )?,
+            None => WorkspaceBehavior::default(),
+        };
+        if behavior.views.is_empty() {
+            behavior.default_view = "notes".into();
+            behavior.views = default_views();
+            let predecessors = configs
+                .iter()
+                .find(|config| config.record.path == "xo.scm")
+                .map(|config| BTreeSet::from([config.revision_id.clone()]))
+                .unwrap_or_default();
+            records
+                .put_config(
+                    "xo.scm",
+                    xo_core::steel_runtime::encode_config(&behavior, false).into_bytes(),
+                    self.clock.next(now_ms()?),
+                    predecessors,
+                )
+                .await?;
+            self.projection
+                .reconcile_configs(&records.list_configs().await?)?;
         }
+        Ok(behavior)
     }
 
     pub async fn save(&mut self, note: &Note) -> Result<RevisionId> {
@@ -153,6 +175,40 @@ impl WorkspaceSession {
     pub async fn shutdown(self) -> Result<()> {
         self.node.shutdown().await
     }
+}
+
+fn default_views() -> Vec<ViewDescriptor> {
+    vec![
+        ViewDescriptor {
+            id: "notes".into(),
+            name: "Notes".into(),
+            key: Some("n".into()),
+            show_tags: true,
+            title_field: "title".into(),
+            subtitle_field: None,
+            sort_field: Some("created".into()),
+            descending: true,
+            preview: None,
+            predicate: Predicate::FieldEquals {
+                field: "type".into(),
+                value: "note".into(),
+            },
+            subviews: vec![],
+        },
+        ViewDescriptor {
+            id: "all".into(),
+            name: "All".into(),
+            key: Some("0".into()),
+            show_tags: true,
+            title_field: "title".into(),
+            subtitle_field: Some("type".into()),
+            sort_field: Some("created".into()),
+            descending: true,
+            preview: None,
+            predicate: Predicate::Always,
+            subviews: vec![],
+        },
+    ]
 }
 
 async fn select_workspace(
@@ -243,6 +299,33 @@ mod tests {
             workspace_id
         );
         reopened.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn missing_views_create_default_xo_config_in_projection() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state = directory.path().join("state");
+        let projection = directory.path().join("notes");
+        let mut session = WorkspaceSession::open(&state, None, None, projection.clone()).await?;
+
+        let behavior = session.behavior().await?;
+
+        assert_eq!(behavior.default_view, "notes");
+        assert_eq!(
+            behavior
+                .views
+                .iter()
+                .map(|view| view.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["notes", "all"]
+        );
+        assert!(projection.join("xo.scm").is_file());
+        let configs = WorkspaceRecords::new(&session.workspace)
+            .list_configs()
+            .await?;
+        assert!(configs.iter().any(|config| config.record.path == "xo.scm"));
+        session.shutdown().await?;
         Ok(())
     }
 

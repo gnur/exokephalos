@@ -6,7 +6,7 @@ use std::io::{self, stdout};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use app::{App, Mode, external_edit_with, render};
+use app::{App, Mode, external_edit_with, render, required_frontmatter};
 use clap::{Parser, Subcommand};
 use config::{CliOverrides, XoConfig, config_path, home_dir};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -18,8 +18,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use session::WorkspaceSession;
 use time::OffsetDateTime;
-use xo_core::behavior::TemplateInputs;
-use xo_core::domain::{Frontmatter, FrontmatterValue};
+use xo_core::domain::Frontmatter;
 use xo_core::{Note, NoteId};
 use zeroize::Zeroizing;
 
@@ -99,10 +98,10 @@ async fn run_tui(
     projection: PathBuf,
 ) -> Result<()> {
     let mut session = WorkspaceSession::open(state_dir, workspace, ticket, projection).await?;
-    let snapshot = session.snapshot().await?;
     let behavior = session.behavior().await?;
+    let snapshot = session.snapshot().await?;
     let mut app = App::new(behavior, snapshot.notes.clone());
-    app.message = format!("workspace {}", session.workspace_id());
+    app.workspace_id = session.workspace_id();
     hydrate(&mut app, &session, snapshot).await?;
     enable_raw_mode()?;
     execute!(stdout(), EnterAlternateScreen)?;
@@ -166,8 +165,59 @@ async fn event_loop(
                 KeyCode::Esc | KeyCode::Enter => app.mode = Mode::Normal,
                 KeyCode::Backspace => {
                     app.search.pop();
+                    app.selected = 0;
                 }
-                KeyCode::Char(value) => app.search.push(value),
+                KeyCode::Char(value) => {
+                    app.search.push(value);
+                    app.selected = 0;
+                }
+                _ => {}
+            },
+            Mode::CreateTitle => match key.code {
+                KeyCode::Esc => {
+                    app.create_title.clear();
+                    app.mode = Mode::Normal;
+                }
+                KeyCode::Backspace => {
+                    app.create_title.pop();
+                }
+                KeyCode::Enter => {
+                    let title = app.create_title.trim().to_owned();
+                    if title.is_empty() {
+                        app.message = "a title is required".into();
+                    } else {
+                        app.create_title.clear();
+                        app.mode = Mode::Normal;
+                        suspend_tui(terminal)?;
+                        let create_result = create_note(app, session, &title).await;
+                        resume_tui(terminal)?;
+                        create_result?;
+                    }
+                }
+                KeyCode::Char(value) => app.create_title.push(value),
+                _ => {}
+            },
+            Mode::ViewPicker => match key.code {
+                KeyCode::Esc => app.mode = Mode::Normal,
+                KeyCode::Enter => {
+                    app.choose_view();
+                    app.mode = Mode::Normal;
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let last = app.view_choices().len().saturating_sub(1);
+                    app.view_picker_index = (app.view_picker_index + 1).min(last);
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    app.view_picker_index = app.view_picker_index.saturating_sub(1);
+                }
+                KeyCode::Backspace => {
+                    app.view_query.pop();
+                    app.view_picker_index = 0;
+                }
+                KeyCode::Char(value) => {
+                    app.view_query.push(value);
+                    app.view_picker_index = 0;
+                }
                 _ => {}
             },
             Mode::ActionPicker => match key.code {
@@ -191,11 +241,24 @@ async fn event_loop(
                 KeyCode::Char('q') => break,
                 KeyCode::Tab => app.next_pane(),
                 KeyCode::BackTab => app.previous_pane(),
-                KeyCode::Down | KeyCode::Char('j') => app.select_next(),
-                KeyCode::Up | KeyCode::Char('k') => app.select_previous(),
+                KeyCode::Down | KeyCode::Char('j') => match app.pane {
+                    app::Pane::Tags => app.select_next_tag(),
+                    _ => app.select_next(),
+                },
+                KeyCode::Up | KeyCode::Char('k') => match app.pane {
+                    app::Pane::Tags => app.select_previous_tag(),
+                    _ => app.select_previous(),
+                },
+                KeyCode::Char(' ') | KeyCode::Enter if app.pane == app::Pane::Tags => {
+                    app.toggle_highlighted_tag();
+                }
                 KeyCode::Char('/') => {
-                    app.search.clear();
                     app.mode = Mode::Search;
+                }
+                KeyCode::Char(':') => {
+                    app.view_query.clear();
+                    app.view_picker_index = 0;
+                    app.mode = Mode::ViewPicker;
                 }
                 KeyCode::Char('a') => {
                     app.action_query.clear();
@@ -203,10 +266,7 @@ async fn event_loop(
                 }
                 KeyCode::Char('s') => app.toggle_sort(),
                 KeyCode::Char('t') => {
-                    let tags = selected_tags(app);
-                    for tag in tags {
-                        app.toggle_tag(&tag);
-                    }
+                    app.pane = app::Pane::Tags;
                 }
                 KeyCode::Char(']') => cycle_subview(app),
                 KeyCode::Char('x') => {
@@ -233,8 +293,16 @@ async fn event_loop(
                         app.message = format!("queued retry {}", operation.id);
                     }
                 }
-                KeyCode::Char('c') => create_note(app, session).await?,
-                KeyCode::Char('e') => edit_note(app, session).await?,
+                KeyCode::Char('c') => {
+                    app.create_title.clear();
+                    app.mode = Mode::CreateTitle;
+                }
+                KeyCode::Char('e') | KeyCode::Enter => {
+                    suspend_tui(terminal)?;
+                    let edit_result = edit_note(app, session).await;
+                    resume_tui(terminal)?;
+                    edit_result?;
+                }
                 KeyCode::Char('d') => {
                     if let Some(note) = app.selected_note().cloned() {
                         session.delete(&note).await?;
@@ -261,7 +329,12 @@ async fn event_loop(
                         app.message = format!("retired device {}", device.endpoint_id);
                     }
                 }
-                KeyCode::Char('p') => unlock(app)?,
+                KeyCode::Char('p') => {
+                    suspend_tui(terminal)?;
+                    let unlock_result = unlock(app);
+                    resume_tui(terminal)?;
+                    unlock_result?;
+                }
                 KeyCode::Char(value) if key.modifiers.is_empty() => {
                     if let Some(view) = app
                         .behavior
@@ -286,34 +359,48 @@ async fn event_loop(
     Ok(())
 }
 
-async fn create_note(app: &mut App, session: &mut WorkspaceSession) -> Result<()> {
+async fn create_note(app: &mut App, session: &mut WorkspaceSession, title: &str) -> Result<()> {
     let instant = OffsetDateTime::now_utc();
-    let id = xo_core::id::generate(instant);
-    let path = format!("notes/{id}.md");
-    let note = if let Some(template) = app.behavior.templates.first() {
-        let inputs = TemplateInputs::deterministic(
-            instant,
-            id.clone(),
-            id.clone(),
-            std::collections::BTreeMap::default(),
-        )?;
-        app.create_from_template(&template.id.clone(), &inputs, path)?
-    } else {
-        let note = Note {
-            id: NoteId::new(id.clone()),
-            frontmatter: Frontmatter::from([
-                ("id".into(), FrontmatterValue::String(id.clone())),
-                ("title".into(), FrontmatterValue::String("Untitled".into())),
-            ]),
-            body: String::new(),
-            path,
-        };
-        app.notes.push(note.clone());
-        note
+    let mut note = new_note_draft(instant, title)?;
+    let initial = xo_core::markdown::render(&note.frontmatter, &note.body)?;
+    let editor = std::env::var_os("EDITOR").unwrap_or_else(|| "vi".into());
+    let bytes = external_edit_with(&editor, &[], initial.as_bytes())?;
+    let parsed = xo_core::markdown::parse(&String::from_utf8(bytes)?)?;
+    let created = match note.frontmatter.get("created") {
+        Some(xo_core::domain::FrontmatterValue::String(value)) => value.clone(),
+        _ => unreachable!("new note drafts always have a creation timestamp"),
     };
+    note.frontmatter = required_frontmatter(
+        parsed.frontmatter.unwrap_or_default(),
+        note.id.as_str(),
+        &created,
+    );
+    note.body = parsed.body;
+    app.search.clear();
+    app.selected_tags.clear();
+    app.set_view("all");
+    app.add_note(note.clone());
     session.save(&note).await?;
     app.message = format!("created {}", note.id);
     Ok(())
+}
+
+fn new_note_draft(instant: OffsetDateTime, title: &str) -> Result<Note> {
+    use time::format_description::well_known::Rfc3339;
+
+    let created = instant.format(&Rfc3339)?;
+    let id = xo_core::id::generate(instant);
+    let mut frontmatter = Frontmatter::new();
+    frontmatter.insert(
+        "title".into(),
+        xo_core::domain::FrontmatterValue::String(title.into()),
+    );
+    Ok(Note {
+        id: NoteId::new(id.clone()),
+        frontmatter: required_frontmatter(frontmatter, &id, &created),
+        body: String::new(),
+        path: format!("notes/{id}.md"),
+    })
 }
 
 async fn edit_note(app: &mut App, session: &mut WorkspaceSession) -> Result<()> {
@@ -345,31 +432,21 @@ fn unlock(app: &mut App) -> Result<()> {
     Ok(())
 }
 fn password(prompt: &str) -> Result<Zeroizing<String>> {
-    disable_raw_mode()?;
-    let result = rpassword::prompt_password(prompt).map(Zeroizing::new);
-    enable_raw_mode()?;
-    Ok(result?)
+    Ok(Zeroizing::new(rpassword::prompt_password(prompt)?))
 }
-fn selected_tags(app: &App) -> Vec<String> {
-    app.selected_note()
-        .and_then(|note| note.frontmatter.get("tags"))
-        .map_or_else(Vec::new, |value| match value {
-            FrontmatterValue::Sequence(values) => values
-                .iter()
-                .filter_map(|value| {
-                    if let FrontmatterValue::String(value) = value {
-                        Some(value.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect(),
-            FrontmatterValue::String(value) => value
-                .split(',')
-                .map(|value| value.trim().to_owned())
-                .collect(),
-            _ => vec![],
-        })
+
+fn suspend_tui(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+    Ok(())
+}
+
+fn resume_tui(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
+    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    enable_raw_mode()?;
+    terminal.clear()?;
+    Ok(())
 }
 fn cycle_subview(app: &mut App) {
     let Some(view) = app
@@ -475,5 +552,21 @@ mod cli_tests {
             cli.projection.as_deref(),
             Some(std::path::Path::new("/notes"))
         );
+    }
+
+    #[test]
+    fn new_note_draft_uses_the_prompted_title_and_required_frontmatter() {
+        let instant = OffsetDateTime::from_unix_timestamp(1_750_000_000).unwrap();
+        let note = new_note_draft(instant, "My title").unwrap();
+        assert_eq!(
+            note.frontmatter.get("title"),
+            Some(&xo_core::domain::FrontmatterValue::String(
+                "My title".into()
+            ))
+        );
+        for field in ["id", "created", "tags", "title", "type"] {
+            assert!(note.frontmatter.contains_key(field));
+        }
+        assert!(note.body.is_empty());
     }
 }

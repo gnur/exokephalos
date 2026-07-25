@@ -1,6 +1,6 @@
 //! Sandboxed Steel configuration loader.
 //!
-//! `exo.scm` evaluates to `(workspace-config "<descriptor-json>")`. Optional
+//! `xo.scm` (or legacy `exo.scm`) evaluates to a workspace descriptor. Optional
 //! `modules/**/*.scm` files use `(workspace-module "<descriptor-json>")`; their
 //! views, actions, templates, and grants are merged in lexical path order.
 
@@ -405,7 +405,7 @@ fn update_tags(tags: &str, tag: &str, add: bool) -> String {
 
 #[must_use]
 pub fn valid_config_path(path: &str) -> bool {
-    path == "exo.scm" || valid_module_path(path)
+    matches!(path, "xo.scm" | "exo.scm") || valid_module_path(path)
 }
 
 fn valid_module_path(path: &str) -> bool {

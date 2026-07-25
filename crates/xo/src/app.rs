@@ -1,18 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use tempfile::NamedTempFile;
-use xo_core::behavior::{
-    Query, TemplateInputs, WorkspaceBehavior, render_preview, render_template,
-};
+use xo_core::behavior::{Query, WorkspaceBehavior};
 use xo_core::domain::{DeviceRecord, Frontmatter, FrontmatterValue};
 use xo_core::encryption;
 use xo_core::projection::Diagnostic;
@@ -22,7 +20,7 @@ use zeroize::Zeroizing;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Pane {
-    Views,
+    Tags,
     Notes,
     Preview,
 }
@@ -31,6 +29,8 @@ pub enum Pane {
 pub enum Mode {
     Normal,
     Search,
+    CreateTitle,
+    ViewPicker,
     ActionPicker,
     Conflicts,
     Devices,
@@ -38,6 +38,7 @@ pub enum Mode {
 }
 
 pub struct App {
+    pub workspace_id: String,
     pub behavior: WorkspaceBehavior,
     pub notes: Vec<Note>,
     pub deleted: BTreeMap<NoteId, Note>,
@@ -54,7 +55,11 @@ pub struct App {
     pub pane: Pane,
     pub mode: Mode,
     pub selected: usize,
+    pub tag_index: usize,
     pub action_query: String,
+    pub create_title: String,
+    pub view_query: String,
+    pub view_picker_index: usize,
     pub message: String,
     pub decrypted_preview: Option<Zeroizing<String>>,
     sort_descending: bool,
@@ -64,6 +69,7 @@ impl App {
     pub fn new(behavior: WorkspaceBehavior, notes: Vec<Note>) -> Self {
         let active_view = behavior.default_view.clone();
         Self {
+            workspace_id: String::new(),
             behavior,
             notes,
             deleted: BTreeMap::new(),
@@ -80,7 +86,11 @@ impl App {
             pane: Pane::Notes,
             mode: Mode::Normal,
             selected: 0,
+            tag_index: 0,
             action_query: String::new(),
+            create_title: String::new(),
+            view_query: String::new(),
+            view_picker_index: 0,
             message: String::new(),
             decrypted_preview: None,
             sort_descending: false,
@@ -108,19 +118,23 @@ impl App {
     }
 
     pub fn selected_note(&self) -> Option<&Note> {
-        self.visible_notes().get(self.selected).copied()
+        self.visible_notes().get(self.selected_index()?).copied()
+    }
+    pub fn selected_index(&self) -> Option<usize> {
+        let len = self.visible_notes().len();
+        (len > 0).then(|| self.selected.min(len - 1))
     }
     pub fn next_pane(&mut self) {
         self.pane = match self.pane {
-            Pane::Views => Pane::Notes,
+            Pane::Tags => Pane::Notes,
             Pane::Notes => Pane::Preview,
-            Pane::Preview => Pane::Views,
+            Pane::Preview => Pane::Tags,
         };
     }
     pub fn previous_pane(&mut self) {
         self.pane = match self.pane {
-            Pane::Views => Pane::Preview,
-            Pane::Notes => Pane::Views,
+            Pane::Tags => Pane::Preview,
+            Pane::Notes => Pane::Tags,
             Pane::Preview => Pane::Notes,
         };
     }
@@ -135,6 +149,27 @@ impl App {
         self.selected = self.selected.saturating_sub(1);
         self.decrypted_preview = None;
     }
+    pub fn available_tags(&self) -> Vec<(String, usize)> {
+        let mut counts = BTreeMap::new();
+        for note in &self.notes {
+            for tag in note_tags(note) {
+                *counts.entry(tag).or_insert(0) += 1;
+            }
+        }
+        counts.into_iter().collect()
+    }
+    pub fn select_next_tag(&mut self) {
+        let last = self.available_tags().len().saturating_sub(1);
+        self.tag_index = (self.tag_index + 1).min(last);
+    }
+    pub fn select_previous_tag(&mut self) {
+        self.tag_index = self.tag_index.saturating_sub(1);
+    }
+    pub fn toggle_highlighted_tag(&mut self) {
+        if let Some((tag, _)) = self.available_tags().get(self.tag_index).cloned() {
+            self.toggle_tag(&tag);
+        }
+    }
     pub fn set_view(&mut self, id: &str) {
         id.clone_into(&mut self.active_view);
         self.active_subview = None;
@@ -143,6 +178,38 @@ impl App {
     pub fn set_subview(&mut self, id: Option<String>) {
         self.active_subview = id;
         self.selected = 0;
+    }
+
+    pub fn view_choices(&self) -> Vec<ViewChoice> {
+        let needle = self.view_query.to_lowercase();
+        let mut choices = self
+            .behavior
+            .views
+            .iter()
+            .flat_map(|view| {
+                let mut choices = vec![ViewChoice {
+                    label: view.name.clone(),
+                    view: view.id.clone(),
+                    subview: None,
+                }];
+                choices.extend(view.subviews.iter().map(|subview| ViewChoice {
+                    label: format!("{} / {}", view.name, subview.name),
+                    view: view.id.clone(),
+                    subview: Some(subview.id.clone()),
+                }));
+                choices
+            })
+            .filter(|choice| fuzzy(&choice.label, &needle).is_some())
+            .collect::<Vec<_>>();
+        choices.sort_by_key(|choice| std::cmp::Reverse(fuzzy(&choice.label, &needle)));
+        choices
+    }
+
+    pub fn choose_view(&mut self) {
+        if let Some(choice) = self.view_choices().get(self.view_picker_index).cloned() {
+            self.set_view(&choice.view);
+            self.set_subview(choice.subview);
+        }
     }
     pub fn toggle_tag(&mut self, tag: &str) {
         if !self.selected_tags.remove(tag) {
@@ -154,29 +221,14 @@ impl App {
         self.sort_descending = !self.sort_descending;
     }
 
-    pub fn create_from_template(
-        &mut self,
-        template_id: &str,
-        inputs: &TemplateInputs,
-        path: String,
-    ) -> Result<Note> {
-        let template = self
-            .behavior
-            .templates
+    pub fn add_note(&mut self, note: Note) {
+        let id = note.id.clone();
+        self.notes.push(note);
+        self.selected = self
+            .visible_notes()
             .iter()
-            .find(|value| value.id == template_id)
-            .context("unknown template")?;
-        let rendered = render_template(&template.content, inputs);
-        let parsed = xo_core::markdown::parse(&rendered)?;
-        let note = Note {
-            id: NoteId::new(inputs.id.clone()),
-            frontmatter: parsed.frontmatter.unwrap_or_default(),
-            body: parsed.body,
-            path,
-        };
-        self.notes.push(note.clone());
-        self.selected = self.notes.len().saturating_sub(1);
-        Ok(note)
+            .position(|note| note.id == id)
+            .unwrap_or(0);
     }
 
     pub fn edit_selected(&mut self, body: String) -> Option<Note> {
@@ -256,14 +308,10 @@ impl App {
         };
         let mut visible = note.clone();
         visible.body = body;
-        let template = self
-            .behavior
-            .views
-            .iter()
-            .find(|view| view.id == self.active_view)
-            .and_then(|view| view.preview.as_deref())
-            .unwrap_or("{{Body}}");
-        Ok(render_preview(template, &visible))
+        Ok(xo_core::markdown::render(
+            &visible.frontmatter,
+            &visible.body,
+        )?)
     }
 
     pub fn unlock_preview(&mut self, passphrase: &str) -> Result<()> {
@@ -291,6 +339,50 @@ impl App {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ViewChoice {
+    pub label: String,
+    pub view: String,
+    pub subview: Option<String>,
+}
+
+pub fn required_frontmatter(mut frontmatter: Frontmatter, id: &str, created: &str) -> Frontmatter {
+    frontmatter.insert("id".into(), FrontmatterValue::String(id.into()));
+    frontmatter.insert("created".into(), FrontmatterValue::String(created.into()));
+    if !matches!(
+        frontmatter.get("tags"),
+        Some(FrontmatterValue::Sequence(_) | FrontmatterValue::String(_))
+    ) {
+        frontmatter.insert("tags".into(), FrontmatterValue::Sequence(vec![]));
+    }
+    if !matches!(frontmatter.get("title"), Some(FrontmatterValue::String(_))) {
+        frontmatter.insert("title".into(), FrontmatterValue::String("Untitled".into()));
+    }
+    if !matches!(frontmatter.get("type"), Some(FrontmatterValue::String(_))) {
+        frontmatter.insert("type".into(), FrontmatterValue::String("note".into()));
+    }
+    frontmatter
+}
+
+fn note_tags(note: &Note) -> Vec<String> {
+    match note.frontmatter.get("tags") {
+        Some(FrontmatterValue::Sequence(values)) => values
+            .iter()
+            .filter_map(|value| match value {
+                FrontmatterValue::String(value) => Some(value.clone()),
+                _ => None,
+            })
+            .collect(),
+        Some(FrontmatterValue::String(value)) => value
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect(),
+        _ => vec![],
+    }
+}
+
 pub fn external_edit_with(program: &OsStr, args: &[&OsStr], initial: &[u8]) -> Result<Vec<u8>> {
     let mut file = NamedTempFile::new().context("create secure editor file")?;
     file.write_all(initial)?;
@@ -303,9 +395,7 @@ pub fn external_edit_with(program: &OsStr, args: &[&OsStr], initial: &[u8]) -> R
     if !status.success() {
         bail!("external editor exited with {status}");
     }
-    let mut output = Vec::new();
-    file.reopen()?.read_to_end(&mut output)?;
-    Ok(output)
+    std::fs::read(file.path()).context("read edited temporary file")
 }
 
 fn fuzzy(haystack: &str, needle: &str) -> Option<usize> {
@@ -327,12 +417,181 @@ fn fuzzy(haystack: &str, needle: &str) -> Option<usize> {
     None
 }
 
+fn highlighted_markdown(source: &str) -> Text<'static> {
+    let mut frontmatter = false;
+    let mut fenced_code = false;
+    let lines = source
+        .split('\n')
+        .map(|line| {
+            if line == "---" {
+                frontmatter = !frontmatter;
+                return Line::from(Span::styled(
+                    line.to_owned(),
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+            if frontmatter {
+                if let Some((key, value)) = line.split_once(':') {
+                    return Line::from(vec![
+                        Span::styled(
+                            format!("{key}:"),
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(value.to_owned(), Style::default().fg(Color::Yellow)),
+                    ]);
+                }
+                return Line::from(Span::styled(
+                    line.to_owned(),
+                    Style::default().fg(Color::Yellow),
+                ));
+            }
+            if line.trim_start().starts_with("```") {
+                fenced_code = !fenced_code;
+                return Line::from(Span::styled(
+                    line.to_owned(),
+                    Style::default().fg(Color::Blue),
+                ));
+            }
+            let style = if fenced_code {
+                Style::default().fg(Color::Blue)
+            } else if line.starts_with('#') {
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD)
+            } else if line.starts_with('>') {
+                Style::default().fg(Color::DarkGray)
+            } else if line.contains("](") || line.contains("[[") {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default()
+            };
+            Line::from(Span::styled(line.to_owned(), style))
+        })
+        .collect::<Vec<_>>();
+    Text::from(lines)
+}
+
 #[allow(clippy::too_many_lines)]
 pub fn render(frame: &mut Frame<'_>, app: &App) {
+    let has_input = matches!(
+        app.mode,
+        Mode::Search | Mode::CreateTitle | Mode::ViewPicker | Mode::ActionPicker
+    );
     let vertical = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(4), Constraint::Length(1)])
+        .constraints(if has_input {
+            vec![
+                Constraint::Length(4),
+                Constraint::Length(3),
+                Constraint::Min(1),
+            ]
+        } else {
+            vec![Constraint::Length(4), Constraint::Min(1)]
+        })
         .split(frame.area());
+    let workspace = if app.workspace_id.is_empty() {
+        "local".to_owned()
+    } else {
+        app.workspace_id.chars().take(12).collect()
+    };
+    let status = app.sync.as_ref().map_or_else(
+        || "Offline · pending 0 · missing 0 · not converged".to_owned(),
+        |sync| {
+            format!(
+                "{:?} · pending {} · missing {} · {}",
+                sync.connectivity,
+                sync.pending_operations,
+                sync.missing_blobs.len(),
+                if sync.converged {
+                    "converged"
+                } else {
+                    "not converged"
+                }
+            )
+        },
+    );
+    let header = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Length(2)])
+        .split(vertical[0]);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(format!("xo · workspace {workspace} · {status}")),
+            Line::from(format!(
+                "conflicts {} · devices {} · diagnostics {}{}",
+                app.conflicts.len(),
+                app.devices.len(),
+                app.diagnostics.len(),
+                if app.message.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {}", app.message)
+                }
+            )),
+        ])
+        .style(Style::default().fg(Color::Cyan)),
+        header[0],
+    );
+    let key_columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(33),
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+        ])
+        .split(header[1]);
+    for (area, lines) in key_columns.iter().zip([
+        vec!["[↑↓/jk] select", "[Tab] pane · [Space] tag"],
+        vec!["[Enter/e] edit · [c] create", "[/] filter · [:] views"],
+        vec!["[d/u] delete/restore", "[a] actions · [r] sync · [q] quit"],
+    ]) {
+        frame.render_widget(
+            Paragraph::new(lines.join("\n")).style(Style::default().fg(Color::Cyan)),
+            *area,
+        );
+    }
+    if has_input {
+        let (title, value) = match app.mode {
+            Mode::Search => (
+                "Filter notes · Enter apply · Esc close",
+                format!("/{}", app.search),
+            ),
+            Mode::CreateTitle => (
+                "New item title · Enter create and edit · Esc cancel",
+                format!("Title: {}", app.create_title),
+            ),
+            Mode::ViewPicker => {
+                let selected = app.view_choices().get(app.view_picker_index).map_or_else(
+                    || "no matching view".to_owned(),
+                    |choice| choice.label.clone(),
+                );
+                (
+                    "Select view / subview · ↑/↓ choose · Enter apply · Esc close",
+                    format!(":{}  → {selected}", app.view_query),
+                )
+            }
+            Mode::ActionPicker => {
+                let selected = app
+                    .matching_actions()
+                    .first()
+                    .map_or("no matching action", |action| action.description.as_str());
+                (
+                    "Run action · Enter apply · Esc close",
+                    format!(">{}  → {selected}", app.action_query),
+                )
+            }
+            _ => unreachable!(),
+        };
+        frame.render_widget(
+            Paragraph::new(value).block(Block::default().title(title).borders(Borders::ALL)),
+            vertical[1],
+        );
+    }
+    let content_area = vertical[usize::from(has_input) + 1];
     let panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -340,47 +599,43 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             Constraint::Percentage(35),
             Constraint::Percentage(43),
         ])
-        .split(vertical[0]);
+        .split(content_area);
     let selected = Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD);
-    let mut views = vec![ListItem::new(Line::from("0  All").style(
-        if app.active_view == "all" {
-            selected
-        } else {
-            Style::default()
-        },
-    ))];
-    views.extend(app.behavior.views.iter().map(|view| {
-        ListItem::new(format!(
-            "{}  {}",
-            view.key.as_deref().unwrap_or("·"),
-            view.name
-        ))
-        .style(if view.id == app.active_view {
-            selected
-        } else {
-            Style::default()
-        })
-    }));
-    let tags = if app.selected_tags.is_empty() {
-        String::new()
+    let available_tags = app.available_tags();
+    let tags = if available_tags.is_empty() {
+        vec![ListItem::new("  No tags")]
     } else {
-        format!(
-            "\nTags: {}",
-            app.selected_tags
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
+        available_tags
+            .iter()
+            .enumerate()
+            .map(|(index, (tag, count))| {
+                let highlighted = app.pane == Pane::Tags && index == app.tag_index;
+                ListItem::new(format!(
+                    "{} [{}] {} ({count})",
+                    if highlighted { "▶" } else { " " },
+                    if app.selected_tags.contains(tag) {
+                        "x"
+                    } else {
+                        " "
+                    },
+                    tag,
+                ))
+                .style(if highlighted || app.selected_tags.contains(tag) {
+                    selected
+                } else {
+                    Style::default()
+                })
+            })
+            .collect::<Vec<_>>()
     };
     frame.render_widget(
-        List::new(views).block(
+        List::new(tags).block(
             Block::default()
-                .title(format!("Views{tags}"))
+                .title(format!("Tags · {} selected", app.selected_tags.len()))
                 .borders(Borders::ALL)
-                .border_style(if app.pane == Pane::Views {
+                .border_style(if app.pane == Pane::Tags {
                     selected
                 } else {
                     Style::default()
@@ -388,6 +643,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         ),
         panes[0],
     );
+    let selected_index = app.selected_index();
     let note_items = app
         .visible_notes()
         .iter()
@@ -397,7 +653,15 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 Some(FrontmatterValue::String(value)) => value.clone(),
                 _ => note.id.to_string(),
             };
-            ListItem::new(title).style(if index == app.selected {
+            ListItem::new(format!(
+                "{} {title}",
+                if Some(index) == selected_index {
+                    "▶"
+                } else {
+                    " "
+                }
+            ))
+            .style(if Some(index) == selected_index {
                 selected
             } else {
                 Style::default()
@@ -407,11 +671,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     frame.render_widget(
         List::new(note_items).block(
             Block::default()
-                .title(format!(
-                    "Notes [{}] /{}",
-                    app.search,
-                    app.visible_notes().len()
-                ))
+                .title(format!("Notes · {} visible", app.visible_notes().len()))
                 .borders(Borders::ALL)
                 .border_style(if app.pane == Pane::Notes {
                     selected
@@ -424,64 +684,68 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     let (right_title, right_text) = match app.mode {
         Mode::Conflicts => (
             "Conflict history",
-            app.conflicts
-                .iter()
-                .map(|conflict| {
-                    let revisions = app
-                        .conflict_history
-                        .get(&conflict.note_id)
-                        .into_iter()
-                        .flatten()
-                        .map(|(id, revision)| {
-                            format!(
-                                "  {} {}{}",
-                                id,
-                                revision.materialized_path,
-                                if revision.deleted { " [deleted]" } else { "" }
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    format!(
-                        "{}\nwinner: {}\nconcurrent: {}\n{}",
-                        conflict.note_id,
-                        conflict.winning_revision,
-                        conflict
-                            .concurrent_revisions
-                            .iter()
-                            .map(ToString::to_string)
+            Text::from(
+                app.conflicts
+                    .iter()
+                    .map(|conflict| {
+                        let revisions = app
+                            .conflict_history
+                            .get(&conflict.note_id)
+                            .into_iter()
+                            .flatten()
+                            .map(|(id, revision)| {
+                                format!(
+                                    "  {} {}{}",
+                                    id,
+                                    revision.materialized_path,
+                                    if revision.deleted { " [deleted]" } else { "" }
+                                )
+                            })
                             .collect::<Vec<_>>()
-                            .join(", "),
-                        revisions
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n\n"),
+                            .join("\n");
+                        format!(
+                            "{}\nwinner: {}\nconcurrent: {}\n{}",
+                            conflict.note_id,
+                            conflict.winning_revision,
+                            conflict
+                                .concurrent_revisions
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            revisions
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            ),
         ),
         Mode::Devices => (
             "Devices (V retires)",
-            app.devices
-                .iter()
-                .map(|device| {
-                    format!(
-                        "{}\n{}\ncapabilities: {}\nretired: {}",
-                        device.label,
-                        device.endpoint_id,
-                        device
-                            .capabilities
-                            .iter()
-                            .cloned()
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        device.retired_at.is_some()
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n\n"),
+            Text::from(
+                app.devices
+                    .iter()
+                    .map(|device| {
+                        format!(
+                            "{}\n{}\ncapabilities: {}\nretired: {}",
+                            device.label,
+                            device.endpoint_id,
+                            device
+                                .capabilities
+                                .iter()
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            device.retired_at.is_some()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            ),
         ),
         Mode::Sync => (
             "Synchronization (R retries)",
-            format!(
+            Text::from(format!(
                 "operations\n{}\n\nmissing blobs\n{}\n\ndiagnostics\n{}",
                 app.operations
                     .iter()
@@ -504,14 +768,19 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                     .map(|value| format!("{} [{}] {}", value.path, value.code, value.message))
                     .collect::<Vec<_>>()
                     .join("\n")
-            ),
+            )),
         ),
         _ => (
-            "Markdown preview",
-            app.decrypted_preview.as_ref().map_or_else(
-                || app.preview(None).unwrap_or_else(|error| format!("{error}")),
-                |value| value.as_str().to_owned(),
-            ),
+            "Raw Markdown",
+            if app.selected_note().is_none() {
+                Text::from("No notes match the current view and filter.")
+            } else {
+                let raw = app.decrypted_preview.as_ref().map_or_else(
+                    || app.preview(None).unwrap_or_else(|error| format!("{error}")),
+                    |value| value.as_str().to_owned(),
+                );
+                highlighted_markdown(&raw)
+            },
         ),
     };
     frame.render_widget(
@@ -526,28 +795,6 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 }),
         ),
         panes[2],
-    );
-    let status = app.sync.as_ref().map_or_else(
-        || "offline".to_owned(),
-        |sync| {
-            format!(
-                "{:?} pending={} missing={} converged={}",
-                sync.connectivity,
-                sync.pending_operations,
-                sync.missing_blobs.len(),
-                sync.converged
-            )
-        },
-    );
-    frame.render_widget(
-        Paragraph::new(format!(
-            "{status} | conflicts={} devices={} diagnostics={} | {}",
-            app.conflicts.len(),
-            app.devices.len(),
-            app.diagnostics.len(),
-            app.message
-        )),
-        vertical[1],
     );
 }
 
@@ -616,10 +863,113 @@ mod tests {
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
-        assert!(screen.contains("Views"));
+        assert!(screen.contains("Tags"));
         assert!(screen.contains("First"));
         assert!(screen.contains("Hello **world**"));
-        assert!(screen.contains("offline"));
+        assert!(screen.contains("Offline"));
+        assert!(screen.contains("[Enter/e] edit"));
+        assert!(!screen.contains("pending=0"));
+    }
+
+    #[test]
+    fn filter_keeps_selection_valid_and_view_picker_selects_a_view() {
+        let mut app = fixture();
+        app.selected = 42;
+        assert_eq!(app.selected_note().unwrap().id.as_str(), "note001");
+        app.search = "missing".into();
+        assert!(app.selected_note().is_none());
+        app.search.clear();
+        app.view_query = "note".into();
+        assert_eq!(app.view_choices()[0].view, "notes");
+        app.choose_view();
+        assert_eq!(app.active_view, "notes");
+    }
+
+    #[test]
+    fn required_creation_fields_and_default_preview_are_present() {
+        let frontmatter = required_frontmatter(
+            Frontmatter::from([("title".into(), FrontmatterValue::String("Kept".into()))]),
+            "note001",
+            "2026-07-22T10:00:00Z",
+        );
+        for field in ["id", "created", "tags", "title", "type"] {
+            assert!(frontmatter.contains_key(field));
+        }
+        let mut app = fixture();
+        app.notes[0].frontmatter = frontmatter;
+        let preview = app.preview(None).unwrap();
+        assert!(preview.starts_with("---\n"));
+        assert!(preview.contains("title: Kept"));
+        assert!(preview.contains("type: note"));
+        assert!(preview.contains("created: 2026-07-22T10:00:00Z"));
+        assert!(preview.contains("Hello **world**"));
+    }
+
+    #[test]
+    fn search_and_view_picker_render_between_header_and_content() {
+        let mut app = fixture();
+        app.mode = Mode::Search;
+        app.search = "first".into();
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let search_screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(search_screen.contains("Filter notes"));
+        assert!(search_screen.contains("/first"));
+
+        app.mode = Mode::ViewPicker;
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let view_screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(view_screen.contains("Select view / subview"));
+        assert!(view_screen.contains("→ Notes"));
+
+        app.mode = Mode::CreateTitle;
+        app.create_title = "A new thought".into();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let create_screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(create_screen.contains("New item title"));
+        assert!(create_screen.contains("Title: A new thought"));
+    }
+
+    #[test]
+    fn raw_markdown_highlighting_preserves_text_and_marks_syntax() {
+        let raw = "---\ntitle: Example\n---\n# Heading\n[link](target)\n";
+        let highlighted = highlighted_markdown(raw);
+        assert_eq!(highlighted.lines[0].spans[0].style.fg, Some(Color::Magenta));
+        assert_eq!(highlighted.lines[1].spans[0].style.fg, Some(Color::Cyan));
+        assert_eq!(highlighted.lines[3].spans[0].style.fg, Some(Color::Green));
+        assert_eq!(highlighted.lines[4].spans[0].style.fg, Some(Color::Cyan));
+        assert_eq!(
+            highlighted
+                .lines
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            raw
+        );
     }
 
     #[test]
@@ -638,9 +988,10 @@ mod tests {
         assert!(app.preview(None).is_err());
         assert!(app.unlock_preview("wrong").is_err());
         app.unlock_preview("correct").unwrap();
-        assert_eq!(
-            app.decrypted_preview.as_deref().map(String::as_str),
-            Some("secret")
+        assert!(
+            app.decrypted_preview
+                .as_deref()
+                .is_some_and(|preview| preview.contains("secret"))
         );
         let args = [
             OsStr::new("-c"),
@@ -654,6 +1005,17 @@ mod tests {
             encryption::decrypt("note001", "correct", &note.body).unwrap(),
             "changed"
         );
+    }
+
+    #[test]
+    fn external_editor_may_atomically_replace_the_temporary_file() {
+        let args = [
+            OsStr::new("-c"),
+            OsStr::new("printf changed > \"$1.next\"; mv \"$1.next\" \"$1\""),
+            OsStr::new("_"),
+        ];
+        let edited = external_edit_with(OsStr::new("sh"), &args, b"initial").unwrap();
+        assert_eq!(edited, b"changed");
     }
 
     #[test]
@@ -678,5 +1040,29 @@ mod tests {
         app.toggle_tag("b");
         assert_eq!(app.visible_notes().len(), 1);
         assert_eq!(app.visible_notes()[0].id.as_str(), "note002");
+    }
+
+    #[test]
+    fn tag_pane_lists_counts_and_toggles_the_highlighted_filter() {
+        let mut app = fixture();
+        app.notes[0].frontmatter.insert(
+            "tags".into(),
+            FrontmatterValue::Sequence(vec![FrontmatterValue::String("rust".into())]),
+        );
+        assert_eq!(app.available_tags(), vec![("rust".into(), 1)]);
+        app.pane = Pane::Tags;
+        app.toggle_highlighted_tag();
+        assert!(app.selected_tags.contains("rust"));
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(screen.contains("[x] rust (1)"));
     }
 }

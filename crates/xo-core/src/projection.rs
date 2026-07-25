@@ -269,7 +269,8 @@ impl ProjectionState {
             if !valid_config_path(&config.record.path) {
                 return Err(ProjectionError::InvalidAsset {
                     path: config.record.path.clone(),
-                    message: "configuration must be exo.scm or modules/**/*.scm".to_owned(),
+                    message: "configuration must be xo.scm, exo.scm, or modules/**/*.scm"
+                        .to_owned(),
                 });
             }
             if u64::try_from(config.bytes.len()).ok() != Some(config.record.size)
@@ -297,7 +298,7 @@ impl ProjectionState {
 
 #[cfg(feature = "iroh-sync")]
 fn valid_config_path(path: &str) -> bool {
-    path == "exo.scm"
+    matches!(path, "xo.scm" | "exo.scm")
         || (path.starts_with("modules/")
             && Path::new(path)
                 .extension()

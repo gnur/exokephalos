@@ -35,6 +35,17 @@ struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let node = xo_core::iroh_node::IrohNode::persistent(&cli.state_dir).await?;
+    let workspace_ids = node.workspace_ids().await?;
+    for workspace_id in &workspace_ids {
+        let workspace = node
+            .open_workspace_str(workspace_id)
+            .await?
+            .with_context(|| format!("stored workspace {workspace_id} disappeared"))?;
+        workspace
+            .resume_sync()
+            .await
+            .with_context(|| format!("resume workspace {workspace_id}"))?;
+    }
     let token_file = cli
         .operator_token_file
         .unwrap_or_else(|| cli.state_dir.join("operator.token"));
@@ -47,7 +58,7 @@ async fn main() -> Result<()> {
         node.endpoint_id().to_string(),
         node.author_id().to_string(),
         node.state_dir().to_path_buf(),
-        node.workspace_ids().await?,
+        workspace_ids,
         token,
     );
     let (shutdown_tx, shutdown_rx) = oneshot::channel();

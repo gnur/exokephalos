@@ -31,13 +31,16 @@ impl WorkspaceSession {
         projection: PathBuf,
     ) -> Result<Self> {
         let node = IrohNode::persistent(state_dir).await?;
-        let workspace = select_workspace(&node, state_dir, workspace_id, ticket).await?;
+        let (workspace, reopened) =
+            select_workspace(&node, state_dir, workspace_id, ticket).await?;
         if let Some(ticket) = ticket {
             workspace.start_sync(ticket).await?;
+        } else if reopened {
+            workspace.resume_sync().await?;
         }
         let actor = ActorId::new(workspace.author_id().to_string());
         let sync_state = SyncStateStore::open(state_dir.join("tui-sync.sqlite"))?;
-        sync_state.set_connectivity(if ticket.is_some() {
+        sync_state.set_connectivity(if ticket.is_some() || reopened {
             &Connectivity::Connecting
         } else {
             &Connectivity::Offline
@@ -216,23 +219,28 @@ async fn select_workspace(
     state_dir: &Path,
     requested: Option<&str>,
     ticket: Option<&str>,
-) -> Result<IrohWorkspace> {
-    let workspace = if let Some(ticket) = ticket {
-        node.import_workspace(ticket).await?
+) -> Result<(IrohWorkspace, bool)> {
+    let (workspace, reopened) = if let Some(ticket) = ticket {
+        (node.import_workspace(ticket).await?, false)
     } else if let Some(workspace_id) = requested {
-        node.open_workspace_str(workspace_id)
-            .await?
-            .context("workspace is not present in this peer")?
+        (
+            node.open_workspace_str(workspace_id)
+                .await?
+                .context("workspace is not present in this peer")?,
+            true,
+        )
     } else if let Some(workspace) = open_active_workspace(node, state_dir).await? {
-        workspace
+        (workspace, true)
     } else {
         let workspace_ids = node.workspace_ids().await?;
         match workspace_ids.as_slice() {
-            [] => node.create_workspace().await?,
-            [workspace_id] => node
-                .open_workspace_str(workspace_id)
-                .await?
-                .context("the local workspace disappeared")?,
+            [] => (node.create_workspace().await?, false),
+            [workspace_id] => (
+                node.open_workspace_str(workspace_id)
+                    .await?
+                    .context("the local workspace disappeared")?,
+                true,
+            ),
             _ => anyhow::bail!(
                 "multiple local workspaces exist; choose one once with --workspace WORKSPACE_ID"
             ),
@@ -242,7 +250,7 @@ async fn select_workspace(
         state_dir.join(ACTIVE_WORKSPACE_FILE),
         workspace.id().to_string(),
     )?;
-    Ok(workspace)
+    Ok((workspace, reopened))
 }
 
 async fn open_active_workspace(node: &IrohNode, state_dir: &Path) -> Result<Option<IrohWorkspace>> {
@@ -294,6 +302,10 @@ mod tests {
 
         let reopened = WorkspaceSession::open(&state, None, None, projection).await?;
         assert_eq!(reopened.workspace_id(), workspace_id);
+        assert_eq!(
+            reopened.sync_state.status()?.connectivity,
+            Connectivity::Connecting
+        );
         assert_eq!(
             std::fs::read_to_string(state.join(ACTIVE_WORKSPACE_FILE))?,
             workspace_id

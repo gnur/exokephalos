@@ -1,6 +1,6 @@
 # Development handoff
 
-Last updated: 2026-07-22
+Last updated: 2026-07-25
 
 This document is the starting point for a future development session. Read it
 before changing the working tree, then use `rust-rewrite-stages.md` for the
@@ -34,26 +34,21 @@ larger roadmap and `README.md` for the current operator-facing workflow.
 The current branch is based on commit:
 
 ```text
-97678b0 first steps of tui :)
+53b7573 work in progress for steel implementation
 ```
 
 Current uncommitted files at handoff time:
 
 ```text
 M README.md
-M crates/xo-core/src/projection.rs
-M crates/xo-core/src/steel_runtime.rs
-M crates/xo-core/src/watcher.rs
-M crates/xo-core/src/workspace_projection.rs
-M crates/xo/src/app.rs
-M crates/xo/src/main.rs
+M crates/xo-core/src/iroh_node.rs
+M crates/xo-syncd/src/main.rs
 M crates/xo/src/session.rs
-M rust-rewrite-stages.md
-?? HANDOFF.md
+M HANDOFF.md
 ```
 
 Do not reset, restore, or overwrite these files. They contain the complete set
-of recent configuration and TUI changes.
+of live-sync restart changes.
 
 ## Current product behavior
 
@@ -184,40 +179,26 @@ backups, and the workaround for attaching a server to a TUI-created workspace.
 Important operational constraint: never open the same state directory
 concurrently with `xo`, `xo-admin`, and `xo-syncd`.
 
+Live synchronization now resumes without re-supplying a ticket:
+
+- `IrohWorkspace::resume_sync` starts Iroh Docs synchronization with its
+  persisted useful-peer list.
+- The TUI calls it whenever it reopens an existing workspace without a ticket.
+- `xo-syncd` calls it for every stored workspace before serving operator
+  requests.
+- `two_peers_sync_and_second_peer_survives_restart` verifies that a restarted
+  peer receives a revision written after restart.
+
 ## Known limitations and likely next work
 
-### 1. Live synchronization does not automatically resume
-
-This is the most concrete near-term issue.
-
-Iroh Docs persists known useful peers, but reopening a document does not start
-its live-sync task. The pinned Iroh 0.98 API requires:
-
-```rust
-doc.start_sync(vec![]).await?;
-```
-
-The empty list tells Iroh to use its persisted peer list. Currently:
-
-- `WorkspaceSession::open` calls `start_sync` only when a ticket is supplied;
-- a later plain `xo` launch reopens local state but does not resume live sync;
-- `xo-syncd` lists stored workspace IDs but does not explicitly start sync for
-  each stored workspace.
-
-The README truthfully tells users to pass the server ticket again after a TUI
-restart. A proper fix should add a ticket-free resume method to
-`IrohWorkspace`, call it when reopening the active/configured workspace, and
-have `xo-syncd` resume every stored workspace on startup. Add a restart test
-before removing the README limitation.
-
-### 2. No headless ticket import for the server
+### 1. No headless ticket import for the server
 
 `xo-admin` can create invitations but cannot import a ticket into a server state
 directory. Attaching `xo-syncd` to a workspace originally created by the TUI
 currently requires launching `xo` once against the server state. A dedicated
 `xo-admin import-ticket` command would simplify this workflow.
 
-### 3. Workspace `xo.scm` is still a JSON descriptor envelope
+### 2. Workspace `xo.scm` is still a JSON descriptor envelope
 
 The user explicitly wanted native Steel for the command config and that has
 been implemented. Workspace behavior still serializes JSON into a Steel string.
@@ -225,13 +206,13 @@ If native editable workspace configuration becomes the next priority, extend
 the sandboxed Steel parser with declarative native forms while retaining legacy
 descriptor compatibility and the existing ambient-capability tests.
 
-### 4. Template creation UX needs a decision
+### 3. Template creation UX needs a decision
 
 The core supports templates, but `c` now follows the requested default
 frontmatter/title/editor flow. If templates return to the TUI, add an explicit
 template picker rather than silently choosing the first template.
 
-### 5. Remaining roadmap work
+### 4. Remaining roadmap work
 
 The main incomplete stages are already checkable in
 `rust-rewrite-stages.md`. In particular:

@@ -166,9 +166,8 @@ without the ticket later reopens that active workspace for local use:
 xo
 ```
 
-The current TUI does not yet restart Iroh's live-sync task from the stored peer
-list. After restarting `xo`, pass the same server ticket again when live sync is
-needed; importing an already-known capability is idempotent. The ticket is
+After restarting `xo`, the TUI resumes live synchronization from Iroh's stored
+peer list, so the ticket is only needed for the initial join. The ticket is
 deliberately a command-line value rather than a persistent config field.
 
 If the local state directory contains multiple workspaces, set the desired ID

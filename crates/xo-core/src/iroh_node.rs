@@ -295,6 +295,14 @@ impl IrohWorkspace {
             .await
             .context("start workspace synchronization")
     }
+
+    /// Resume synchronization using peers persisted by Iroh Docs.
+    pub async fn resume_sync(&self) -> Result<()> {
+        self.doc
+            .start_sync(vec![])
+            .await
+            .context("resume workspace synchronization")
+    }
 }
 
 fn load_or_create_secret_key(path: &Path) -> Result<SecretKey> {
@@ -368,11 +376,8 @@ mod tests {
         assert_eq!(replicated.as_deref(), Some(b"hello".as_slice()));
 
         second.shutdown().await?;
-        first.shutdown().await?;
         drop(imported);
-        drop(workspace);
         drop(second);
-        drop(first);
 
         let restarted = IrohNode::persistent(second_dir.path()).await?;
         assert_eq!(restarted.endpoint_id(), second_endpoint);
@@ -384,7 +389,24 @@ mod tests {
             reopened.get("note/test/revision/one").await?,
             Some(b"hello".to_vec())
         );
+        reopened.resume_sync().await?;
+        workspace
+            .put("note/test/revision/two", "after restart")
+            .await?;
+        let mut resumed = None;
+        for _ in 0..100 {
+            match reopened.get("note/test/revision/two").await {
+                Ok(Some(value)) => {
+                    resumed = Some(value);
+                    break;
+                }
+                Ok(None) | Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+            }
+        }
+        assert_eq!(resumed.as_deref(), Some(b"after restart".as_slice()));
+
         restarted.shutdown().await?;
+        first.shutdown().await?;
         Ok(())
     }
 

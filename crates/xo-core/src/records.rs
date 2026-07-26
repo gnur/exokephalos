@@ -798,7 +798,7 @@ mod tests {
         };
         records
             .put_config(
-                "exo.scm",
+                "xo.scm",
                 b"(workspace)".to_vec(),
                 hlc.clone(),
                 BTreeSet::new(),

@@ -259,7 +259,7 @@ impl<'a> WorkspaceProjection<'a> {
 }
 
 fn is_config_path(path: &str) -> bool {
-    matches!(path, "xo.scm" | "exo.scm")
+    path == "xo.scm"
         || (path.starts_with("modules/")
             && Path::new(path)
                 .extension()
@@ -462,10 +462,10 @@ mod tests {
         let node = IrohNode::persistent(directory.path().join("iroh")).await?;
         let workspace = node.create_workspace().await?;
         let records = WorkspaceRecords::new(&workspace);
-        let source = b"(workspace-config \"{}\")\n".to_vec();
+        let source = b"(workspace-config (query-limit 500))\n".to_vec();
         records
             .put_config(
-                "exo.scm",
+                "xo.scm",
                 source.clone(),
                 Hlc {
                     physical_ms: 4_000_000_000_000,
@@ -480,9 +480,9 @@ mod tests {
             WorkspaceProjection::open(&workspace, &index, directory.path().join("projection"))?;
         let report = projection.refresh().await?;
         assert_eq!(report.config_materialization.materialized.len(), 1);
-        let path = projection.root().join("exo.scm");
+        let path = projection.root().join("xo.scm");
         assert_eq!(std::fs::read(&path)?, source);
-        let edited = b"(workspace-config \"{\\\"query_limit\\\":10}\")\n".to_vec();
+        let edited = b"(workspace-config (query-limit 10))\n".to_vec();
         std::fs::write(&path, &edited)?;
         let applied = projection
             .apply_events(&[ProjectionEvent::Upsert(path)])

@@ -102,6 +102,7 @@ A stage is complete only when every task and its exit gate are checked.
 - [x] Start `xo-syncd` as a persistent Iroh Docs/Blobs/Gossip protocol host.
 - [x] Add structured logs, health checks, metrics, and authenticated operator endpoints.
 - [x] Add invitation, device-list, retirement, and diagnostics commands to `xo-admin`.
+- [x] Add headless writable-ticket import for attaching a stopped server state directory to an existing workspace.
 - [x] Add relay administration commands to `xo-admin`.
 - [x] Enforce signed normal-retirement cutoffs while reading author records.
 - [x] Implement hard revocation through namespace rotation and reinvitation.
@@ -119,12 +120,14 @@ A stage is complete only when every task and its exit gate are checked.
 - `restored_peer_serves_blobs_and_rejoins_an_active_peer` restores a clean peer, reads its backed-up Blob, reconnects it, confirms a later signed revision physically replicated, and proves the retirement cutoff keeps the earlier accepted revision visible.
 - `signed_retirement_ignores_later_writes_and_retains_history` creates an offline post-cutoff write, reconnects both peers, and proves the signed write is retained in transport but excluded from resolution.
 - `rotation_reinvites_active_peer_and_excludes_retired_peer` checkpoints accepted notes, assets, and configuration into a fresh namespace, reinvites an active peer, denies the retired peer access, and proves writes to the archived namespace cannot enter the rotated namespace.
+- `ticket_import_is_idempotent_and_resumes_after_restart` rejects read-only capabilities before creating state, safely repeats writable imports, returns a server-addressed ticket, and proves replication resumes after both peers establish their durable relationship.
 - The `xo-syncd` operator tests verify token creation and reuse, reject weak tokens, require authentication for status and metrics, validate Prometheus output, and exercise the live HTTP listener.
 
 ## Stage 5 — Steel workspace behavior
 
 - [x] Pin Steel behind the `xo-core/steel` feature.
-- [x] Define the `xo.scm` (with legacy `exo.scm` compatibility) and `modules/**/*.scm` configuration schema.
+- [x] Define the native `xo.scm` and `modules/**/*.scm` configuration schema.
+- [x] Encode workspace behavior entirely as native declarative Steel forms.
 - [x] Implement the narrow Steel host adapter and deterministic helper functions.
 - [x] Deny ambient filesystem, network, process, secrets, and wall-clock access.
 - [x] Implement views, subviews, sorting, previews, actions, templates, bounded queries, and capability grants.
@@ -139,9 +142,10 @@ A stage is complete only when every task and its exit gate are checked.
 
 ### Stage 5 test coverage
 
-- `migrated_example_has_equivalent_predicates_and_executes_as_steel` imports all 278 example notes and compares every migrated view predicate with the documented legacy behavior.
+- `migrated_example_has_equivalent_native_behavior` imports all 278 example notes and compares every migrated view predicate with the documented source behavior.
 - `sandbox_and_schema_reject_ambient_capabilities` proves filesystem, environment/secrets, process, network, dynamic evaluation, and ambient clock forms cannot cross the descriptor boundary; `exo-now` returns only the caller-supplied value.
-- `loads_and_merges_portable_descriptors` verifies deterministic lexical module merging and client-safe serialization.
+- `loads_and_merges_native_modules` verifies deterministic lexical module merging and client-safe serialization.
+- `native_workspace_config_round_trips_every_descriptor_field` covers native views, predicates, subviews, actions, every effect/value form, templates, grants, query limits, and rejection of the obsolete JSON envelope.
 - `synchronized_config_is_verified_and_materialized` verifies replicated configuration hashes, projection, watcher suppression, and immutable local configuration revisions.
 - `example_workspace_imports_equivalent_versioned_steel_configuration` verifies `xo-admin` migrates the real legacy configuration during a clean 278-note import.
 

@@ -187,6 +187,44 @@ The TUI header reports connectivity, pending operations, missing blobs, and
 convergence. Press `y` for detailed synchronization state and `r` to refresh and
 retry synchronization.
 
+## Edit workspace behavior
+
+Workspace behavior is replicated and projected as `xo.scm`. A new workspace
+starts with native declarative Steel similar to:
+
+```scheme
+(workspace-config
+  (schema 1)
+  (default-view "notes")
+  (query-limit 500)
+  (views
+    (view
+      (id "notes")
+      (name "Notes")
+      (key "n")
+      (show-tags #t)
+      (title-field "title")
+      (subtitle-field #f)
+      (sort-field "created")
+      (descending #t)
+      (preview #f)
+      (predicate (field-equals "type" "note"))
+      (subviews)))
+  (actions)
+  (templates)
+  (capability-grants))
+```
+
+Predicates support `always`, `field-equals`, `has-tag`, `not`, `all`, and
+`any`. Actions use declarative effects such as `add-tag`, `remove-tag`,
+`set-field`, and `append-body`; mutating actions require an explicit
+`mutate-note` capability grant. Optional lexical modules below
+`modules/**/*.scm` use the same fields inside `(workspace-module ...)`.
+
+Only the native declarative form is accepted. Configuration is parsed through a
+strict boundary: arbitrary filesystem, environment, process, network, clock,
+or evaluation expressions are rejected.
+
 ## Add another client
 
 Stop `xo-syncd` before running an administrative command against its state
@@ -210,28 +248,29 @@ the `xo-admin invite` command.
 ## Attach a server to an existing TUI workspace
 
 The cleanest setup is to initialize the workspace on the server first. If the
-workspace already exists in a TUI state directory, the current administration
-CLI does not yet have a headless `import-ticket` command. The supported
-workaround is to import it once with `xo` on the server:
+workspace already exists in a TUI state directory, attach the server with a
+writable ticket:
 
 1. Stop the client TUI and obtain its workspace ID from
    `~/.local/share/xo/active-workspace`.
 2. Create a writable invitation with `xo-admin invite` against the stopped
    client state directory.
-3. On the server, initialize `~/.config/xo/config.scm`, then run:
+3. Stop `xo-syncd`, then import the client ticket into the server state:
 
    ```console
-   xo \
-     --state-dir /var/lib/xo-syncd \
-     --projection /var/lib/xo-syncd-projection \
-     --ticket '<CLIENT_TICKET>'
+   xo-admin import-ticket /var/lib/xo-syncd '<CLIENT_TICKET>'
    ```
 
-4. Allow the first synchronization to complete, press `q`, and start
-   `xo-syncd` with `/var/lib/xo-syncd`.
-5. With the daemon stopped, run `xo-admin invite` against the server state and
-   use that new server-issued ticket once on the original client. This gives the
-   client the server endpoint as a synchronization peer.
+   This prints the imported workspace ID and a new writable ticket addressed to
+   the server endpoint.
+4. Restart `xo-syncd` with `/var/lib/xo-syncd`.
+5. Use the newly printed server ticket once on the original client:
+
+   ```console
+   xo --ticket '<SERVER_TICKET>'
+   ```
+
+   Subsequent launches resume synchronization from the stored peer list.
 
 Never run `xo`, `xo-admin`, and `xo-syncd` concurrently against the same state
 directory.
@@ -263,8 +302,6 @@ xo-admin restore /srv/backups/xo-2026-07-22 /var/lib/xo-syncd-restored
 
 - `xo-syncd` hosts workspaces already present in its state directory; it does
   not currently create or import workspaces through the operator HTTP API.
-- Restarting the TUI reopens its active workspace but does not yet resume live
-  sync automatically; pass the server ticket again to restart synchronization.
 - The operator server is plain HTTP and binds to loopback by default. Keep it on
   loopback or place it behind a suitably secured reverse proxy.
 - Ticket revocation is not equivalent to deleting a string that has already

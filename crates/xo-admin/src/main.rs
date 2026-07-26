@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use xo_core::iroh_node::IrohNode;
+use xo_core::iroh_node::{IrohNode, validate_writable_ticket};
 use xo_core::projection::{ProjectedAsset, ProjectionState};
 use xo_core::records::WorkspaceRecords;
 use xo_core::{ActorId, AssetId, CURRENT_SCHEMA, HlcClock, Note, NoteRevision};
@@ -18,7 +18,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Convert the documented legacy exo.fnl subset into a portable exo.scm descriptor.
+    /// Convert the documented exo.fnl subset into native xo.scm.
     MigrateConfig {
         source: PathBuf,
         destination: PathBuf,
@@ -32,6 +32,8 @@ enum Command {
         /// New persistent Iroh state directory, which must be outside the source.
         state_dir: PathBuf,
     },
+    /// Import a writable workspace ticket into an offline peer state directory.
+    ImportTicket { state_dir: PathBuf, ticket: String },
     /// Create and verify an offline backup of a stopped peer state directory.
     Backup {
         state_dir: PathBuf,
@@ -117,6 +119,11 @@ async fn main() -> Result<()> {
             println!("imported={}", imported.imported);
             println!("assets={}", imported.assets);
         }
+        Command::ImportTicket { state_dir, ticket } => {
+            let imported = import_ticket(&state_dir, &ticket).await?;
+            println!("workspace_id={}", imported.workspace_id);
+            println!("ticket={}", imported.ticket);
+        }
         Command::Backup {
             state_dir,
             destination,
@@ -192,7 +199,7 @@ async fn main() -> Result<()> {
 
 fn migration_output(destination: PathBuf) -> PathBuf {
     if destination.is_dir() || destination.extension().is_none() {
-        destination.join("exo.scm")
+        destination.join("xo.scm")
     } else {
         destination
     }
@@ -307,6 +314,24 @@ struct ImportResult {
     assets: usize,
 }
 
+#[derive(Debug)]
+struct TicketImportResult {
+    workspace_id: String,
+    ticket: String,
+}
+
+async fn import_ticket(state_dir: &Path, ticket: &str) -> Result<TicketImportResult> {
+    validate_writable_ticket(ticket)?;
+    let node = IrohNode::persistent(state_dir).await?;
+    let workspace = node.import_writable_workspace(ticket).await?;
+    let result = TicketImportResult {
+        workspace_id: workspace.id().to_string(),
+        ticket: workspace.share(true).await?,
+    };
+    node.shutdown().await?;
+    Ok(result)
+}
+
 async fn import_workspace(source: &Path, state_dir: &Path) -> Result<ImportResult> {
     let source = source
         .canonicalize()
@@ -376,7 +401,7 @@ async fn import_workspace(source: &Path, state_dir: &Path) -> Result<ImportResul
     if let Some(behavior) = migrated_config {
         records
             .put_config(
-                "exo.scm",
+                "xo.scm",
                 xo_core::steel_runtime::encode_config(&behavior, false).into_bytes(),
                 clock.next(wall_clock_ms),
                 BTreeSet::new(),
@@ -657,6 +682,8 @@ fn audit(path: &std::path::Path, valid: &mut u64, invalid: &mut u64) -> std::io:
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use xo_core::domain::{Frontmatter, FrontmatterValue};
     use xo_core::{Note, NoteId};
 
@@ -711,6 +738,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ticket_import_is_idempotent_and_resumes_after_restart() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = IrohNode::persistent(directory.path().join("source")).await?;
+        let workspace = source.create_workspace().await?;
+        let workspace_id = workspace.id().to_string();
+        let source_ticket = workspace.share(true).await?;
+        let read_only_ticket = workspace.share(false).await?;
+        let target_state = directory.path().join("target");
+
+        let read_only_state = directory.path().join("read-only-target");
+        assert!(
+            import_ticket(&read_only_state, &read_only_ticket)
+                .await
+                .is_err()
+        );
+        assert!(!read_only_state.exists());
+        let read_only_target = IrohNode::persistent(&read_only_state).await?;
+        assert!(read_only_target.workspace_ids().await?.is_empty());
+        read_only_target.shutdown().await?;
+
+        let first = import_ticket(&target_state, &source_ticket).await?;
+        let repeated = import_ticket(&target_state, &source_ticket).await?;
+        assert_eq!(first.workspace_id, workspace_id);
+        assert_eq!(repeated.workspace_id, workspace_id);
+        assert_ne!(first.ticket, source_ticket);
+
+        let target = IrohNode::persistent(&target_state).await?;
+        let imported = target
+            .open_workspace_str(&workspace_id)
+            .await?
+            .context("imported workspace missing after restart")?;
+        imported.resume_sync().await?;
+        workspace.start_sync(&first.ticket).await?;
+        workspace
+            .put("note/import-ticket/revision/one", "after import")
+            .await?;
+        let mut replicated = None;
+        for _ in 0..400 {
+            match imported.get("note/import-ticket/revision/one").await {
+                Ok(Some(value)) => {
+                    replicated = Some(value);
+                    break;
+                }
+                Ok(None) | Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+            }
+        }
+        assert_eq!(replicated.as_deref(), Some(b"after import".as_slice()));
+
+        target.shutdown().await?;
+        source.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn example_workspace_imports_equivalent_versioned_steel_configuration() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = Path::new(concat!(
@@ -727,7 +808,7 @@ mod tests {
             .context("imported workspace missing")?;
         let configs = WorkspaceRecords::new(&workspace).list_configs().await?;
         assert_eq!(configs.len(), 1);
-        assert_eq!(configs[0].record.path, "exo.scm");
+        assert_eq!(configs[0].record.path, "xo.scm");
         let loaded = xo_core::steel_runtime::SteelWorkspace::load(
             std::str::from_utf8(&configs[0].bytes)?,
             &std::collections::BTreeMap::default(),
@@ -746,7 +827,7 @@ mod tests {
         std::fs::create_dir(&destination)?;
         assert_eq!(
             migration_output(destination.clone()),
-            destination.join("exo.scm")
+            destination.join("xo.scm")
         );
         Ok(())
     }

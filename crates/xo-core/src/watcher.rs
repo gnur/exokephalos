@@ -106,7 +106,7 @@ fn is_projection_path(root: &Path, path: &Path) -> bool {
     };
     let relative_string = relative.to_string_lossy().replace('\\', "/");
     let content_path = path.extension().is_some_and(|extension| extension == "md")
-        || matches!(relative_string.as_str(), "xo.scm" | "exo.scm")
+        || relative_string == "xo.scm"
         || (relative_string.starts_with("modules/")
             && Path::new(&relative_string)
                 .extension()
@@ -166,22 +166,21 @@ mod tests {
     fn watcher_includes_only_supported_steel_configuration_paths() {
         let directory = tempfile::tempdir().unwrap();
         let main = directory.path().join("xo.scm");
-        let legacy_main = directory.path().join("exo.scm");
+        let unsupported_main = directory.path().join("exo.scm");
         let module = directory.path().join("modules/views/books.scm");
         let unrelated = directory.path().join("script.scm");
         std::fs::create_dir_all(module.parent().unwrap()).unwrap();
         std::fs::write(&main, "main").unwrap();
-        std::fs::write(&legacy_main, "legacy main").unwrap();
+        std::fs::write(&unsupported_main, "unsupported main").unwrap();
         std::fs::write(&module, "module").unwrap();
         std::fs::write(&unrelated, "no").unwrap();
         let events = normalize_paths(
             directory.path(),
-            vec![main.clone(), legacy_main.clone(), module.clone(), unrelated],
+            vec![main.clone(), unsupported_main, module.clone(), unrelated],
         );
         assert_eq!(
             events,
             vec![
-                ProjectionEvent::Upsert(legacy_main),
                 ProjectionEvent::Upsert(module),
                 ProjectionEvent::Upsert(main),
             ]

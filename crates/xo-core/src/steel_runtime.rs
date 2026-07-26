@@ -1,17 +1,22 @@
 //! Sandboxed Steel configuration loader.
 //!
-//! `xo.scm` (or legacy `exo.scm`) evaluates to a workspace descriptor. Optional
-//! `modules/**/*.scm` files use `(workspace-module "<descriptor-json>")`; their
-//! views, actions, templates, and grants are merged in lexical path order.
+//! `xo.scm` evaluates to a workspace descriptor. Optional `modules/**/*.scm`
+//! files use `(workspace-module ...)`; their views, actions, templates, and
+//! grants are merged in lexical path order.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use steel::rvals::SteelVal;
 use steel::steel_vm::engine::Engine;
 use steel::steel_vm::register_fn::RegisterFn;
 use thiserror::Error;
 
-use crate::behavior::{BehaviorError, WorkspaceBehavior};
+use crate::behavior::{
+    ActionDescriptor, ActionEffect, BehaviorError, Capability, Predicate, SubviewDescriptor,
+    TemplateDescriptor, ViewDescriptor, WorkspaceBehavior,
+};
+use crate::domain::FrontmatterValue;
 
 pub const MAX_CONFIG_BYTES: usize = 1_048_576;
 
@@ -23,12 +28,10 @@ pub enum SteelConfigError {
     InvalidPath(String),
     #[error("Steel evaluation failed: {0}")]
     Evaluation(String),
-    #[error("configuration must return descriptor JSON through workspace-config/workspace-module")]
+    #[error("configuration must contain one declarative workspace-config/workspace-module form")]
     InvalidResult,
     #[error("invalid native xo configuration at byte {offset}: {message}")]
     NativeConfig { offset: usize, message: String },
-    #[error("invalid behavior descriptor: {0}")]
-    Descriptor(#[from] serde_json::Error),
     #[error(transparent)]
     Behavior(#[from] BehaviorError),
 }
@@ -62,54 +65,9 @@ impl SteelWorkspace {
 fn evaluate(
     source: &str,
     constructor: &str,
-    now: &str,
+    _now: &str,
 ) -> Result<WorkspaceBehavior, SteelConfigError> {
-    Ok(serde_json::from_str(&evaluate_descriptor(
-        source,
-        constructor,
-        now,
-    )?)?)
-}
-
-/// Evaluate one exact descriptor constructor and return its JSON payload.
-///
-/// The source is admitted only when it consists of a single constructor call
-/// with one string literal, preventing ambient Steel capabilities from running.
-pub fn evaluate_descriptor(
-    source: &str,
-    constructor: &str,
-    now: &str,
-) -> Result<String, SteelConfigError> {
-    if source.len() > MAX_CONFIG_BYTES {
-        return Err(SteelConfigError::TooLarge);
-    }
-    if !matches!(constructor, "workspace-config" | "workspace-module") {
-        return Err(SteelConfigError::InvalidResult);
-    }
-    // The descriptor boundary deliberately excludes eval/module loading. This
-    // also makes the exact behavior portable to clients that do not embed Steel.
-    let trimmed = source.trim();
-    let prefix = format!("({constructor} ");
-    let literal = trimmed
-        .strip_prefix(&prefix)
-        .and_then(|value| value.strip_suffix(')'))
-        .ok_or(SteelConfigError::InvalidResult)?;
-    // Parsing the sole argument before VM entry guarantees there is exactly one
-    // form and that executable text cannot be smuggled before or after it.
-    let expected_json: String =
-        serde_json::from_str(literal).map_err(|_| SteelConfigError::InvalidResult)?;
-    let mut engine = sandbox(now);
-    let values = engine
-        .run(source.to_owned())
-        .map_err(|error| SteelConfigError::Evaluation(error.to_string()))?;
-    let json = match values.last() {
-        Some(SteelVal::StringV(value)) => value.to_string(),
-        _ => return Err(SteelConfigError::InvalidResult),
-    };
-    if json != expected_json {
-        return Err(SteelConfigError::InvalidResult);
-    }
-    Ok(json)
+    NativeWorkspaceParser::new(source, constructor).parse()
 }
 
 /// Evaluate the native `~/.config/xo/config.scm` schema.
@@ -136,8 +94,6 @@ pub fn evaluate_xo_config(source: &str) -> Result<String, SteelConfigError> {
 fn sandbox(now: &str) -> Engine {
     let mut engine = Engine::new_sandboxed();
     engine
-        .register_fn("workspace-config", |json: String| json)
-        .register_fn("workspace-module", |json: String| json)
         .register_fn("schema", |value: isize| value.to_string())
         .register_fn("state-dir", |value: String| value)
         .register_fn("workspace", optional_config_value)
@@ -172,6 +128,540 @@ fn optional_config_value(value: SteelVal) -> String {
     match value {
         SteelVal::StringV(value) => value.to_string(),
         _ => String::new(),
+    }
+}
+
+#[derive(Clone, Debug)]
+enum NativeForm {
+    List(Vec<Self>),
+    String(String),
+    Symbol(String),
+}
+
+struct NativeWorkspaceParser<'a> {
+    source: &'a str,
+    constructor: &'a str,
+    position: usize,
+}
+
+impl<'a> NativeWorkspaceParser<'a> {
+    const fn new(source: &'a str, constructor: &'a str) -> Self {
+        Self {
+            source,
+            constructor,
+            position: 0,
+        }
+    }
+
+    fn parse(mut self) -> Result<WorkspaceBehavior, SteelConfigError> {
+        if self.source.len() > MAX_CONFIG_BYTES {
+            return Err(SteelConfigError::TooLarge);
+        }
+        let root = self.form()?;
+        self.skip_ignored();
+        if self.position != self.source.len() {
+            return self.error("unexpected trailing form");
+        }
+        workspace_behavior(&root, self.constructor)
+    }
+
+    fn form(&mut self) -> Result<NativeForm, SteelConfigError> {
+        self.skip_ignored();
+        match self.peek() {
+            Some('(') => {
+                self.bump();
+                let mut values = Vec::new();
+                loop {
+                    self.skip_ignored();
+                    if self.peek() == Some(')') {
+                        self.bump();
+                        return Ok(NativeForm::List(values));
+                    }
+                    if self.peek().is_none() {
+                        return self.error("unterminated list");
+                    }
+                    values.push(self.form()?);
+                }
+            }
+            Some('"') => self.string().map(NativeForm::String),
+            Some(')') => self.error("unexpected )"),
+            Some(_) => self.token().map(NativeForm::Symbol),
+            None => self.error("expected form"),
+        }
+    }
+
+    fn string(&mut self) -> Result<String, SteelConfigError> {
+        self.skip_ignored();
+        let start = self.position;
+        if self.bump() != Some('"') {
+            return self.error("expected string");
+        }
+        let mut escaped = false;
+        while let Some(value) = self.bump() {
+            if escaped {
+                escaped = false;
+            } else if value == '\\' {
+                escaped = true;
+            } else if value == '"' {
+                return serde_json::from_str(&self.source[start..self.position]).map_err(|_| {
+                    SteelConfigError::NativeConfig {
+                        offset: start,
+                        message: "invalid string escape".to_owned(),
+                    }
+                });
+            }
+        }
+        self.error("unterminated string")
+    }
+
+    fn token(&mut self) -> Result<String, SteelConfigError> {
+        self.skip_ignored();
+        let start = self.position;
+        while self
+            .peek()
+            .is_some_and(|value| !value.is_whitespace() && !matches!(value, '(' | ')' | ';'))
+        {
+            self.bump();
+        }
+        if start == self.position {
+            return self.error("expected identifier or value");
+        }
+        Ok(self.source[start..self.position].to_owned())
+    }
+
+    fn skip_ignored(&mut self) {
+        loop {
+            while self.peek().is_some_and(char::is_whitespace) {
+                self.bump();
+            }
+            if self.peek() != Some(';') {
+                break;
+            }
+            while self.peek().is_some_and(|value| value != '\n') {
+                self.bump();
+            }
+        }
+    }
+
+    fn peek(&self) -> Option<char> {
+        self.source[self.position..].chars().next()
+    }
+
+    fn bump(&mut self) -> Option<char> {
+        let value = self.peek()?;
+        self.position += value.len_utf8();
+        Some(value)
+    }
+
+    fn error<T>(&self, message: impl Into<String>) -> Result<T, SteelConfigError> {
+        Err(SteelConfigError::NativeConfig {
+            offset: self.position,
+            message: message.into(),
+        })
+    }
+}
+
+fn workspace_behavior(
+    form: &NativeForm,
+    constructor: &str,
+) -> Result<WorkspaceBehavior, SteelConfigError> {
+    let root = constructor_args(form, constructor)?;
+    let fields = native_fields(
+        root,
+        &[
+            "schema",
+            "default-view",
+            "query-limit",
+            "views",
+            "actions",
+            "templates",
+            "capability-grants",
+        ],
+        constructor,
+    )?;
+    let mut behavior = WorkspaceBehavior {
+        schema: optional_u16(&fields, "schema")?.unwrap_or(crate::behavior::BEHAVIOR_SCHEMA),
+        default_view: optional_string(&fields, "default-view")?.unwrap_or_else(|| "all".to_owned()),
+        query_limit: optional_usize(&fields, "query-limit")?
+            .unwrap_or(crate::behavior::DEFAULT_QUERY_LIMIT),
+        ..WorkspaceBehavior::default()
+    };
+    if let Some(forms) = fields.get("views") {
+        behavior.views = forms.iter().map(parse_view).collect::<Result<_, _>>()?;
+    }
+    if let Some(forms) = fields.get("actions") {
+        behavior.actions = forms.iter().map(parse_action).collect::<Result<_, _>>()?;
+    }
+    if let Some(forms) = fields.get("templates") {
+        behavior.templates = forms.iter().map(parse_template).collect::<Result<_, _>>()?;
+    }
+    if let Some(forms) = fields.get("capability-grants") {
+        for form in *forms {
+            let args = constructor_args(form, "grant")?;
+            let grant = native_fields(args, &["action", "capabilities"], "grant")?;
+            let action = required_string(&grant, "action")?;
+            let capabilities = grant
+                .get("capabilities")
+                .ok_or_else(|| native_error("grant is missing capabilities"))?
+                .iter()
+                .map(parse_capability)
+                .collect::<Result<_, _>>()?;
+            if behavior
+                .capability_grants
+                .insert(action.clone(), capabilities)
+                .is_some()
+            {
+                return Err(native_error(format!(
+                    "duplicate capability grant for {action}"
+                )));
+            }
+        }
+    }
+    behavior.validate()?;
+    Ok(behavior)
+}
+
+fn parse_view(form: &NativeForm) -> Result<ViewDescriptor, SteelConfigError> {
+    let args = constructor_args(form, "view")?;
+    let fields = native_fields(
+        args,
+        &[
+            "id",
+            "name",
+            "key",
+            "show-tags",
+            "title-field",
+            "subtitle-field",
+            "sort-field",
+            "descending",
+            "preview",
+            "predicate",
+            "subviews",
+        ],
+        "view",
+    )?;
+    Ok(ViewDescriptor {
+        id: required_string(&fields, "id")?,
+        name: optional_string(&fields, "name")?.unwrap_or_default(),
+        key: optional_nullable_string(&fields, "key")?,
+        show_tags: optional_bool(&fields, "show-tags")?.unwrap_or(false),
+        title_field: optional_string(&fields, "title-field")?.unwrap_or_else(|| "title".to_owned()),
+        subtitle_field: optional_nullable_string(&fields, "subtitle-field")?,
+        sort_field: optional_nullable_string(&fields, "sort-field")?,
+        descending: optional_bool(&fields, "descending")?.unwrap_or(false),
+        preview: optional_nullable_string(&fields, "preview")?,
+        predicate: optional_predicate(&fields)?.unwrap_or_default(),
+        subviews: fields.get("subviews").map_or(Ok(Vec::new()), |forms| {
+            forms
+                .iter()
+                .map(parse_subview)
+                .collect::<Result<Vec<_>, _>>()
+        })?,
+    })
+}
+
+fn parse_subview(form: &NativeForm) -> Result<SubviewDescriptor, SteelConfigError> {
+    let args = constructor_args(form, "subview")?;
+    let fields = native_fields(args, &["id", "name", "predicate"], "subview")?;
+    Ok(SubviewDescriptor {
+        id: required_string(&fields, "id")?,
+        name: optional_string(&fields, "name")?.unwrap_or_default(),
+        predicate: optional_predicate(&fields)?.unwrap_or_default(),
+    })
+}
+
+fn parse_action(form: &NativeForm) -> Result<ActionDescriptor, SteelConfigError> {
+    let args = constructor_args(form, "action")?;
+    let fields = native_fields(
+        args,
+        &["id", "description", "predicate", "effects"],
+        "action",
+    )?;
+    Ok(ActionDescriptor {
+        id: required_string(&fields, "id")?,
+        description: optional_string(&fields, "description")?.unwrap_or_default(),
+        predicate: optional_predicate(&fields)?.unwrap_or_default(),
+        effects: fields.get("effects").map_or(Ok(Vec::new()), |forms| {
+            forms
+                .iter()
+                .map(parse_effect)
+                .collect::<Result<Vec<_>, _>>()
+        })?,
+    })
+}
+
+fn parse_template(form: &NativeForm) -> Result<TemplateDescriptor, SteelConfigError> {
+    let args = constructor_args(form, "template")?;
+    let fields = native_fields(args, &["id", "path", "content"], "template")?;
+    Ok(TemplateDescriptor {
+        id: required_string(&fields, "id")?,
+        path: required_string(&fields, "path")?,
+        content: required_string(&fields, "content")?,
+    })
+}
+
+fn parse_predicate(form: &NativeForm) -> Result<Predicate, SteelConfigError> {
+    let (name, args) = native_call(form)?;
+    match (name, args) {
+        ("always", []) => Ok(Predicate::Always),
+        ("field-equals", [field, value]) => Ok(Predicate::FieldEquals {
+            field: native_string(field, "field-equals field")?,
+            value: native_string(value, "field-equals value")?,
+        }),
+        ("has-tag", [tag]) => Ok(Predicate::HasTag {
+            tag: native_string(tag, "has-tag tag")?,
+        }),
+        ("not", [predicate]) => Ok(Predicate::Not {
+            predicate: Box::new(parse_predicate(predicate)?),
+        }),
+        ("all", predicates) => Ok(Predicate::All {
+            predicates: predicates
+                .iter()
+                .map(parse_predicate)
+                .collect::<Result<_, _>>()?,
+        }),
+        ("any", predicates) => Ok(Predicate::Any {
+            predicates: predicates
+                .iter()
+                .map(parse_predicate)
+                .collect::<Result<_, _>>()?,
+        }),
+        _ => Err(native_error(format!("invalid predicate {name}"))),
+    }
+}
+
+fn parse_effect(form: &NativeForm) -> Result<ActionEffect, SteelConfigError> {
+    let (name, args) = native_call(form)?;
+    match (name, args) {
+        ("add-tag", [tag]) => Ok(ActionEffect::AddTag {
+            tag: native_string(tag, "add-tag tag")?,
+        }),
+        ("remove-tag", [tag]) => Ok(ActionEffect::RemoveTag {
+            tag: native_string(tag, "remove-tag tag")?,
+        }),
+        ("set-field", [field, value]) => Ok(ActionEffect::SetField {
+            field: native_string(field, "set-field field")?,
+            value: parse_frontmatter_value(value)?,
+        }),
+        ("append-body", [text]) => Ok(ActionEffect::AppendBody {
+            text: native_string(text, "append-body text")?,
+        }),
+        _ => Err(native_error(format!("invalid action effect {name}"))),
+    }
+}
+
+fn parse_frontmatter_value(form: &NativeForm) -> Result<FrontmatterValue, SteelConfigError> {
+    let (name, args) = native_call(form)?;
+    match (name, args) {
+        ("null", []) => Ok(FrontmatterValue::Null),
+        ("bool", [value]) => Ok(FrontmatterValue::Bool(native_bool(value, "bool")?)),
+        ("integer", [value]) => Ok(FrontmatterValue::Integer(native_integer(value, "integer")?)),
+        ("float", [value]) => {
+            let value = native_symbol(value, "float")?
+                .parse::<f64>()
+                .map_err(|_| native_error("float requires a finite number"))?;
+            if !value.is_finite() {
+                return Err(native_error("float requires a finite number"));
+            }
+            Ok(FrontmatterValue::Float(value))
+        }
+        ("string", [value]) => Ok(FrontmatterValue::String(native_string(value, "string")?)),
+        ("sequence", values) => Ok(FrontmatterValue::Sequence(
+            values
+                .iter()
+                .map(parse_frontmatter_value)
+                .collect::<Result<_, _>>()?,
+        )),
+        ("mapping", entries) => {
+            let mut values = BTreeMap::new();
+            for entry in entries {
+                let (entry_name, entry_args) = native_call(entry)?;
+                let [key, value] = entry_args else {
+                    return Err(native_error("mapping entry requires a key and value"));
+                };
+                if entry_name != "entry" {
+                    return Err(native_error("mapping accepts only entry forms"));
+                }
+                let key = native_string(key, "mapping key")?;
+                if values
+                    .insert(key.clone(), parse_frontmatter_value(value)?)
+                    .is_some()
+                {
+                    return Err(native_error(format!("duplicate mapping key {key}")));
+                }
+            }
+            Ok(FrontmatterValue::Mapping(values))
+        }
+        _ => Err(native_error(format!("invalid frontmatter value {name}"))),
+    }
+}
+
+fn parse_capability(form: &NativeForm) -> Result<Capability, SteelConfigError> {
+    match native_symbol(form, "capability")? {
+        "mutate-note" => Ok(Capability::MutateNote),
+        value => Err(native_error(format!("unknown capability {value}"))),
+    }
+}
+
+fn native_fields<'a>(
+    forms: &'a [NativeForm],
+    allowed: &[&str],
+    context: &str,
+) -> Result<BTreeMap<&'a str, &'a [NativeForm]>, SteelConfigError> {
+    let mut fields = BTreeMap::new();
+    for form in forms {
+        let (name, args) = native_call(form)?;
+        if !allowed.contains(&name) {
+            return Err(native_error(format!("unknown {context} field {name}")));
+        }
+        if fields.insert(name, args).is_some() {
+            return Err(native_error(format!("duplicate {context} field {name}")));
+        }
+    }
+    Ok(fields)
+}
+
+fn constructor_args<'a>(
+    form: &'a NativeForm,
+    expected: &str,
+) -> Result<&'a [NativeForm], SteelConfigError> {
+    let (name, args) = native_call(form)?;
+    if name == expected {
+        Ok(args)
+    } else {
+        Err(native_error(format!("expected {expected}, found {name}")))
+    }
+}
+
+fn native_call(form: &NativeForm) -> Result<(&str, &[NativeForm]), SteelConfigError> {
+    let NativeForm::List(values) = form else {
+        return Err(native_error("expected list"));
+    };
+    let Some((head, args)) = values.split_first() else {
+        return Err(native_error("empty list is not a declarative form"));
+    };
+    Ok((native_symbol(head, "form name")?, args))
+}
+
+fn native_symbol<'a>(form: &'a NativeForm, context: &str) -> Result<&'a str, SteelConfigError> {
+    if let NativeForm::Symbol(value) = form {
+        Ok(value)
+    } else {
+        Err(native_error(format!("{context} must be an identifier")))
+    }
+}
+
+fn native_string(form: &NativeForm, context: &str) -> Result<String, SteelConfigError> {
+    if let NativeForm::String(value) = form {
+        Ok(value.clone())
+    } else {
+        Err(native_error(format!("{context} must be a string")))
+    }
+}
+
+fn native_bool(form: &NativeForm, context: &str) -> Result<bool, SteelConfigError> {
+    match native_symbol(form, context)? {
+        "#t" => Ok(true),
+        "#f" => Ok(false),
+        _ => Err(native_error(format!("{context} must be #t or #f"))),
+    }
+}
+
+fn native_integer(form: &NativeForm, context: &str) -> Result<i64, SteelConfigError> {
+    native_symbol(form, context)?
+        .parse()
+        .map_err(|_| native_error(format!("{context} must be an integer")))
+}
+
+fn single_field<'a>(
+    fields: &BTreeMap<&str, &'a [NativeForm]>,
+    name: &str,
+) -> Result<Option<&'a NativeForm>, SteelConfigError> {
+    fields
+        .get(name)
+        .map(|values| {
+            let [value] = *values else {
+                return Err(native_error(format!("{name} requires exactly one value")));
+            };
+            Ok(value)
+        })
+        .transpose()
+}
+
+fn required_string(
+    fields: &BTreeMap<&str, &[NativeForm]>,
+    name: &str,
+) -> Result<String, SteelConfigError> {
+    optional_string(fields, name)?.ok_or_else(|| native_error(format!("missing field {name}")))
+}
+
+fn optional_string(
+    fields: &BTreeMap<&str, &[NativeForm]>,
+    name: &str,
+) -> Result<Option<String>, SteelConfigError> {
+    single_field(fields, name)?
+        .map(|value| native_string(value, name))
+        .transpose()
+}
+
+fn optional_nullable_string(
+    fields: &BTreeMap<&str, &[NativeForm]>,
+    name: &str,
+) -> Result<Option<String>, SteelConfigError> {
+    match single_field(fields, name)? {
+        None => Ok(None),
+        Some(NativeForm::Symbol(value)) if value == "#f" => Ok(None),
+        Some(value) => native_string(value, name).map(Some),
+    }
+}
+
+fn optional_bool(
+    fields: &BTreeMap<&str, &[NativeForm]>,
+    name: &str,
+) -> Result<Option<bool>, SteelConfigError> {
+    single_field(fields, name)?
+        .map(|value| native_bool(value, name))
+        .transpose()
+}
+
+fn optional_u16(
+    fields: &BTreeMap<&str, &[NativeForm]>,
+    name: &str,
+) -> Result<Option<u16>, SteelConfigError> {
+    single_field(fields, name)?
+        .map(|value| {
+            native_symbol(value, name)?
+                .parse()
+                .map_err(|_| native_error(format!("{name} must be an unsigned 16-bit integer")))
+        })
+        .transpose()
+}
+
+fn optional_usize(
+    fields: &BTreeMap<&str, &[NativeForm]>,
+    name: &str,
+) -> Result<Option<usize>, SteelConfigError> {
+    single_field(fields, name)?
+        .map(|value| {
+            native_symbol(value, name)?
+                .parse()
+                .map_err(|_| native_error(format!("{name} must be a non-negative integer")))
+        })
+        .transpose()
+}
+
+fn optional_predicate(
+    fields: &BTreeMap<&str, &[NativeForm]>,
+) -> Result<Option<Predicate>, SteelConfigError> {
+    single_field(fields, "predicate")?
+        .map(parse_predicate)
+        .transpose()
+}
+
+fn native_error(message: impl Into<String>) -> SteelConfigError {
+    SteelConfigError::NativeConfig {
+        offset: 0,
+        message: message.into(),
     }
 }
 
@@ -405,7 +895,7 @@ fn update_tags(tags: &str, tag: &str, add: bool) -> String {
 
 #[must_use]
 pub fn valid_config_path(path: &str) -> bool {
-    matches!(path, "xo.scm" | "exo.scm") || valid_module_path(path)
+    path == "xo.scm" || valid_module_path(path)
 }
 
 fn valid_module_path(path: &str) -> bool {
@@ -420,25 +910,209 @@ fn valid_module_path(path: &str) -> bool {
 
 #[must_use]
 pub fn encode_config(behavior: &WorkspaceBehavior, module: bool) -> String {
-    let json = serde_json::to_string(behavior).expect("serializable behavior descriptor");
-    let literal = serde_json::to_string(&json).expect("serializable Steel string");
-    format!(
-        "({} {literal})\n",
-        if module {
-            "workspace-module"
-        } else {
-            "workspace-config"
+    let constructor = if module {
+        "workspace-module"
+    } else {
+        "workspace-config"
+    };
+    let mut output = format!(
+        "({constructor}\n  (schema {})\n  (default-view {})\n  (query-limit {})",
+        behavior.schema,
+        steel_string(&behavior.default_view),
+        behavior.query_limit
+    );
+    output.push_str("\n  (views");
+    for view in &behavior.views {
+        output.push_str(&encode_view(view, 4));
+    }
+    output.push(')');
+    output.push_str("\n  (actions");
+    for action in &behavior.actions {
+        output.push_str(&encode_action(action, 4));
+    }
+    output.push(')');
+    output.push_str("\n  (templates");
+    for template in &behavior.templates {
+        write!(
+            output,
+            "\n    (template\n      (id {})\n      (path {})\n      (content {}))",
+            steel_string(&template.id),
+            steel_string(&template.path),
+            steel_string(&template.content)
+        )
+        .expect("writing to a String cannot fail");
+    }
+    output.push(')');
+    output.push_str("\n  (capability-grants");
+    for (action, capabilities) in &behavior.capability_grants {
+        write!(
+            output,
+            "\n    (grant\n      (action {})\n      (capabilities",
+            steel_string(action)
+        )
+        .expect("writing to a String cannot fail");
+        for capability in capabilities {
+            write!(output, " {}", encode_capability(*capability))
+                .expect("writing to a String cannot fail");
         }
-    )
+        output.push_str("))");
+    }
+    output.push_str("))\n");
+    output
+}
+
+fn encode_view(view: &ViewDescriptor, indent: usize) -> String {
+    let prefix = " ".repeat(indent);
+    let field = " ".repeat(indent + 2);
+    let mut output = format!(
+        "\n{prefix}(view\n{field}(id {})\n{field}(name {})\n{field}(key {})\n{field}(show-tags {})\n{field}(title-field {})\n{field}(subtitle-field {})\n{field}(sort-field {})\n{field}(descending {})\n{field}(preview {})\n{field}(predicate {})\n{field}(subviews",
+        steel_string(&view.id),
+        steel_string(&view.name),
+        encode_optional_string(view.key.as_deref()),
+        encode_bool(view.show_tags),
+        steel_string(&view.title_field),
+        encode_optional_string(view.subtitle_field.as_deref()),
+        encode_optional_string(view.sort_field.as_deref()),
+        encode_bool(view.descending),
+        encode_optional_string(view.preview.as_deref()),
+        encode_predicate(&view.predicate),
+    );
+    for subview in &view.subviews {
+        write!(
+            output,
+            "\n{}(subview\n{}(id {})\n{}(name {})\n{}(predicate {}))",
+            " ".repeat(indent + 4),
+            " ".repeat(indent + 6),
+            steel_string(&subview.id),
+            " ".repeat(indent + 6),
+            steel_string(&subview.name),
+            " ".repeat(indent + 6),
+            encode_predicate(&subview.predicate)
+        )
+        .expect("writing to a String cannot fail");
+    }
+    output.push_str("))");
+    output
+}
+
+fn encode_action(action: &ActionDescriptor, indent: usize) -> String {
+    let prefix = " ".repeat(indent);
+    let field = " ".repeat(indent + 2);
+    let mut output = format!(
+        "\n{prefix}(action\n{field}(id {})\n{field}(description {})\n{field}(predicate {})\n{field}(effects",
+        steel_string(&action.id),
+        steel_string(&action.description),
+        encode_predicate(&action.predicate)
+    );
+    for effect in &action.effects {
+        write!(
+            output,
+            "\n{}{}",
+            " ".repeat(indent + 4),
+            encode_effect(effect)
+        )
+        .expect("writing to a String cannot fail");
+    }
+    output.push_str("))");
+    output
+}
+
+fn encode_predicate(predicate: &Predicate) -> String {
+    match predicate {
+        Predicate::Always => "(always)".to_owned(),
+        Predicate::FieldEquals { field, value } => format!(
+            "(field-equals {} {})",
+            steel_string(field),
+            steel_string(value)
+        ),
+        Predicate::HasTag { tag } => format!("(has-tag {})", steel_string(tag)),
+        Predicate::Not { predicate } => format!("(not {})", encode_predicate(predicate)),
+        Predicate::All { predicates } => encode_predicate_list("all", predicates),
+        Predicate::Any { predicates } => encode_predicate_list("any", predicates),
+    }
+}
+
+fn encode_effect(effect: &ActionEffect) -> String {
+    match effect {
+        ActionEffect::AddTag { tag } => format!("(add-tag {})", steel_string(tag)),
+        ActionEffect::RemoveTag { tag } => format!("(remove-tag {})", steel_string(tag)),
+        ActionEffect::SetField { field, value } => format!(
+            "(set-field {} {})",
+            steel_string(field),
+            encode_frontmatter_value(value)
+        ),
+        ActionEffect::AppendBody { text } => format!("(append-body {})", steel_string(text)),
+    }
+}
+
+fn encode_frontmatter_value(value: &FrontmatterValue) -> String {
+    match value {
+        FrontmatterValue::Null => "(null)".to_owned(),
+        FrontmatterValue::Bool(value) => format!("(bool {})", encode_bool(*value)),
+        FrontmatterValue::Integer(value) => format!("(integer {value})"),
+        FrontmatterValue::Float(value) => format!("(float {value})"),
+        FrontmatterValue::String(value) => format!("(string {})", steel_string(value)),
+        FrontmatterValue::Sequence(values) => {
+            let mut output = "(sequence".to_owned();
+            for value in values {
+                write!(output, " {}", encode_frontmatter_value(value))
+                    .expect("writing to a String cannot fail");
+            }
+            output.push(')');
+            output
+        }
+        FrontmatterValue::Mapping(values) => {
+            let mut output = "(mapping".to_owned();
+            for (key, value) in values {
+                write!(
+                    output,
+                    " (entry {} {})",
+                    steel_string(key),
+                    encode_frontmatter_value(value)
+                )
+                .expect("writing to a String cannot fail");
+            }
+            output.push(')');
+            output
+        }
+    }
+}
+
+fn encode_predicate_list(name: &str, predicates: &[Predicate]) -> String {
+    let mut output = format!("({name}");
+    for predicate in predicates {
+        write!(output, " {}", encode_predicate(predicate))
+            .expect("writing to a String cannot fail");
+    }
+    output.push(')');
+    output
+}
+
+const fn encode_bool(value: bool) -> &'static str {
+    if value { "#t" } else { "#f" }
+}
+
+fn encode_optional_string(value: Option<&str>) -> String {
+    value.map_or_else(|| "#f".to_owned(), steel_string)
+}
+
+fn encode_capability(capability: Capability) -> &'static str {
+    match capability {
+        Capability::MutateNote => "mutate-note",
+    }
+}
+
+fn steel_string(value: &str) -> String {
+    serde_json::to_string(value).expect("Steel strings are serializable")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::behavior::{ActionDescriptor, Predicate, ViewDescriptor};
+    use std::collections::BTreeSet;
 
     #[test]
-    fn loads_and_merges_portable_descriptors() {
+    fn loads_and_merges_native_modules() {
         let base = WorkspaceBehavior {
             views: vec![view("notes")],
             ..WorkspaceBehavior::default()
@@ -464,6 +1138,107 @@ mod tests {
         .unwrap();
         assert_eq!(loaded.views[0].id, "notes");
         assert_eq!(loaded.actions[0].id, "done");
+    }
+
+    #[test]
+    fn native_workspace_config_round_trips_every_descriptor_field() {
+        let behavior = WorkspaceBehavior {
+            schema: 1,
+            default_view: "notes".into(),
+            views: vec![ViewDescriptor {
+                id: "notes".into(),
+                name: "Notes".into(),
+                key: Some("n".into()),
+                show_tags: true,
+                title_field: "title".into(),
+                subtitle_field: Some("type".into()),
+                sort_field: Some("created".into()),
+                descending: true,
+                preview: Some("{{body}}".into()),
+                predicate: Predicate::All {
+                    predicates: vec![
+                        Predicate::FieldEquals {
+                            field: "type".into(),
+                            value: "note".into(),
+                        },
+                        Predicate::Not {
+                            predicate: Box::new(Predicate::HasTag {
+                                tag: "archived".into(),
+                            }),
+                        },
+                    ],
+                },
+                subviews: vec![SubviewDescriptor {
+                    id: "important".into(),
+                    name: "Important".into(),
+                    predicate: Predicate::Any {
+                        predicates: vec![
+                            Predicate::HasTag {
+                                tag: "important".into(),
+                            },
+                            Predicate::Always,
+                        ],
+                    },
+                }],
+            }],
+            actions: vec![ActionDescriptor {
+                id: "finish".into(),
+                description: "Finish reading".into(),
+                predicate: Predicate::HasTag {
+                    tag: "reading".into(),
+                },
+                effects: vec![
+                    ActionEffect::AddTag { tag: "read".into() },
+                    ActionEffect::RemoveTag {
+                        tag: "reading".into(),
+                    },
+                    ActionEffect::SetField {
+                        field: "metadata".into(),
+                        value: FrontmatterValue::Mapping(BTreeMap::from([
+                            ("complete".into(), FrontmatterValue::Bool(true)),
+                            (
+                                "values".into(),
+                                FrontmatterValue::Sequence(vec![
+                                    FrontmatterValue::Null,
+                                    FrontmatterValue::Integer(2),
+                                    FrontmatterValue::Float(3.5),
+                                    FrontmatterValue::String("done".into()),
+                                ]),
+                            ),
+                        ])),
+                    },
+                    ActionEffect::AppendBody {
+                        text: "\nFinished.\n".into(),
+                    },
+                ],
+            }],
+            templates: vec![TemplateDescriptor {
+                id: "daily".into(),
+                path: "daily/{{date}}.md".into(),
+                content: "---\ntitle: {{date}}\n---\n".into(),
+            }],
+            capability_grants: BTreeMap::from([(
+                "finish".into(),
+                BTreeSet::from([Capability::MutateNote]),
+            )]),
+            query_limit: 42,
+        };
+
+        let source = encode_config(&behavior, false);
+        assert!(source.starts_with("(workspace-config\n  (schema 1)"));
+        assert!(source.contains("(field-equals \"type\" \"note\")"));
+        assert!(!source.starts_with("(workspace-config \""));
+        let loaded = SteelWorkspace::load(&source, &BTreeMap::new(), "fixed").unwrap();
+        assert_eq!(loaded, behavior);
+
+        assert!(
+            SteelWorkspace::load(
+                "(workspace-config \"{\\\"query_limit\\\":42}\")",
+                &BTreeMap::new(),
+                "fixed"
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -497,6 +1272,16 @@ mod tests {
                 "adapter exposed {probe}"
             );
         }
+        for probe in [
+            "(workspace-config (views (open-input-file \"/etc/passwd\")))",
+            "(workspace-config (views) (query-limit (current-second)))",
+            "(workspace-config (views)) (env-var \"HOME\")",
+        ] {
+            assert!(
+                SteelWorkspace::load(probe, &BTreeMap::new(), "fixed-time").is_err(),
+                "native adapter exposed {probe}"
+            );
+        }
         let native_attack = r#"(xo-config
             (schema 1)
             (state-dir (env-var "HOME"))
@@ -506,7 +1291,7 @@ mod tests {
     }
 
     #[test]
-    fn migrated_example_has_equivalent_predicates_and_executes_as_steel() {
+    fn migrated_example_has_equivalent_native_behavior() {
         use crate::behavior::Query;
         use crate::domain::FrontmatterValue;
         let behavior = crate::legacy_config::migrate_fennel(include_str!(

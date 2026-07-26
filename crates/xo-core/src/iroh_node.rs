@@ -24,6 +24,14 @@ const ENDPOINT_KEY_FILE: &str = "endpoint.key";
 #[cfg(test)]
 pub(crate) static IROH_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+pub fn validate_writable_ticket(ticket: &str) -> Result<()> {
+    let ticket = DocTicket::from_str(ticket).context("parse workspace ticket")?;
+    if ticket.capability.secret_key().is_err() {
+        bail!("workspace ticket is read-only; a writable ticket is required");
+    }
+    Ok(())
+}
+
 /// A persistent endpoint hosting Docs, Blobs, and Gossip on one router.
 #[derive(Debug)]
 pub struct IrohNode {
@@ -131,6 +139,17 @@ impl IrohNode {
             .import(ticket)
             .await
             .context("import workspace ticket")?;
+        Ok(self.workspace(doc))
+    }
+
+    pub async fn import_writable_workspace(&self, ticket: &str) -> Result<IrohWorkspace> {
+        validate_writable_ticket(ticket)?;
+        let ticket = DocTicket::from_str(ticket).context("parse workspace ticket")?;
+        let doc = self
+            .docs
+            .import(ticket)
+            .await
+            .context("import writable workspace ticket")?;
         Ok(self.workspace(doc))
     }
 

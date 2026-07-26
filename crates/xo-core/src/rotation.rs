@@ -265,7 +265,7 @@ mod tests {
             .context("store source asset")?;
         source_records
             .put_config(
-                "exo.scm",
+                "xo.scm",
                 b"(checkpoint)".to_vec(),
                 Hlc {
                     physical_ms: 101,

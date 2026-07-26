@@ -73,19 +73,17 @@ impl WorkspaceSession {
         let configs = records.list_configs().await?;
         let mut modules = BTreeMap::new();
         let mut xo_main = None;
-        let mut legacy_main = None;
         for config in &configs {
             let source = String::from_utf8(config.bytes.clone())
                 .with_context(|| format!("configuration {} is not UTF-8", config.record.path))?;
             match config.record.path.as_str() {
                 "xo.scm" => xo_main = Some(source),
-                "exo.scm" => legacy_main = Some(source),
                 _ => {
                     modules.insert(config.record.path.clone(), source);
                 }
             }
         }
-        let mut behavior = match xo_main.or(legacy_main) {
+        let mut behavior = match xo_main {
             Some(source) => xo_core::steel_runtime::SteelWorkspace::load(
                 &source,
                 &modules,
@@ -333,6 +331,10 @@ mod tests {
             vec!["notes", "all"]
         );
         assert!(projection.join("xo.scm").is_file());
+        let source = std::fs::read_to_string(projection.join("xo.scm"))?;
+        assert!(source.starts_with("(workspace-config\n  (schema 1)"));
+        assert!(source.contains("(field-equals \"type\" \"note\")"));
+        assert!(!source.starts_with("(workspace-config \""));
         let configs = WorkspaceRecords::new(&session.workspace)
             .list_configs()
             .await?;

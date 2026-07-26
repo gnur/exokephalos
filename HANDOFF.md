@@ -1,6 +1,6 @@
 # Development handoff
 
-Last updated: 2026-07-25
+Last updated: 2026-07-26
 
 This document is the starting point for a future development session. Read it
 before changing the working tree, then use `rust-rewrite-stages.md` for the
@@ -34,21 +34,28 @@ larger roadmap and `README.md` for the current operator-facing workflow.
 The current branch is based on commit:
 
 ```text
-53b7573 work in progress for steel implementation
+89a19ac tui work in progress
 ```
 
 Current uncommitted files at handoff time:
 
 ```text
-M README.md
-M crates/xo-core/src/iroh_node.rs
-M crates/xo-syncd/src/main.rs
-M crates/xo/src/session.rs
 M HANDOFF.md
+M README.md
+M crates/xo-admin/src/main.rs
+M crates/xo-core/src/iroh_node.rs
+M crates/xo-core/src/projection.rs
+M crates/xo-core/src/records.rs
+M crates/xo-core/src/rotation.rs
+M crates/xo-core/src/steel_runtime.rs
+M crates/xo-core/src/watcher.rs
+M crates/xo-core/src/workspace_projection.rs
+M crates/xo/src/session.rs
+M rust-rewrite-stages.md
 ```
 
 Do not reset, restore, or overwrite these files. They contain the complete set
-of live-sync restart changes.
+of headless ticket-import and native workspace-configuration changes.
 
 ## Current product behavior
 
@@ -76,18 +83,17 @@ Default command config:
 
 ### Workspace configuration
 
-- `xo.scm` is the preferred projected workspace configuration filename.
-- Legacy `exo.scm` remains accepted by projection, watcher, runtime, and
-  workspace-projection code.
+- `xo.scm` is the only projected workspace configuration filename.
 - If the loaded workspace behavior has no views, `WorkspaceSession::behavior`
-  creates and replicates `xo.scm` with:
+  creates and replicates native declarative `xo.scm` with:
   - `notes`: `type == "note"`, newest first
   - `all`: no predicate, newest first
-- The generated workspace file still uses the portable
-  `(workspace-config "<descriptor-json>")` envelope. The command-level
-  `~/.config/xo/config.scm` is native Steel, but the workspace behavior format
-  has not yet been converted to native field forms. This distinction is likely
-  to matter in future UX work.
+- Native workspace forms cover views, subviews, predicates, actions and effects,
+  templates, capability grants, and query limits.
+- JSON descriptor envelopes and `exo.scm` are intentionally rejected; the
+  product is greenfield and has no released configuration to preserve.
+- Arbitrary executable Steel forms remain outside the declarative sandbox
+  boundary.
 
 ### TUI layout and controls
 
@@ -174,7 +180,7 @@ There is a regression test that replaces the temporary file with `mv`.
 4. Join using `xo --ticket '<WRITABLE_TICKET>'`.
 
 The README also includes systemd, health/status/metrics, additional clients,
-backups, and the workaround for attaching a server to a TUI-created workspace.
+backups, and headless attachment of a server to a TUI-created workspace.
 
 Important operational constraint: never open the same state directory
 concurrently with `xo`, `xo-admin`, and `xo-syncd`.
@@ -189,30 +195,22 @@ Live synchronization now resumes without re-supplying a ticket:
 - `two_peers_sync_and_second_peer_survives_restart` verifies that a restarted
   peer receives a revision written after restart.
 
+`xo-admin import-ticket STATE_DIR TICKET` imports a writable capability without
+launching the TUI and prints both the workspace ID and a server-addressed
+writable ticket. Read-only tickets are rejected before an Iroh state directory
+is created. Repeating the same import is safe. The returned server ticket is
+used once on the original client to establish the bidirectional peer
+relationship before normal restart-based synchronization takes over.
+
 ## Known limitations and likely next work
 
-### 1. No headless ticket import for the server
-
-`xo-admin` can create invitations but cannot import a ticket into a server state
-directory. Attaching `xo-syncd` to a workspace originally created by the TUI
-currently requires launching `xo` once against the server state. A dedicated
-`xo-admin import-ticket` command would simplify this workflow.
-
-### 2. Workspace `xo.scm` is still a JSON descriptor envelope
-
-The user explicitly wanted native Steel for the command config and that has
-been implemented. Workspace behavior still serializes JSON into a Steel string.
-If native editable workspace configuration becomes the next priority, extend
-the sandboxed Steel parser with declarative native forms while retaining legacy
-descriptor compatibility and the existing ambient-capability tests.
-
-### 3. Template creation UX needs a decision
+### 1. Template creation UX needs a decision
 
 The core supports templates, but `c` now follows the requested default
 frontmatter/title/editor flow. If templates return to the TUI, add an explicit
 template picker rather than silently choosing the first template.
 
-### 4. Remaining roadmap work
+### 2. Remaining roadmap work
 
 The main incomplete stages are already checkable in
 `rust-rewrite-stages.md`. In particular:
@@ -249,26 +247,28 @@ The main incomplete stages are already checkable in
 
 ## Last verified state
 
-After the latest raw-preview and title-first creation changes:
+After the headless writable-ticket import and native greenfield workspace
+configuration changes:
 
 ```text
-cargo test -p xo --bin xo
-19 passed; 0 failed
+cargo fmt --all -- --check
+passed
 
 cargo clippy --workspace --all-targets -- -D warnings
 passed
 
-cargo fmt --all
-passed
+cargo test -p xo-admin
+5 passed; 0 failed
+
+cargo test --workspace
+85 passed; 0 failed
 
 git diff --check
 passed
 ```
 
-The complete `cargo test --workspace` suite passed earlier in this same line of
-work, before the final preview/title changes. Run it again at the start or end
-of the next substantial change; its multi-peer Iroh tests take roughly two
-minutes and require local socket access.
+The multi-peer Iroh portion of the workspace suite takes roughly two minutes
+and requires local socket access.
 
 ## Handoff hygiene
 

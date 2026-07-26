@@ -1,0 +1,21 @@
+[Unit]
+Description=xo synchronization peer
+Documentation=https://github.com/gnur/exokephalos
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/mkdir -p %h/.local/share/xo-syncd
+ExecStart=%h/.local/bin/xo-syncd --state-dir %h/.local/share/xo-syncd --operator-bind 127.0.0.1:9464
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGINT
+TimeoutStopSec=30s
+
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

@@ -15,7 +15,7 @@ larger roadmap and `README.md` for the current operator-facing workflow.
 3. Run the focused TUI test suite before making another TUI change:
 
    ```console
-   cargo test -p xo --bin xo
+   cargo test -p xo
    ```
 
    The Iroh-backed tests bind local sockets and may require sandbox/network
@@ -34,7 +34,7 @@ larger roadmap and `README.md` for the current operator-facing workflow.
 The current branch is based on commit:
 
 ```text
-89a19ac tui work in progress
+cb74ed2 more work in progress
 ```
 
 Current uncommitted files at handoff time:
@@ -42,20 +42,21 @@ Current uncommitted files at handoff time:
 ```text
 M HANDOFF.md
 M README.md
-M crates/xo-admin/src/main.rs
-M crates/xo-core/src/iroh_node.rs
-M crates/xo-core/src/projection.rs
-M crates/xo-core/src/records.rs
-M crates/xo-core/src/rotation.rs
-M crates/xo-core/src/steel_runtime.rs
-M crates/xo-core/src/watcher.rs
-M crates/xo-core/src/workspace_projection.rs
+M Cargo.lock
+M crates/xo/Cargo.toml
+M crates/xo-syncd/Cargo.toml
+M crates/xo/src/app.rs
+M crates/xo/src/main.rs
 M crates/xo/src/session.rs
 M rust-rewrite-stages.md
+?? crates/xo-syncd/tests/
+?? crates/xo/src/lib.rs
+?? examples/
 ```
 
 Do not reset, restore, or overwrite these files. They contain the complete set
-of headless ticket-import and native workspace-configuration changes.
+of guided `xo-syncd` pairing, example systemd-unit, and multi-client E2E
+changes.
 
 ## Current product behavior
 
@@ -118,6 +119,7 @@ Important controls:
 - `d`/`u`: delete/restore
 - `a`: fuzzy action picker
 - `x`, `v`, `y`: conflicts, devices, and synchronization details
+- `J`: open the guided `xo-syncd` pairing wizard
 - `r`: refresh/retry synchronization
 - `q`: quit
 
@@ -202,6 +204,24 @@ is created. Repeating the same import is safe. The returned server ticket is
 used once on the original client to establish the bidirectional peer
 relationship before normal restart-based synchronization takes over.
 
+The TUI now drives that exchange with `J`:
+
+- it asks for the server state directory;
+- generates a writable client invitation;
+- builds POSIX-quoted stop/import/start commands for the system service;
+- copies them through OSC 52 or reveals them on explicit request;
+- accepts either complete `xo-admin` output or its `ticket=` line;
+- validates and connects the returned server ticket; and
+- zeroizes the in-memory invitation, pasted output, and clipboard payload.
+
+Example system and user units live below `examples/systemd/`.
+
+`syncd_restart_converges_two_restarted_tui_clients_with_offline_conflict` is a
+process-level E2E test. It launches the compiled `xo-syncd`, joins two
+independent TUI sessions, restarts the daemon and both clients, creates
+concurrent offline edits, and verifies convergence and retained history in both
+clients and the daemon's persisted workspace.
+
 ## Known limitations and likely next work
 
 ### 1. Template creation UX needs a decision
@@ -225,6 +245,7 @@ The main incomplete stages are already checkable in
 ## Important files
 
 - `crates/xo/src/main.rs` — CLI, TUI event loop, creation/editor lifecycle
+- `crates/xo/src/lib.rs` — narrow library boundary exposing the real TUI session to E2E tests
 - `crates/xo/src/app.rs` — TUI model, filtering, tags, view picker, preview,
   highlighting, rendering, and most TUI tests
 - `crates/xo/src/config.rs` — native command configuration
@@ -237,18 +258,19 @@ The main incomplete stages are already checkable in
   file handling
 - `crates/xo-core/src/watcher.rs` — supported projected path watching
 - `crates/xo-syncd/src/main.rs` — daemon startup and persistent Iroh peer
+- `crates/xo-syncd/tests/multiple_tui_clients.rs` — real-daemon, two-TUI restart and conflict E2E
 - `crates/xo-syncd/src/operator.rs` — health, status, and metrics HTTP API
 - `crates/xo-admin/src/main.rs` — import, invitations, backups, diagnostics,
   retirement, and namespace rotation
 - `README.md` — user/operator setup guide
+- `examples/systemd/` — system-wide and per-user `xo-syncd` units
 - `rust-rewrite-stages.md` — implementation checklist and test gates
 - `exo-rs-plan.md` — original rewrite plan
 - `oldcodebase/` — legacy implementation and compatibility source
 
 ## Last verified state
 
-After the headless writable-ticket import and native greenfield workspace
-configuration changes:
+After the real-daemon, multi-TUI E2E changes:
 
 ```text
 cargo fmt --all -- --check
@@ -261,7 +283,7 @@ cargo test -p xo-admin
 5 passed; 0 failed
 
 cargo test --workspace
-85 passed; 0 failed
+89 passed; 0 failed
 
 git diff --check
 passed

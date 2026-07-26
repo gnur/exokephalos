@@ -25,3 +25,4 @@ workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+xo = { path = "../xo" }

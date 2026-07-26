@@ -35,6 +35,24 @@ pub enum Mode {
     Conflicts,
     Devices,
     Sync,
+    Pairing,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PairingStep {
+    StateDirectory,
+    ServerCommand,
+    ServerOutput,
+    Connected,
+}
+
+pub struct ServerPairing {
+    pub step: PairingStep,
+    pub state_dir: String,
+    pub invitation: Option<Zeroizing<String>>,
+    pub server_output: Zeroizing<String>,
+    pub reveal_ticket: bool,
+    pub error: String,
 }
 
 pub struct App {
@@ -61,6 +79,7 @@ pub struct App {
     pub view_query: String,
     pub view_picker_index: usize,
     pub message: String,
+    pub pairing: Option<ServerPairing>,
     pub decrypted_preview: Option<Zeroizing<String>>,
     sort_descending: bool,
 }
@@ -92,6 +111,7 @@ impl App {
             view_query: String::new(),
             view_picker_index: 0,
             message: String::new(),
+            pairing: None,
             decrypted_preview: None,
             sort_descending: false,
         }
@@ -337,6 +357,73 @@ impl App {
         self.edit_selected(encrypted)
             .context("selected note disappeared")
     }
+
+    pub fn start_server_pairing(&mut self) {
+        self.pairing = Some(ServerPairing {
+            step: PairingStep::StateDirectory,
+            state_dir: "/var/lib/xo-syncd".into(),
+            invitation: None,
+            server_output: Zeroizing::new(String::new()),
+            reveal_ticket: false,
+            error: String::new(),
+        });
+        self.mode = Mode::Pairing;
+    }
+
+    pub fn cancel_server_pairing(&mut self) {
+        self.pairing = None;
+        self.mode = Mode::Normal;
+    }
+
+    pub fn set_pairing_invitation(&mut self, invitation: String) {
+        if let Some(pairing) = &mut self.pairing {
+            pairing.invitation = Some(Zeroizing::new(invitation));
+            pairing.step = PairingStep::ServerCommand;
+            pairing.error.clear();
+        }
+    }
+
+    pub fn pairing_command(&self) -> Option<Zeroizing<String>> {
+        let pairing = self.pairing.as_ref()?;
+        let ticket = pairing.invitation.as_deref()?;
+        Some(Zeroizing::new(server_pairing_commands(
+            &pairing.state_dir,
+            ticket,
+        )))
+    }
+
+    pub fn pairing_ticket(&self) -> Option<Zeroizing<String>> {
+        let pairing = self.pairing.as_ref()?;
+        ticket_from_server_output(&pairing.server_output)
+    }
+}
+
+#[must_use]
+pub fn server_pairing_commands(state_dir: &str, ticket: &str) -> String {
+    format!(
+        "sudo systemctl stop xo-syncd\nsudo -u xo xo-admin import-ticket {} {}\nsudo systemctl start xo-syncd",
+        shell_quote(state_dir),
+        shell_quote(ticket)
+    )
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+#[must_use]
+pub fn ticket_from_server_output(output: &str) -> Option<Zeroizing<String>> {
+    output
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("ticket="))
+        .map(str::trim)
+        .filter(|ticket| !ticket.is_empty())
+        .map(|value| Zeroizing::new(value.to_owned()))
+        .or_else(|| {
+            let value = output.trim();
+            (!value.is_empty() && !value.contains('=') && !value.chars().any(char::is_whitespace))
+                .then(|| Zeroizing::new(value.to_owned()))
+        })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -545,9 +632,12 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         ])
         .split(header[1]);
     for (area, lines) in key_columns.iter().zip([
-        vec!["[↑↓/jk] select", "[Tab] pane · [Space] tag"],
-        vec!["[Enter/e] edit · [c] create", "[/] filter · [:] views"],
-        vec!["[d/u] delete/restore", "[a] actions · [r] sync · [q] quit"],
+        vec!["[↑↓/jk] select · [Tab] pane", "[Space] tag · [/] filter"],
+        vec![
+            "[Enter/e] edit · [c] create",
+            "[d/u] del/restore · [:] views",
+        ],
+        vec!["[a] actions · [J] pair syncd", "[r] sync · [q] quit"],
     ]) {
         frame.render_widget(
             Paragraph::new(lines.join("\n")).style(Style::default().fg(Color::Cyan)),
@@ -592,6 +682,10 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         );
     }
     let content_area = vertical[usize::from(has_input) + 1];
+    if app.mode == Mode::Pairing {
+        render_pairing(frame, app, content_area);
+        return;
+    }
     let panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -798,6 +892,85 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     );
 }
 
+fn render_pairing(frame: &mut Frame<'_>, app: &App, area: ratatui::layout::Rect) {
+    let Some(pairing) = &app.pairing else {
+        frame.render_widget(
+            Paragraph::new("Pairing state is unavailable.").block(
+                Block::default()
+                    .title("Connect xo-syncd")
+                    .borders(Borders::ALL),
+            ),
+            area,
+        );
+        return;
+    };
+    let error = if pairing.error.is_empty() {
+        String::new()
+    } else {
+        format!("\n\nError: {}", pairing.error)
+    };
+    let text = match pairing.step {
+        PairingStep::StateDirectory => format!(
+            "Step 1 of 3 — Server location\n\n\
+             Enter the state directory used by xo-syncd on the server.\n\n\
+             > {}\n\n\
+             Enter: generate invitation · Ctrl+U: clear · Esc: cancel{}",
+            pairing.state_dir, error
+        ),
+        PairingStep::ServerCommand => {
+            let command = if pairing.reveal_ticket {
+                app.pairing_command().unwrap_or_default()
+            } else {
+                Zeroizing::new(server_pairing_commands(
+                    &pairing.state_dir,
+                    "<writable ticket hidden>",
+                ))
+            };
+            format!(
+                "Step 2 of 3 — Run on the server\n\n\
+                 Copy and run these commands on the server. They stop xo-syncd, import this \
+                 workspace as the xo service user, and restart the daemon.\n\n\
+                 {}\n\n\
+                 c: copy commands · F2: show/hide ticket · Enter: paste server output · Esc: cancel\
+                 \n\nThe invitation is a writable capability. Keep it private.{error}",
+                command.as_str()
+            )
+        }
+        PairingStep::ServerOutput => {
+            let output = if pairing.server_output.is_empty() {
+                Zeroizing::new("<paste xo-admin output here>".to_owned())
+            } else if pairing.reveal_ticket {
+                pairing.server_output.clone()
+            } else {
+                Zeroizing::new("<server output hidden>".to_owned())
+            };
+            format!(
+                "Step 3 of 3 — Complete pairing\n\n\
+                 Paste the complete output from xo-admin import-ticket, or only its ticket= line.\n\n\
+                 {}\n\n\
+                 Enter: connect · F2: show/hide pasted output · Backspace: edit · Esc: cancel{error}",
+                output.as_str()
+            )
+        }
+        PairingStep::Connected => format!(
+            "Server connected\n\n\
+             Workspace: {}\n\n\
+             The server ticket was accepted and synchronization has started. Future launches \
+             resume from the stored peer relationship.\n\n\
+             Enter or Esc: return to notes",
+            app.workspace_id
+        ),
+    };
+    frame.render_widget(
+        Paragraph::new(text).wrap(Wrap { trim: false }).block(
+            Block::default()
+                .title("Connect xo-syncd")
+                .borders(Borders::ALL),
+        ),
+        area,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -869,6 +1042,94 @@ mod tests {
         assert!(screen.contains("Offline"));
         assert!(screen.contains("[Enter/e] edit"));
         assert!(!screen.contains("pending=0"));
+    }
+
+    #[test]
+    fn server_pairing_builds_safe_commands_and_parses_admin_output() {
+        let commands =
+            server_pairing_commands("/var/lib/xo syncd", "ticket'with-sensitive-content");
+        assert_eq!(
+            commands,
+            "sudo systemctl stop xo-syncd\n\
+             sudo -u xo xo-admin import-ticket '/var/lib/xo syncd' \
+             'ticket'\"'\"'with-sensitive-content'\n\
+             sudo systemctl start xo-syncd"
+        );
+        assert_eq!(
+            ticket_from_server_output(
+                "workspace_id=workspace123\n\
+                 ticket=server-ticket-123\n"
+            )
+            .as_ref()
+            .map(|value| value.as_str()),
+            Some("server-ticket-123")
+        );
+        assert_eq!(
+            ticket_from_server_output("server-ticket-456")
+                .as_ref()
+                .map(|value| value.as_str()),
+            Some("server-ticket-456")
+        );
+        assert!(ticket_from_server_output("workspace_id=workspace123").is_none());
+    }
+
+    #[test]
+    fn server_pairing_renders_each_step_without_revealing_tickets_by_default() {
+        let mut app = fixture();
+        app.workspace_id = "workspace123".into();
+        app.start_server_pairing();
+        let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let state_screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(state_screen.contains("Step 1 of 3"));
+        assert!(state_screen.contains("/var/lib/xo-syncd"));
+
+        app.set_pairing_invitation("client-secret-ticket".into());
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let command_screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(command_screen.contains("Step 2 of 3"));
+        assert!(command_screen.contains("xo-admin import-ticket"));
+        assert!(command_screen.contains("<writable ticket hidden>"));
+        assert!(!command_screen.contains("client-secret-ticket"));
+
+        let pairing = app.pairing.as_mut().unwrap();
+        pairing.step = PairingStep::ServerOutput;
+        pairing.server_output = Zeroizing::new("ticket=server-secret-ticket".into());
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let output_screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(output_screen.contains("Step 3 of 3"));
+        assert!(output_screen.contains("<server output hidden>"));
+        assert!(!output_screen.contains("server-secret-ticket"));
+
+        app.pairing.as_mut().unwrap().step = PairingStep::Connected;
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let connected_screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(connected_screen.contains("Server connected"));
+        assert!(connected_screen.contains("workspace123"));
     }
 
     #[test]

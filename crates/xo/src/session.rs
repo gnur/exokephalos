@@ -152,6 +152,15 @@ impl WorkspaceSession {
         self.sync_state.set_connectivity(&Connectivity::Direct)?;
         Ok(())
     }
+    pub async fn writable_invitation(&self) -> Result<String> {
+        self.workspace.share(true).await
+    }
+    pub async fn connect_peer(&self, ticket: &str) -> Result<()> {
+        self.workspace.start_sync(ticket).await?;
+        self.sync_state
+            .set_connectivity(&Connectivity::Connecting)?;
+        Ok(())
+    }
     pub async fn deleted_notes(&self) -> Result<Vec<Note>> {
         Ok(WorkspaceRecords::new(&self.workspace)
             .deleted_notes()
@@ -340,6 +349,49 @@ mod tests {
             .await?;
         assert!(configs.iter().any(|config| config.record.path == "xo.scm"));
         session.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tui_pairing_invitation_connects_a_sync_peer() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut session = WorkspaceSession::open(
+            &directory.path().join("client"),
+            None,
+            None,
+            directory.path().join("projection"),
+        )
+        .await?;
+        session.behavior().await?;
+        let workspace_id = session.workspace_id();
+        let client_ticket = session.writable_invitation().await?;
+
+        let server = IrohNode::persistent(directory.path().join("server")).await?;
+        let server_workspace = server.import_writable_workspace(&client_ticket).await?;
+        assert_eq!(server_workspace.id().to_string(), workspace_id);
+        let server_ticket = server_workspace.share(true).await?;
+
+        session.connect_peer(&server_ticket).await?;
+        assert_eq!(
+            session.sync_state.status()?.connectivity,
+            Connectivity::Connecting
+        );
+        server_workspace
+            .put("pairing/verification", "connected")
+            .await?;
+        wait_until(|| async {
+            session
+                .workspace
+                .get("pairing/verification")
+                .await
+                .ok()
+                .flatten()
+                .is_some()
+        })
+        .await?;
+
+        session.shutdown().await?;
+        server.shutdown().await?;
         Ok(())
     }
 

@@ -91,41 +91,37 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:9464/v1/workspaces
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:9464/metrics
 ```
 
-### Optional systemd service
+### Optional systemd services
 
-Create a dedicated user and ensure it owns `/var/lib/xo-syncd`, then install a
-unit such as `/etc/systemd/system/xo-syncd.service`:
-
-```ini
-[Unit]
-Description=xo synchronization peer
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=xo
-Group=xo
-ExecStart=/usr/local/bin/xo-syncd --state-dir /var/lib/xo-syncd --operator-bind 127.0.0.1:9464
-Restart=on-failure
-RestartSec=5
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/xo-syncd
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable it with:
+The repository includes a hardened system service at
+[`examples/systemd/xo-syncd.service`](examples/systemd/xo-syncd.service). It
+uses the dedicated `xo` account and lets systemd create
+`/var/lib/xo-syncd` with the correct ownership:
 
 ```console
+sudo useradd --system --home-dir /var/lib/xo-syncd --shell /usr/sbin/nologin xo
+sudo install -m 0755 target/release/xo-syncd /usr/local/bin/xo-syncd
+sudo install -m 0644 examples/systemd/xo-syncd.service /etc/systemd/system/xo-syncd.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now xo-syncd
 sudo systemctl status xo-syncd
 ```
+
+For a single-user machine, install
+[`examples/systemd/xo-syncd-user.service`](examples/systemd/xo-syncd-user.service)
+as a user unit instead:
+
+```console
+install -Dm0755 target/release/xo-syncd ~/.local/bin/xo-syncd
+install -Dm0644 examples/systemd/xo-syncd-user.service \
+  ~/.config/systemd/user/xo-syncd.service
+systemctl --user daemon-reload
+systemctl --user enable --now xo-syncd
+```
+
+The TUI pairing wizard described below generates commands for the system
+service and `/var/lib/xo-syncd`. A user-service installation can use the same
+flow by running the equivalent `systemctl --user` and non-`sudo` commands.
 
 ## Connect the TUI
 
@@ -232,7 +228,7 @@ directory, create another invitation, and then restart the daemon:
 
 ```console
 sudo systemctl stop xo-syncd
-xo-admin invite /var/lib/xo-syncd '<WORKSPACE_ID>'
+sudo -u xo xo-admin invite /var/lib/xo-syncd '<WORKSPACE_ID>'
 sudo systemctl start xo-syncd
 ```
 
@@ -247,30 +243,27 @@ the `xo-admin invite` command.
 
 ## Attach a server to an existing TUI workspace
 
-The cleanest setup is to initialize the workspace on the server first. If the
-workspace already exists in a TUI state directory, attach the server with a
-writable ticket:
+If the workspace was created in the TUI, press `J` to open **Connect
+xo-syncd**:
 
-1. Stop the client TUI and obtain its workspace ID from
-   `~/.local/share/xo/active-workspace`.
-2. Create a writable invitation with `xo-admin invite` against the stopped
-   client state directory.
-3. Stop `xo-syncd`, then import the client ticket into the server state:
+1. Confirm the server state directory. The default is `/var/lib/xo-syncd`.
+2. Press Enter to create a writable invitation. The ticket is hidden by
+   default.
+3. Press `c` to copy the generated stop/import/start commands using the
+   terminal's OSC 52 clipboard support. Press `F2` if the terminal does not
+   support clipboard writes and the commands need to be displayed for manual
+   copying.
+4. Run the commands on the server. They stop the system service, import the
+   workspace as the `xo` service user, and restart `xo-syncd`.
+5. Press Enter in the TUI and paste either the complete `xo-admin` output or
+   only its `ticket=...` line.
+6. Press Enter again. The TUI validates that the returned ticket belongs to the
+   active workspace, stores the peer relationship, and starts synchronization.
 
-   ```console
-   xo-admin import-ticket /var/lib/xo-syncd '<CLIENT_TICKET>'
-   ```
-
-   This prints the imported workspace ID and a new writable ticket addressed to
-   the server endpoint.
-4. Restart `xo-syncd` with `/var/lib/xo-syncd`.
-5. Use the newly printed server ticket once on the original client:
-
-   ```console
-   xo --ticket '<SERVER_TICKET>'
-   ```
-
-   Subsequent launches resume synchronization from the stored peer list.
+The successful screen displays the workspace ID and confirms that future TUI
+and daemon launches will resume synchronization without either ticket. Press
+Esc at any step to discard the in-memory invitation. Tickets and pasted server
+output remain hidden unless `F2` is pressed.
 
 Never run `xo`, `xo-admin`, and `xo-syncd` concurrently against the same state
 directory.

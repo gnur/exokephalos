@@ -1,23 +1,25 @@
 mod app;
 mod config;
-mod session;
 
-use std::io::{self, stdout};
+use std::io::{self, Write as _, stdout};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use app::{App, Mode, external_edit_with, render, required_frontmatter};
+use app::{App, Mode, PairingStep, external_edit_with, render, required_frontmatter};
+use base64::Engine as _;
 use clap::{Parser, Subcommand};
 use config::{CliOverrides, XoConfig, config_path, home_dir};
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use session::WorkspaceSession;
 use time::OffsetDateTime;
+use xo::session::WorkspaceSession;
 use xo_core::domain::Frontmatter;
 use xo_core::{Note, NoteId};
 use zeroize::Zeroizing;
@@ -104,12 +106,16 @@ async fn run_tui(
     app.workspace_id = session.workspace_id();
     hydrate(&mut app, &session, snapshot).await?;
     enable_raw_mode()?;
-    execute!(stdout(), EnterAlternateScreen)?;
+    execute!(stdout(), EnterAlternateScreen, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
     let result = event_loop(&mut terminal, &mut app, &mut session).await;
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        DisableBracketedPaste,
+        LeaveAlternateScreen
+    )?;
     terminal.show_cursor()?;
     session.shutdown().await?;
     result
@@ -154,8 +160,18 @@ async fn event_loop(
 ) -> Result<()> {
     loop {
         terminal.draw(|frame| render(frame, app))?;
-        let Event::Key(key) = event::read()? else {
-            continue;
+        let key = match event::read()? {
+            Event::Key(key) => key,
+            Event::Paste(value) => {
+                if let Some(pairing) = &mut app.pairing
+                    && pairing.step == PairingStep::ServerOutput
+                {
+                    pairing.server_output.push_str(&value);
+                    pairing.error.clear();
+                }
+                continue;
+            }
+            _ => continue,
         };
         if key.kind != KeyEventKind::Press {
             continue;
@@ -237,6 +253,135 @@ async fn event_loop(
                 }
                 _ => {}
             },
+            Mode::Pairing => {
+                let step = app.pairing.as_ref().map(|pairing| pairing.step);
+                match (step, key.code) {
+                    (_, KeyCode::Esc) => {
+                        if step == Some(PairingStep::Connected) {
+                            app.message = "sync server connected".into();
+                        }
+                        app.cancel_server_pairing();
+                    }
+                    (Some(PairingStep::StateDirectory), KeyCode::Backspace) => {
+                        if let Some(pairing) = &mut app.pairing {
+                            pairing.state_dir.pop();
+                            pairing.error.clear();
+                        }
+                    }
+                    (Some(PairingStep::StateDirectory), KeyCode::Char('u'))
+                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        if let Some(pairing) = &mut app.pairing {
+                            pairing.state_dir.clear();
+                            pairing.error.clear();
+                        }
+                    }
+                    (Some(PairingStep::StateDirectory), KeyCode::Char(value))
+                        if !key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        if let Some(pairing) = &mut app.pairing {
+                            pairing.state_dir.push(value);
+                            pairing.error.clear();
+                        }
+                    }
+                    (Some(PairingStep::StateDirectory), KeyCode::Enter) => {
+                        let state_dir = app
+                            .pairing
+                            .as_ref()
+                            .map(|pairing| pairing.state_dir.trim())
+                            .unwrap_or_default();
+                        if state_dir.is_empty() {
+                            if let Some(pairing) = &mut app.pairing {
+                                pairing.error = "server state directory is required".into();
+                            }
+                        } else {
+                            match session.writable_invitation().await {
+                                Ok(invitation) => app.set_pairing_invitation(invitation),
+                                Err(error) => {
+                                    if let Some(pairing) = &mut app.pairing {
+                                        pairing.error = error.to_string();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    (
+                        Some(PairingStep::ServerCommand | PairingStep::ServerOutput),
+                        KeyCode::F(2),
+                    ) => {
+                        if let Some(pairing) = &mut app.pairing {
+                            pairing.reveal_ticket = !pairing.reveal_ticket;
+                        }
+                    }
+                    (Some(PairingStep::ServerCommand), KeyCode::Char('c')) => {
+                        if let Some(command) = app.pairing_command() {
+                            match copy_to_clipboard(terminal, &command) {
+                                Ok(()) => app.message = "pairing commands copied".into(),
+                                Err(error) => {
+                                    if let Some(pairing) = &mut app.pairing {
+                                        pairing.error = format!("could not copy commands: {error}");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    (Some(PairingStep::ServerCommand), KeyCode::Enter) => {
+                        if let Some(pairing) = &mut app.pairing {
+                            pairing.step = PairingStep::ServerOutput;
+                            pairing.server_output.clear();
+                            pairing.reveal_ticket = false;
+                            pairing.error.clear();
+                        }
+                    }
+                    (Some(PairingStep::ServerOutput), KeyCode::Backspace) => {
+                        if let Some(pairing) = &mut app.pairing {
+                            pairing.server_output.pop();
+                            pairing.error.clear();
+                        }
+                    }
+                    (Some(PairingStep::ServerOutput), KeyCode::Char(value))
+                        if !key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        if let Some(pairing) = &mut app.pairing {
+                            pairing.server_output.push(value);
+                            pairing.error.clear();
+                        }
+                    }
+                    (Some(PairingStep::ServerOutput), KeyCode::Enter) => {
+                        let Some(ticket) = app.pairing_ticket() else {
+                            if let Some(pairing) = &mut app.pairing {
+                                pairing.error = "paste the ticket= line printed by xo-admin".into();
+                            }
+                            continue;
+                        };
+                        match session.connect_peer(&ticket).await {
+                            Ok(()) => {
+                                if let Some(pairing) = &mut app.pairing {
+                                    pairing.step = PairingStep::Connected;
+                                    pairing.server_output.clear();
+                                    pairing.invitation = None;
+                                    pairing.error.clear();
+                                }
+                                app.sync = Some(session.sync_state.status()?);
+                                app.message = "sync server connected".into();
+                            }
+                            Err(error) => {
+                                if let Some(pairing) = &mut app.pairing {
+                                    pairing.error = error.to_string();
+                                }
+                            }
+                        }
+                    }
+                    (Some(PairingStep::Connected), KeyCode::Enter) => {
+                        app.cancel_server_pairing();
+                    }
+                    _ => {}
+                }
+            }
             _ => match key.code {
                 KeyCode::Char('q') => break,
                 KeyCode::Tab => app.next_pane(),
@@ -280,6 +425,9 @@ async fn event_loop(
                 KeyCode::Char('y') => {
                     app.mode = Mode::Sync;
                     app.message = sync_summary(app);
+                }
+                KeyCode::Char('J') => {
+                    app.start_server_pairing();
                 }
                 KeyCode::Char('r') => {
                     session.refresh_sync()?;
@@ -437,17 +585,40 @@ fn password(prompt: &str) -> Result<Zeroizing<String>> {
 
 fn suspend_tui(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        DisableBracketedPaste,
+        LeaveAlternateScreen
+    )?;
     terminal.show_cursor()?;
     Ok(())
 }
 
 fn resume_tui(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
-    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        EnterAlternateScreen,
+        EnableBracketedPaste
+    )?;
     enable_raw_mode()?;
     terminal.clear()?;
     Ok(())
 }
+
+fn copy_to_clipboard(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    value: &str,
+) -> Result<()> {
+    let encoded = Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(value));
+    write!(
+        terminal.backend_mut(),
+        "\u{1b}]52;c;{}\u{7}",
+        encoded.as_str()
+    )?;
+    terminal.backend_mut().flush()?;
+    Ok(())
+}
+
 fn cycle_subview(app: &mut App) {
     let Some(view) = app
         .behavior

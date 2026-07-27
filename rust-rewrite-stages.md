@@ -162,7 +162,8 @@ A stage is complete only when every task and its exit gate are checked.
 - [x] Add secure encrypted-note preview and temporary-file editing.
 - [x] Replace the footer with a four-line connection/key-hint header.
 - [x] Lay out header shortcuts in three columns and show tags, filtered notes, and preview in the three content panes.
-- [x] Add inline `/` filtering and `:` view/subview selection bars.
+- [x] Add inline `/` filtering and a `g` goto menu with computed unique prefixes for views and subviews.
+- [x] Make the tag pane toggleable with `T` and show live faceted counts for the current view, title query, and selected tags.
 - [x] Bootstrap `xo.scm` with Notes and All views when no views exist.
 - [x] Guarantee `id`, `created`, `tags`, `title`, and `type` on newly created items.
 - [x] Show the serialized raw Markdown document in preview with lightweight syntax highlighting.
@@ -176,13 +177,14 @@ A stage is complete only when every task and its exit gate are checked.
 ### Stage 6 controls and test coverage
 
 - `xo` opens directly in TUI mode. It reads `~/.config/xo/config.scm`; `xo config-init` prints the default document, while a fresh state directory creates a local workspace automatically. `--state-dir`, `--workspace`, and `--projection` override persistent defaults; the non-persistent `--ticket` option is used only to join an Iroh invitation.
-- `Tab`/`Shift-Tab` move between tags, filtered notes, and preview; arrows navigate the focused list; `Space`/`Enter` toggles a highlighted tag; `:` opens the view/subview picker; configured view keys and `0` select views; `]` cycles subviews; `/`, `t`, and `s` control title filtering, tag-pane focus, and sorting.
+- `config_init_output_starts_a_fresh_xo_workspace` runs the real `xo config-init` command, loads its output through the startup configuration path, opens a fresh persisted session, and verifies the native Notes/All workspace configuration is projected. Existing prerelease JSON-envelope workspace configuration is validated and rewritten once as native forms.
+- `Tab`/`Shift-Tab` move between visible panes; arrows navigate the focused list; `Space`/`Enter` toggles a highlighted tag; `g` opens the view/subview menu and its displayed unique prefixes navigate directly; `/`, `T`, and `s` control title filtering, tag-pane visibility, and sorting.
 - `c` prompts for a title and opens the initialized item in `$EDITOR`; `Enter`/`e`, `d`, and `u` edit, delete, and restore; external editors run in a restored normal terminal; `a` opens the fuzzy action picker; `p` unlocks encrypted preview; `x`, `v`, and `y` open conflicts/history, devices, and sync details; `r` refreshes and `R` retries a durable operation.
 - `offline_tui_edit_reconnects_retains_conflict_and_converges` takes the primary peer offline, commits independent primary and central edits, reconnects, proves both peers retain the conflict, and verifies the immutable history converges.
 - `tui_pairing_invitation_connects_a_sync_peer` follows the TUI pairing APIs, imports the invitation into a server peer, returns its ticket, and proves a server write reaches the client.
 - `syncd_restart_converges_two_restarted_tui_clients_with_offline_conflict` launches the real `xo-syncd` binary, connects two independently persisted TUI sessions, restarts every participant, creates concurrent offline edits, and verifies both client histories plus the daemon's persisted conflict.
 - Pairing model/render tests cover POSIX-safe server commands, complete-output and direct-ticket parsing, every wizard step, and default ticket redaction.
-- Ratatui `TestBackend` tests cover the four-line, three-column header; tag counts and filtering; valid note selection; inline filter/view pickers; metadata-rich preview; actions; deletion/restore; and encrypted temporary-file editing. The editor regression test also covers editors that atomically replace the temporary file.
+- Ratatui `TestBackend` tests cover the four-line, three-column header; view/search/tag-filter-aware faceted counts; tag-pane visibility; valid note selection; inline filtering and prefix goto navigation; metadata-rich preview; actions; deletion/restore; and encrypted temporary-file editing. The editor regression test also covers editors that atomically replace the temporary file.
 
 ## Stage 7 — Content workflows and feature parity
 

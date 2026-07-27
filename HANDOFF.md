@@ -91,8 +91,12 @@ Default command config:
   - `all`: no predicate, newest first
 - Native workspace forms cover views, subviews, predicates, actions and effects,
   templates, capability grants, and query limits.
-- JSON descriptor envelopes and `exo.scm` are intentionally rejected; the
-  product is greenfield and has no released configuration to preserve.
+- The core native loader rejects JSON descriptor envelopes and `exo.scm`.
+  `WorkspaceSession` recognizes only the exact JSON envelope emitted by an
+  earlier prerelease Rust iteration, validates it, and immediately commits and
+  projects the equivalent native form. This one-time development-state repair
+  fixes existing WIP workspaces without widening the native configuration
+  language.
 - Arbitrary executable Steel forms remain outside the declarative sandbox
   boundary.
 
@@ -103,7 +107,7 @@ The screen currently contains:
 - a four-line header;
 - connection/workspace state in the first two header lines;
 - key hints arranged in three columns in the next two header lines;
-- a left tag pane;
+- a toggleable left tag pane;
 - a middle filtered-note pane;
 - a right raw-Markdown preview pane.
 
@@ -113,7 +117,8 @@ Important controls:
 - arrows or `j`/`k`: move through the focused list
 - `Space` or `Enter` in the tag pane: toggle the highlighted tag filter
 - `/`: open the title-filter input between header and content
-- `:`: open searchable view/subview selection
+- `g`: open the view/subview goto menu and type its displayed unique prefix
+- `T`: show or hide the tag pane
 - `c`: prompt for a title, construct default frontmatter, then open `$EDITOR`
 - `Enter` or `e` on a note: edit it
 - `d`/`u`: delete/restore
@@ -125,6 +130,8 @@ Important controls:
 
 Selection is clamped to the currently visible note list. This fixes the earlier
 failure where filtering left an invalid index and preview/edit appeared broken.
+Tag counts are faceted in real time: they respect the current view/subview and
+title query, and each count includes the current tag filters plus that tag.
 
 ### Preview
 
@@ -246,7 +253,7 @@ The main incomplete stages are already checkable in
 
 - `crates/xo/src/main.rs` — CLI, TUI event loop, creation/editor lifecycle
 - `crates/xo/src/lib.rs` — narrow library boundary exposing the real TUI session to E2E tests
-- `crates/xo/src/app.rs` — TUI model, filtering, tags, view picker, preview,
+- `crates/xo/src/app.rs` — TUI model, filtering, faceted tags, goto menu, preview,
   highlighting, rendering, and most TUI tests
 - `crates/xo/src/config.rs` — native command configuration
 - `crates/xo/src/session.rs` — local workspace selection, projection hydration,
@@ -270,7 +277,15 @@ The main incomplete stages are already checkable in
 
 ## Last verified state
 
-After the real-daemon, multi-TUI E2E changes:
+After the goto-menu and faceted-tag TUI changes, focused verification is:
+
+```text
+cargo test -p xo
+25 passed; 0 failed
+```
+
+The prior full-workspace verification after the real-daemon, multi-TUI E2E
+changes was:
 
 ```text
 cargo fmt --all -- --check

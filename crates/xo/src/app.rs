@@ -30,7 +30,7 @@ pub enum Mode {
     Normal,
     Search,
     CreateTitle,
-    ViewPicker,
+    Goto,
     ActionPicker,
     Conflicts,
     Devices,
@@ -70,14 +70,15 @@ pub struct App {
     pub active_subview: Option<String>,
     pub search: String,
     pub selected_tags: BTreeSet<String>,
+    pub tags_visible: bool,
     pub pane: Pane,
     pub mode: Mode,
     pub selected: usize,
     pub tag_index: usize,
     pub action_query: String,
     pub create_title: String,
-    pub view_query: String,
-    pub view_picker_index: usize,
+    pub goto_input: String,
+    pub goto_index: usize,
     pub message: String,
     pub pairing: Option<ServerPairing>,
     pub decrypted_preview: Option<Zeroizing<String>>,
@@ -87,6 +88,11 @@ pub struct App {
 impl App {
     pub fn new(behavior: WorkspaceBehavior, notes: Vec<Note>) -> Self {
         let active_view = behavior.default_view.clone();
+        let tags_visible = behavior
+            .views
+            .iter()
+            .find(|view| view.id == active_view)
+            .is_none_or(|view| view.show_tags);
         Self {
             workspace_id: String::new(),
             behavior,
@@ -102,14 +108,15 @@ impl App {
             active_subview: None,
             search: String::new(),
             selected_tags: BTreeSet::new(),
+            tags_visible,
             pane: Pane::Notes,
             mode: Mode::Normal,
             selected: 0,
             tag_index: 0,
             action_query: String::new(),
             create_title: String::new(),
-            view_query: String::new(),
-            view_picker_index: 0,
+            goto_input: String::new(),
+            goto_index: 0,
             message: String::new(),
             pairing: None,
             decrypted_preview: None,
@@ -118,23 +125,26 @@ impl App {
     }
 
     pub fn visible_notes(&self) -> Vec<&Note> {
-        let mut notes = self
-            .behavior
+        let mut notes = self.query_notes(self.selected_tags.clone());
+        if self.sort_descending {
+            notes.reverse();
+        }
+        notes
+    }
+
+    fn query_notes(&self, tags: BTreeSet<String>) -> Vec<&Note> {
+        self.behavior
             .query(
                 &self.notes,
                 &Query {
                     view: self.active_view.clone(),
                     subview: self.active_subview.clone(),
                     title: (!self.search.is_empty()).then(|| self.search.clone()),
-                    tags: self.selected_tags.clone(),
+                    tags,
                     limit: None,
                 },
             )
-            .unwrap_or_default();
-        if self.sort_descending {
-            notes.reverse();
-        }
-        notes
+            .unwrap_or_default()
     }
 
     pub fn selected_note(&self) -> Option<&Note> {
@@ -146,17 +156,23 @@ impl App {
     }
     pub fn next_pane(&mut self) {
         self.pane = match self.pane {
-            Pane::Tags => Pane::Notes,
             Pane::Notes => Pane::Preview,
-            Pane::Preview => Pane::Tags,
+            Pane::Preview if self.tags_visible => Pane::Tags,
+            Pane::Tags | Pane::Preview => Pane::Notes,
         };
     }
     pub fn previous_pane(&mut self) {
         self.pane = match self.pane {
-            Pane::Tags => Pane::Preview,
-            Pane::Notes => Pane::Tags,
+            Pane::Notes if self.tags_visible => Pane::Tags,
             Pane::Preview => Pane::Notes,
+            Pane::Tags | Pane::Notes => Pane::Preview,
         };
+    }
+    pub fn toggle_tags_visible(&mut self) {
+        self.tags_visible = !self.tags_visible;
+        if !self.tags_visible && self.pane == Pane::Tags {
+            self.pane = Pane::Notes;
+        }
     }
     pub fn select_next(&mut self) {
         let len = self.visible_notes().len();
@@ -170,13 +186,21 @@ impl App {
         self.decrypted_preview = None;
     }
     pub fn available_tags(&self) -> Vec<(String, usize)> {
-        let mut counts = BTreeMap::new();
-        for note in &self.notes {
+        let mut tags = BTreeSet::new();
+        for note in self.query_notes(BTreeSet::new()) {
             for tag in note_tags(note) {
-                *counts.entry(tag).or_insert(0) += 1;
+                tags.insert(tag);
             }
         }
-        counts.into_iter().collect()
+        tags.extend(self.selected_tags.iter().cloned());
+        tags.into_iter()
+            .map(|tag| {
+                let mut filters = self.selected_tags.clone();
+                filters.insert(tag.clone());
+                let count = self.query_notes(filters).len();
+                (tag, count)
+            })
+            .collect()
     }
     pub fn select_next_tag(&mut self) {
         let last = self.available_tags().len().saturating_sub(1);
@@ -194,14 +218,23 @@ impl App {
         id.clone_into(&mut self.active_view);
         self.active_subview = None;
         self.selected = 0;
+        self.tag_index = 0;
+        self.tags_visible = self
+            .behavior
+            .views
+            .iter()
+            .find(|view| view.id == id)
+            .is_none_or(|view| view.show_tags);
+        if !self.tags_visible && self.pane == Pane::Tags {
+            self.pane = Pane::Notes;
+        }
     }
     pub fn set_subview(&mut self, id: Option<String>) {
         self.active_subview = id;
         self.selected = 0;
     }
 
-    pub fn view_choices(&self) -> Vec<ViewChoice> {
-        let needle = self.view_query.to_lowercase();
+    pub fn goto_choices(&self) -> Vec<ViewChoice> {
         let mut choices = self
             .behavior
             .views
@@ -211,31 +244,62 @@ impl App {
                     label: view.name.clone(),
                     view: view.id.clone(),
                     subview: None,
+                    navigation_key: view.id.to_lowercase(),
+                    prefix: String::new(),
                 }];
                 choices.extend(view.subviews.iter().map(|subview| ViewChoice {
                     label: format!("{} / {}", view.name, subview.name),
                     view: view.id.clone(),
                     subview: Some(subview.id.clone()),
+                    navigation_key: subview.id.to_lowercase(),
+                    prefix: String::new(),
                 }));
                 choices
             })
-            .filter(|choice| fuzzy(&choice.label, &needle).is_some())
             .collect::<Vec<_>>();
-        choices.sort_by_key(|choice| std::cmp::Reverse(fuzzy(&choice.label, &needle)));
+        for index in 0..choices.len() {
+            let duplicate = choices.iter().enumerate().any(|(other_index, other)| {
+                index != other_index && other.navigation_key == choices[index].navigation_key
+            });
+            if duplicate && choices[index].subview.is_some() {
+                choices[index].navigation_key =
+                    format!("{}/{}", choices[index].view, choices[index].navigation_key);
+            }
+        }
+        let keys = choices
+            .iter()
+            .map(|choice| choice.navigation_key.clone())
+            .collect::<Vec<_>>();
+        for (index, choice) in choices.iter_mut().enumerate() {
+            choice.prefix = shortest_unique_prefix(&keys, index);
+        }
+        let input = self.goto_input.to_lowercase();
+        choices.retain(|choice| choice.prefix.starts_with(&input));
         choices
     }
 
-    pub fn choose_view(&mut self) {
-        if let Some(choice) = self.view_choices().get(self.view_picker_index).cloned() {
+    pub fn choose_goto(&mut self) -> bool {
+        if let Some(choice) = self.goto_choices().get(self.goto_index).cloned() {
             self.set_view(&choice.view);
             self.set_subview(choice.subview);
+            return true;
         }
+        false
+    }
+
+    pub fn goto_is_unambiguous(&self) -> bool {
+        !self.goto_input.is_empty() && self.goto_choices().len() == 1
     }
     pub fn toggle_tag(&mut self, tag: &str) {
         if !self.selected_tags.remove(tag) {
             self.selected_tags.insert(tag.to_owned());
         }
         self.selected = 0;
+        self.tag_index = self
+            .available_tags()
+            .iter()
+            .position(|(candidate, _)| candidate == tag)
+            .unwrap_or(0);
     }
     pub fn toggle_sort(&mut self) {
         self.sort_descending = !self.sort_descending;
@@ -431,6 +495,23 @@ pub struct ViewChoice {
     pub label: String,
     pub view: String,
     pub subview: Option<String>,
+    pub navigation_key: String,
+    pub prefix: String,
+}
+
+fn shortest_unique_prefix(keys: &[String], index: usize) -> String {
+    let key = &keys[index];
+    for length in 1..=key.chars().count() {
+        let prefix = key.chars().take(length).collect::<String>();
+        if keys
+            .iter()
+            .enumerate()
+            .all(|(other_index, other)| other_index == index || !other.starts_with(&prefix))
+        {
+            return prefix;
+        }
+    }
+    key.clone()
 }
 
 pub fn required_frontmatter(mut frontmatter: Frontmatter, id: &str, created: &str) -> Frontmatter {
@@ -566,14 +647,19 @@ fn highlighted_markdown(source: &str) -> Text<'static> {
 pub fn render(frame: &mut Frame<'_>, app: &App) {
     let has_input = matches!(
         app.mode,
-        Mode::Search | Mode::CreateTitle | Mode::ViewPicker | Mode::ActionPicker
+        Mode::Search | Mode::CreateTitle | Mode::Goto | Mode::ActionPicker
     );
+    let input_height = if app.mode == Mode::Goto {
+        u16::try_from((app.goto_choices().len() + 3).clamp(4, 10)).unwrap_or(10)
+    } else {
+        3
+    };
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints(if has_input {
             vec![
                 Constraint::Length(4),
-                Constraint::Length(3),
+                Constraint::Length(input_height),
                 Constraint::Min(1),
             ]
         } else {
@@ -635,9 +721,9 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         vec!["[↑↓/jk] select · [Tab] pane", "[Space] tag · [/] filter"],
         vec![
             "[Enter/e] edit · [c] create",
-            "[d/u] del/restore · [:] views",
+            "[d/u] del/restore · [g] goto",
         ],
-        vec!["[a] actions · [J] pair syncd", "[r] sync · [q] quit"],
+        vec!["[a] actions · [T] tags · [J] pair", "[r] sync · [q] quit"],
     ]) {
         frame.render_widget(
             Paragraph::new(lines.join("\n")).style(Style::default().fg(Color::Cyan)),
@@ -654,14 +740,24 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 "New item title · Enter create and edit · Esc cancel",
                 format!("Title: {}", app.create_title),
             ),
-            Mode::ViewPicker => {
-                let selected = app.view_choices().get(app.view_picker_index).map_or_else(
-                    || "no matching view".to_owned(),
-                    |choice| choice.label.clone(),
-                );
+            Mode::Goto => {
+                let choices = app.goto_choices();
+                let menu = choices
+                    .iter()
+                    .enumerate()
+                    .map(|(index, choice)| {
+                        format!(
+                            "{} [{}] {}",
+                            if index == app.goto_index { "→" } else { " " },
+                            choice.prefix,
+                            choice.label
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 (
-                    "Select view / subview · ↑/↓ choose · Enter apply · Esc close",
-                    format!(":{}  → {selected}", app.view_query),
+                    "Goto view · type shown prefix · ↑/↓ choose · Enter apply · Esc close",
+                    format!("g{}\n{menu}", app.goto_input),
                 )
             }
             Mode::ActionPicker => {
@@ -686,57 +782,68 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         render_pairing(frame, app, content_area);
         return;
     }
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
+    let pane_constraints = if app.tags_visible {
+        vec![
             Constraint::Percentage(22),
             Constraint::Percentage(35),
             Constraint::Percentage(43),
-        ])
+        ]
+    } else {
+        vec![Constraint::Percentage(45), Constraint::Percentage(55)]
+    };
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(pane_constraints)
         .split(content_area);
+    let notes_pane = usize::from(app.tags_visible);
+    let preview_pane = notes_pane + 1;
     let selected = Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD);
-    let available_tags = app.available_tags();
-    let tags = if available_tags.is_empty() {
-        vec![ListItem::new("  No tags")]
-    } else {
-        available_tags
-            .iter()
-            .enumerate()
-            .map(|(index, (tag, count))| {
-                let highlighted = app.pane == Pane::Tags && index == app.tag_index;
-                ListItem::new(format!(
-                    "{} [{}] {} ({count})",
-                    if highlighted { "▶" } else { " " },
-                    if app.selected_tags.contains(tag) {
-                        "x"
-                    } else {
-                        " "
-                    },
-                    tag,
-                ))
-                .style(if highlighted || app.selected_tags.contains(tag) {
-                    selected
-                } else {
-                    Style::default()
+    if app.tags_visible {
+        let available_tags = app.available_tags();
+        let tags = if available_tags.is_empty() {
+            vec![ListItem::new("  No tags")]
+        } else {
+            available_tags
+                .iter()
+                .enumerate()
+                .map(|(index, (tag, count))| {
+                    let highlighted = app.pane == Pane::Tags && index == app.tag_index;
+                    ListItem::new(format!(
+                        "{} [{}] {} ({count})",
+                        if highlighted { "▶" } else { " " },
+                        if app.selected_tags.contains(tag) {
+                            "x"
+                        } else {
+                            " "
+                        },
+                        tag,
+                    ))
+                    .style(
+                        if highlighted || app.selected_tags.contains(tag) {
+                            selected
+                        } else {
+                            Style::default()
+                        },
+                    )
                 })
-            })
-            .collect::<Vec<_>>()
-    };
-    frame.render_widget(
-        List::new(tags).block(
-            Block::default()
-                .title(format!("Tags · {} selected", app.selected_tags.len()))
-                .borders(Borders::ALL)
-                .border_style(if app.pane == Pane::Tags {
-                    selected
-                } else {
-                    Style::default()
-                }),
-        ),
-        panes[0],
-    );
+                .collect::<Vec<_>>()
+        };
+        frame.render_widget(
+            List::new(tags).block(
+                Block::default()
+                    .title(format!("Tags · {} selected", app.selected_tags.len()))
+                    .borders(Borders::ALL)
+                    .border_style(if app.pane == Pane::Tags {
+                        selected
+                    } else {
+                        Style::default()
+                    }),
+            ),
+            panes[0],
+        );
+    }
     let selected_index = app.selected_index();
     let note_items = app
         .visible_notes()
@@ -773,7 +880,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                     Style::default()
                 }),
         ),
-        panes[1],
+        panes[notes_pane],
     );
     let (right_title, right_text) = match app.mode {
         Mode::Conflicts => (
@@ -888,7 +995,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                     Style::default()
                 }),
         ),
-        panes[2],
+        panes[preview_pane],
     );
 }
 
@@ -977,7 +1084,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use xo_core::behavior::{
-        ActionDescriptor, ActionEffect, Capability, Predicate, ViewDescriptor,
+        ActionDescriptor, ActionEffect, Capability, Predicate, SubviewDescriptor, ViewDescriptor,
     };
 
     fn fixture() -> App {
@@ -1133,17 +1240,63 @@ mod tests {
     }
 
     #[test]
-    fn filter_keeps_selection_valid_and_view_picker_selects_a_view() {
+    fn filter_keeps_selection_valid_and_goto_selects_a_view_by_unique_prefix() {
         let mut app = fixture();
         app.selected = 42;
         assert_eq!(app.selected_note().unwrap().id.as_str(), "note001");
         app.search = "missing".into();
         assert!(app.selected_note().is_none());
         app.search.clear();
-        app.view_query = "note".into();
-        assert_eq!(app.view_choices()[0].view, "notes");
-        app.choose_view();
-        assert_eq!(app.active_view, "notes");
+        app.behavior.views.extend([
+            ViewDescriptor {
+                id: "news".into(),
+                name: "News".into(),
+                key: None,
+                show_tags: false,
+                title_field: "title".into(),
+                subtitle_field: None,
+                sort_field: None,
+                descending: false,
+                preview: None,
+                predicate: Predicate::Always,
+                subviews: vec![],
+            },
+            ViewDescriptor {
+                id: "books".into(),
+                name: "Books".into(),
+                key: None,
+                show_tags: true,
+                title_field: "title".into(),
+                subtitle_field: None,
+                sort_field: None,
+                descending: false,
+                preview: None,
+                predicate: Predicate::Always,
+                subviews: vec![SubviewDescriptor {
+                    id: "reading".into(),
+                    name: "Reading".into(),
+                    predicate: Predicate::Always,
+                }],
+            },
+        ]);
+        let choices = app.goto_choices();
+        assert_eq!(
+            choices
+                .iter()
+                .map(|choice| (choice.label.as_str(), choice.prefix.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Notes", "no"),
+                ("News", "ne"),
+                ("Books", "b"),
+                ("Books / Reading", "r"),
+            ]
+        );
+        app.goto_input = "ne".into();
+        assert!(app.goto_is_unambiguous());
+        assert!(app.choose_goto());
+        assert_eq!(app.active_view, "news");
+        assert!(!app.tags_visible);
     }
 
     #[test]
@@ -1167,7 +1320,7 @@ mod tests {
     }
 
     #[test]
-    fn search_and_view_picker_render_between_header_and_content() {
+    fn search_and_goto_menu_render_between_header_and_content() {
         let mut app = fixture();
         app.mode = Mode::Search;
         app.search = "first".into();
@@ -1183,7 +1336,7 @@ mod tests {
         assert!(search_screen.contains("Filter notes"));
         assert!(search_screen.contains("/first"));
 
-        app.mode = Mode::ViewPicker;
+        app.mode = Mode::Goto;
         terminal.draw(|frame| render(frame, &app)).unwrap();
         let view_screen = terminal
             .backend()
@@ -1192,8 +1345,8 @@ mod tests {
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
-        assert!(view_screen.contains("Select view / subview"));
-        assert!(view_screen.contains("→ Notes"));
+        assert!(view_screen.contains("Goto view"));
+        assert!(view_screen.contains("→ [n] Notes"));
 
         app.mode = Mode::CreateTitle;
         app.create_title = "A new thought".into();
@@ -1325,5 +1478,81 @@ mod tests {
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
         assert!(screen.contains("[x] rust (1)"));
+
+        app.toggle_tags_visible();
+        assert_eq!(app.pane, Pane::Notes);
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(!screen.contains("Tags · 1 selected"));
+    }
+
+    #[test]
+    fn tag_counts_are_faceted_by_view_search_and_selected_tags() {
+        let mut app = fixture();
+        app.behavior.views[0].predicate = Predicate::FieldEquals {
+            field: "type".into(),
+            value: "note".into(),
+        };
+        app.set_view("notes");
+        app.notes = vec![
+            tagged_note("note001", "Alpha", "note", &["rust", "work"]),
+            tagged_note("note002", "Beta", "note", &["rust", "personal"]),
+            tagged_note(
+                "note003",
+                "Alpha document",
+                "document",
+                &["rust", "personal"],
+            ),
+            tagged_note("note004", "Gamma", "note", &["work"]),
+        ];
+
+        assert_eq!(
+            app.available_tags(),
+            vec![
+                ("personal".into(), 1),
+                ("rust".into(), 2),
+                ("work".into(), 2),
+            ]
+        );
+        app.toggle_tag("rust");
+        assert_eq!(
+            app.available_tags(),
+            vec![
+                ("personal".into(), 1),
+                ("rust".into(), 2),
+                ("work".into(), 1),
+            ]
+        );
+        app.search = "Alpha".into();
+        assert_eq!(
+            app.available_tags(),
+            vec![("rust".into(), 1), ("work".into(), 1)]
+        );
+    }
+
+    fn tagged_note(id: &str, title: &str, item_type: &str, tags: &[&str]) -> Note {
+        Note {
+            id: NoteId::new(id),
+            frontmatter: Frontmatter::from([
+                ("title".into(), FrontmatterValue::String(title.into())),
+                ("type".into(), FrontmatterValue::String(item_type.into())),
+                (
+                    "tags".into(),
+                    FrontmatterValue::Sequence(
+                        tags.iter()
+                            .map(|tag| FrontmatterValue::String((*tag).into()))
+                            .collect(),
+                    ),
+                ),
+            ]),
+            body: String::new(),
+            path: format!("{id}.md"),
+        }
     }
 }

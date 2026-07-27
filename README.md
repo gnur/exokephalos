@@ -183,6 +183,22 @@ The TUI header reports connectivity, pending operations, missing blobs, and
 convergence. Press `y` for detailed synchronization state and `r` to refresh and
 retry synchronization.
 
+### TUI navigation and tag filtering
+
+Press `g` to open the goto menu. Every configured view and subview is shown with
+its shortest unique prefix; type that prefix to switch immediately, or use the
+arrow keys and Enter. View navigation does not use a command prompt or
+separately configured direct-view keys.
+
+Press `T` to show or hide the tag pane. When it is visible, `Tab` and
+`Shift-Tab` include it in pane navigation. Highlight a tag with the arrow keys
+or `j`/`k`, then press Space or Enter to toggle that filter.
+
+Tag counts are live facets. They first respect the active view or subview and
+the `/` title query, then show how many notes would remain if each tag were
+added to the currently selected tag filters. Selecting or clearing a tag
+therefore updates every displayed count immediately.
+
 ## Edit workspace behavior
 
 Workspace behavior is replicated and projected as `xo.scm`. A new workspace

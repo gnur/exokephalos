@@ -1,5 +1,4 @@
 mod app;
-mod config;
 
 use std::io::{self, Write as _, stdout};
 use std::path::PathBuf;
@@ -8,7 +7,6 @@ use anyhow::{Context, Result};
 use app::{App, Mode, PairingStep, external_edit_with, render, required_frontmatter};
 use base64::Engine as _;
 use clap::{Parser, Subcommand};
-use config::{CliOverrides, XoConfig, config_path, home_dir};
 use crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers,
 };
@@ -19,6 +17,7 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use time::OffsetDateTime;
+use xo::config::{CliOverrides, XoConfig, config_path, home_dir};
 use xo::session::WorkspaceSession;
 use xo_core::domain::Frontmatter;
 use xo_core::{Note, NoteId};
@@ -213,26 +212,30 @@ async fn event_loop(
                 KeyCode::Char(value) => app.create_title.push(value),
                 _ => {}
             },
-            Mode::ViewPicker => match key.code {
+            Mode::Goto => match key.code {
                 KeyCode::Esc => app.mode = Mode::Normal,
                 KeyCode::Enter => {
-                    app.choose_view();
-                    app.mode = Mode::Normal;
+                    if app.choose_goto() {
+                        app.mode = Mode::Normal;
+                    }
                 }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    let last = app.view_choices().len().saturating_sub(1);
-                    app.view_picker_index = (app.view_picker_index + 1).min(last);
+                KeyCode::Down => {
+                    let last = app.goto_choices().len().saturating_sub(1);
+                    app.goto_index = (app.goto_index + 1).min(last);
                 }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    app.view_picker_index = app.view_picker_index.saturating_sub(1);
+                KeyCode::Up => {
+                    app.goto_index = app.goto_index.saturating_sub(1);
                 }
                 KeyCode::Backspace => {
-                    app.view_query.pop();
-                    app.view_picker_index = 0;
+                    app.goto_input.pop();
+                    app.goto_index = 0;
                 }
                 KeyCode::Char(value) => {
-                    app.view_query.push(value);
-                    app.view_picker_index = 0;
+                    app.goto_input.extend(value.to_lowercase());
+                    app.goto_index = 0;
+                    if app.goto_is_unambiguous() && app.choose_goto() {
+                        app.mode = Mode::Normal;
+                    }
                 }
                 _ => {}
             },
@@ -400,20 +403,17 @@ async fn event_loop(
                 KeyCode::Char('/') => {
                     app.mode = Mode::Search;
                 }
-                KeyCode::Char(':') => {
-                    app.view_query.clear();
-                    app.view_picker_index = 0;
-                    app.mode = Mode::ViewPicker;
+                KeyCode::Char('g') => {
+                    app.goto_input.clear();
+                    app.goto_index = 0;
+                    app.mode = Mode::Goto;
                 }
                 KeyCode::Char('a') => {
                     app.action_query.clear();
                     app.mode = Mode::ActionPicker;
                 }
                 KeyCode::Char('s') => app.toggle_sort(),
-                KeyCode::Char('t') => {
-                    app.pane = app::Pane::Tags;
-                }
-                KeyCode::Char(']') => cycle_subview(app),
+                KeyCode::Char('T') => app.toggle_tags_visible(),
                 KeyCode::Char('x') => {
                     app.mode = Mode::Conflicts;
                     app.message = conflict_summary(app);
@@ -482,19 +482,6 @@ async fn event_loop(
                     let unlock_result = unlock(app);
                     resume_tui(terminal)?;
                     unlock_result?;
-                }
-                KeyCode::Char(value) if key.modifiers.is_empty() => {
-                    if let Some(view) = app
-                        .behavior
-                        .views
-                        .iter()
-                        .find(|view| view.key.as_deref() == Some(&value.to_string()))
-                    {
-                        let id = view.id.clone();
-                        app.set_view(&id);
-                    } else if value == '0' {
-                        app.set_view("all");
-                    }
                 }
                 KeyCode::Esc => {
                     app.mode = Mode::Normal;
@@ -619,26 +606,6 @@ fn copy_to_clipboard(
     Ok(())
 }
 
-fn cycle_subview(app: &mut App) {
-    let Some(view) = app
-        .behavior
-        .views
-        .iter()
-        .find(|view| view.id == app.active_view)
-    else {
-        return;
-    };
-    let next = match app
-        .active_subview
-        .as_ref()
-        .and_then(|id| view.subviews.iter().position(|item| &item.id == id))
-    {
-        Some(index) if index + 1 < view.subviews.len() => Some(view.subviews[index + 1].id.clone()),
-        None if !view.subviews.is_empty() => Some(view.subviews[0].id.clone()),
-        _ => None,
-    };
-    app.set_subview(next);
-}
 fn conflict_summary(app: &App) -> String {
     if app.conflicts.is_empty() {
         "no conflicts".into()

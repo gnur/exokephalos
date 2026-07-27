@@ -267,6 +267,11 @@ loopback. `.github/workflows/build.yml` now runs Rust formatting, strict Clippy,
 the complete workspace tests, native Linux/macOS release builds, and a
 multi-platform syncd-only GHCR image build.
 
+The native release matrix covers Linux x86-64, Linux ARM64, macOS ARM64, and
+Windows x86-64. Any pushed tag creates a GitHub Release after all four
+archives succeed, attaching those archives plus `SHA256SUMS` and generated
+release notes.
+
 `syncd_restart_converges_two_restarted_tui_clients_with_offline_conflict` is a
 process-level E2E test. It launches the compiled `xo-syncd`, joins two
 independent TUI sessions, restarts the daemon and both clients, creates

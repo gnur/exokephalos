@@ -6,7 +6,7 @@ on:
     branches:
       - main
     tags:
-      - "v*"
+      - "*"
 
 concurrency:
   group: build-${{ github.workflow }}-${{ github.ref }}
@@ -56,10 +56,16 @@ jobs:
         include:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-          - runner: macos-15-intel
-            target: x86_64-apple-darwin
+            package: xo-x86_64-unknown-linux-gnu.tar.gz
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            package: xo-aarch64-unknown-linux-gnu.tar.gz
           - runner: macos-15
             target: aarch64-apple-darwin
+            package: xo-aarch64-apple-darwin.tar.gz
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            package: xo-x86_64-pc-windows-msvc.zip
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -73,24 +79,36 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build release binaries
-        run: cargo build --workspace --release --locked
+        run: cargo build --workspace --release --locked --target ${{ matrix.target }}
 
-      - name: Package release binaries
+      - name: Package Unix release binaries
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           mkdir -p dist
-          cp target/release/xo dist/
-          cp target/release/xo-admin dist/
-          cp target/release/xo-lsp dist/
-          cp target/release/xo-syncd dist/
+          cp target/${{ matrix.target }}/release/xo dist/
+          cp target/${{ matrix.target }}/release/xo-admin dist/
+          cp target/${{ matrix.target }}/release/xo-lsp dist/
+          cp target/${{ matrix.target }}/release/xo-syncd dist/
           tar -C dist -czf "xo-${{ matrix.target }}.tar.gz" \
             xo xo-admin xo-lsp xo-syncd
+
+      - name: Package Windows release binaries
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item target/${{ matrix.target }}/release/xo.exe dist/
+          Copy-Item target/${{ matrix.target }}/release/xo-admin.exe dist/
+          Copy-Item target/${{ matrix.target }}/release/xo-lsp.exe dist/
+          Copy-Item target/${{ matrix.target }}/release/xo-syncd.exe dist/
+          Compress-Archive -Path dist/* -DestinationPath "xo-${{ matrix.target }}.zip"
 
       - name: Upload release binaries
         uses: actions/upload-artifact@v7
         with:
           name: xo-${{ matrix.target }}
-          path: xo-${{ matrix.target }}.tar.gz
+          path: ${{ matrix.package }}
           if-no-files-found: error
 
   container:
@@ -127,6 +145,7 @@ jobs:
           tags: |
             type=ref,event=pr
             type=ref,event=branch
+            type=ref,event=tag
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
@@ -146,3 +165,38 @@ jobs:
           annotations: ${{ steps.meta.outputs.annotations }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  release:
+    name: GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: binaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download release binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: xo-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: release-assets
+        run: sha256sum xo-* > SHA256SUMS
+
+      - name: Create tagged GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} already exists; leaving it unchanged."
+          else
+            gh release create "${GITHUB_REF_NAME}" release-assets/* \
+              --verify-tag \
+              --generate-notes \
+              --title "${GITHUB_REF_NAME}"
+          fi

@@ -26,6 +26,11 @@ The resulting programs are:
 The examples below assume those binaries have been copied somewhere in
 `PATH`.
 
+GitHub Actions builds release archives for Linux x86-64, Linux ARM64, macOS
+ARM64, and Windows x86-64. Pushing any tag creates the corresponding GitHub
+Release automatically with generated release notes, all four archives, and a
+`SHA256SUMS` file.
+
 ## Set up a new synchronization server
 
 ### 1. Prepare a seed directory
@@ -154,7 +159,7 @@ Then open `http://127.0.0.1:9464/setup` and follow the TUI pairing flow below.
 For a remote Docker host, use the same SSH port forwarding described in that
 flow. Do not publish port `9464` on an unrestricted interface.
 
-Pushes to `main` and version tags publish multi-platform `linux/amd64` and
+Pushes to `main` and tags publish multi-platform `linux/amd64` and
 `linux/arm64` images to `ghcr.io/gnur/exokephalos`. Pull requests build the
 same image without publishing it.
 

@@ -32,6 +32,14 @@ pub fn validate_writable_ticket(ticket: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn writable_ticket_workspace_id(ticket: &str) -> Result<String> {
+    let ticket = DocTicket::from_str(ticket).context("parse workspace ticket")?;
+    if ticket.capability.secret_key().is_err() {
+        bail!("workspace ticket is read-only; a writable ticket is required");
+    }
+    Ok(ticket.capability.id().to_string())
+}
+
 /// A persistent endpoint hosting Docs, Blobs, and Gossip on one router.
 #[derive(Debug)]
 pub struct IrohNode {

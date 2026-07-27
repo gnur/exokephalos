@@ -65,9 +65,9 @@ xo-syncd \
   --operator-bind 127.0.0.1:9464
 ```
 
-The daemon uses Iroh for synchronization. The operator address is only for
-health, status, and Prometheus metrics; port `9464` is not the synchronization
-port and does not need to be exposed to TUI clients.
+The daemon uses Iroh for synchronization. The operator address serves browser
+setup, health, status, and Prometheus metrics; port `9464` is not the
+synchronization port and does not need to be exposed to TUI clients.
 
 Iroh discovers direct paths and can use its configured relay path when direct
 connectivity is unavailable. The host needs outbound network access. A fixed
@@ -119,9 +119,8 @@ systemctl --user daemon-reload
 systemctl --user enable --now xo-syncd
 ```
 
-The TUI pairing wizard described below generates commands for the system
-service and `/var/lib/xo-syncd`. A user-service installation can use the same
-flow by running the equivalent `systemctl --user` and non-`sudo` commands.
+The TUI pairing wizard described below supplies the values needed by the
+daemon's browser setup page. The same flow works for system and user services.
 
 ## Connect the TUI
 
@@ -199,6 +198,19 @@ Tag counts are live facets. They first respect the active view or subview and
 the `/` title query, then show how many notes would remain if each tag were
 added to the currently selected tag filters. Selecting or clearing a tag
 therefore updates every displayed count immediately.
+
+### Markdown projection layout
+
+Projected notes use one canonical path derived from their ID and title:
+
+```text
+<first-three-ID-characters>/<ID>-<title-slug>.md
+```
+
+For example, note `01KABC123` titled “Server setup” is stored as
+`01K/01KABC123-server-setup.md`. Editing the title moves the projected file to
+its new canonical path. The replicated note ID remains stable, and filesystem
+moves to other paths are reconciled back to the canonical layout.
 
 ## Import and export Markdown
 
@@ -295,21 +307,36 @@ xo-syncd**:
 1. Confirm the server state directory. The default is `/var/lib/xo-syncd`.
 2. Press Enter to create a writable invitation. The ticket is hidden by
    default.
-3. Press `c` to copy the generated stop/import/start commands using the
-   terminal's OSC 52 clipboard support. Press `F2` if the terminal does not
-   support clipboard writes and the commands need to be displayed for manual
-   copying.
-4. Run the commands on the server. They stop the system service, import the
-   workspace as the `xo` service user, and restart `xo-syncd`.
-5. Press Enter in the TUI and paste either the complete `xo-admin` output or
-   only its `ticket=...` line.
+3. Open `http://127.0.0.1:9464/setup` on the server. For a remote server, keep
+   the operator endpoint on loopback and forward it temporarily:
+
+   ```console
+   ssh -L 9464:127.0.0.1:9464 user@server
+   ```
+
+4. Enter the operator token, workspace ID, and writable ticket displayed by
+   the TUI. For the system unit, read the token on the server with:
+
+   ```console
+   sudo cat /var/lib/xo-syncd/operator.token
+   ```
+
+   Press `c` in the TUI to copy only the writable ticket, or `F2` to reveal it.
+   The page verifies that the ticket is writable and belongs to the entered
+   workspace before importing it. It then starts synchronization and returns a
+   server ticket.
+5. Press Enter in the TUI and paste the server ticket returned by the page.
 6. Press Enter again. The TUI validates that the returned ticket belongs to the
    active workspace, stores the peer relationship, and starts synchronization.
 
 The successful screen displays the workspace ID and confirms that future TUI
 and daemon launches will resume synchronization without either ticket. Press
 Esc at any step to discard the in-memory invitation. Tickets and pasted server
-output remain hidden unless `F2` is pressed.
+output remain hidden unless `F2` is pressed. The setup page does not store the
+operator token or either ticket in browser storage.
+
+For headless recovery, press `C` in step 2 to copy the equivalent
+`systemctl stop` / `xo-admin import-ticket` / `systemctl start` commands.
 
 Never run `xo`, `xo-admin`, and `xo-syncd` concurrently against the same state
 directory.
@@ -339,10 +366,9 @@ xo-admin restore /srv/backups/xo-2026-07-22 /var/lib/xo-syncd-restored
 
 ## Current limitations
 
-- `xo-syncd` hosts workspaces already present in its state directory; it does
-  not currently create or import workspaces through the operator HTTP API.
 - The operator server is plain HTTP and binds to loopback by default. Keep it on
-  loopback or place it behind a suitably secured reverse proxy.
+  loopback and use an SSH tunnel, or place it behind a suitably secured reverse
+  proxy.
 - Ticket revocation is not equivalent to deleting a string that has already
   been shared. Use device retirement or namespace rotation when a capability or
   device must be revoked.

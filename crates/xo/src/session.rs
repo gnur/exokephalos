@@ -159,7 +159,10 @@ impl WorkspaceSession {
                 note_id: note.id.clone(),
                 frontmatter: note.frontmatter.clone(),
                 body: note.body.clone(),
-                materialized_path: note.path.clone(),
+                materialized_path: xo_core::projection::canonical_note_path(
+                    &note.id,
+                    &note.frontmatter,
+                ),
                 hlc: self.clock.next(now_ms()?),
                 author_id: self.actor.clone(),
                 predecessors,

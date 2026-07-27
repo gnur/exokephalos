@@ -221,20 +221,25 @@ async fn syncd_restart_converges_two_restarted_tui_clients_with_offline_conflict
 }
 
 fn note(id: &str, title: &str, body: &str) -> Note {
+    let id = NoteId::new(id);
+    let frontmatter = Frontmatter::from([
+        (
+            "created".into(),
+            FrontmatterValue::String("2026-07-26".into()),
+        ),
+        (
+            "id".into(),
+            FrontmatterValue::String(id.as_str().to_owned()),
+        ),
+        ("tags".into(), FrontmatterValue::Sequence(Vec::new())),
+        ("title".into(), FrontmatterValue::String(title.into())),
+        ("type".into(), FrontmatterValue::String("note".into())),
+    ]);
     Note {
-        id: NoteId::new(id),
-        frontmatter: Frontmatter::from([
-            (
-                "created".into(),
-                FrontmatterValue::String("2026-07-26".into()),
-            ),
-            ("id".into(), FrontmatterValue::String(id.into())),
-            ("tags".into(), FrontmatterValue::Sequence(Vec::new())),
-            ("title".into(), FrontmatterValue::String(title.into())),
-            ("type".into(), FrontmatterValue::String("note".into())),
-        ]),
+        path: xo_core::projection::canonical_note_path(&id, &frontmatter),
+        id,
+        frontmatter,
         body: body.into(),
-        path: format!("notes/{id}.md"),
     }
 }
 
@@ -288,7 +293,9 @@ where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = bool>,
 {
-    for _ in 0..300 {
+    // Iroh discovery can be slower while the complete workspace suite is running its other
+    // multi-peer tests concurrently.
+    for _ in 0..600 {
         if condition().await {
             return Ok(());
         }

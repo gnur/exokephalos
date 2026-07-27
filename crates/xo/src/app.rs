@@ -340,6 +340,7 @@ impl App {
         let note = self.notes.iter_mut().find(|note| note.id == id)?;
         note.frontmatter = frontmatter;
         note.body = body;
+        note.path = xo_core::projection::canonical_note_path(&note.id, &note.frontmatter);
         Some(note.clone())
     }
 
@@ -467,6 +468,12 @@ impl App {
             &pairing.state_dir,
             ticket,
         )))
+    }
+
+    pub fn pairing_invitation(&self) -> Option<Zeroizing<String>> {
+        Some(Zeroizing::new(
+            self.pairing.as_ref()?.invitation.as_deref()?.to_owned(),
+        ))
     }
 
     pub fn pairing_ticket(&self) -> Option<Zeroizing<String>> {
@@ -1038,22 +1045,25 @@ fn render_pairing(frame: &mut Frame<'_>, app: &App, area: ratatui::layout::Rect)
             pairing.state_dir, error
         ),
         PairingStep::ServerCommand => {
-            let command = if pairing.reveal_ticket {
-                app.pairing_command().unwrap_or_default()
+            let invitation = if pairing.reveal_ticket {
+                app.pairing_invitation().unwrap_or_default()
             } else {
-                Zeroizing::new(server_pairing_commands(
-                    &pairing.state_dir,
-                    "<writable ticket hidden>",
-                ))
+                Zeroizing::new("<writable ticket hidden>".to_owned())
             };
             format!(
-                "Step 2 of 3 — Run on the server\n\n\
-                 Copy and run these commands on the server. They stop xo-syncd, import this \
-                 workspace as the xo service user, and restart the daemon.\n\n\
-                 {}\n\n\
-                 c: copy commands · F2: show/hide ticket · Enter: paste server output · Esc: cancel\
-                 \n\nThe invitation is a writable capability. Keep it private.{error}",
-                command.as_str()
+                "Step 2 of 3 — Add this workspace to the server\n\n\
+                 Open http://127.0.0.1:9464/setup on the server. If xo-syncd is remote, \
+                 forward that address over SSH first.\n\n\
+                 Workspace ID: {}\n\
+                 Operator token: {}/operator.token\n\
+                 Writable ticket: {}\n\n\
+                 Enter those values in the setup page. It returns a server ticket.\n\n\
+                 c: copy ticket · C: copy CLI fallback · F2: show/hide ticket · \
+                 Enter: paste server ticket · Esc: cancel\n\n\
+                 The invitation is a writable capability. Keep it private.{error}",
+                app.workspace_id,
+                pairing.state_dir,
+                invitation.as_str()
             )
         }
         PairingStep::ServerOutput => {
@@ -1066,7 +1076,8 @@ fn render_pairing(frame: &mut Frame<'_>, app: &App, area: ratatui::layout::Rect)
             };
             format!(
                 "Step 3 of 3 — Complete pairing\n\n\
-                 Paste the complete output from xo-admin import-ticket, or only its ticket= line.\n\n\
+                 Paste the server ticket returned by the setup page. The complete page output \
+                 or a ticket= line is also accepted.\n\n\
                  {}\n\n\
                  Enter: connect · F2: show/hide pasted output · Backspace: edit · Esc: cancel{error}",
                 output.as_str()
@@ -1220,8 +1231,11 @@ mod tests {
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
         assert!(command_screen.contains("Step 2 of 3"));
-        assert!(command_screen.contains("xo-admin import-ticket"));
+        assert!(command_screen.contains("http://127.0.0.1:9464/setup"));
+        assert!(command_screen.contains("Workspace ID: workspace123"));
+        assert!(command_screen.contains("/var/lib/xo-syncd/operator.token"));
         assert!(command_screen.contains("<writable ticket hidden>"));
+        assert!(!command_screen.contains("xo-admin import-ticket"));
         assert!(!command_screen.contains("client-secret-ticket"));
 
         let pairing = app.pairing.as_mut().unwrap();

@@ -188,30 +188,20 @@ impl ProjectionState {
     /// Reconcile the projection with resolved visible notes without overwriting local edits.
     pub fn reconcile(&self, notes: &[Note]) -> Result<MaterializationReport, ProjectionError> {
         let mut desired = Vec::new();
-        let mut diagnostics = Vec::new();
         for note in notes {
-            if is_asset_path(&note.path) {
-                diagnostics.push(Diagnostic {
-                    path: note.path.clone(),
-                    code: "reserved-asset-path".to_owned(),
-                    message: "note paths cannot be below assets/".to_owned(),
-                });
-                continue;
-            }
+            let path = canonical_note_path(&note.id, &note.frontmatter);
             desired.push(DesiredFile {
                 id: note.id.to_string(),
-                path: note.path.clone(),
+                path,
                 bytes: markdown::render(&note.frontmatter, &note.body)?.into_bytes(),
             });
         }
-        let mut report = reconcile_files(
+        reconcile_files(
             &self.root,
             &self.manifest_path,
             &self.expected_writes,
             desired,
-        )?;
-        report.diagnostics.extend(diagnostics);
-        Ok(report)
+        )
     }
 
     /// Reconcile verified binary assets below the reserved `assets/` directory.
@@ -497,11 +487,12 @@ pub fn read_note(root: impl AsRef<Path>, path: impl AsRef<Path>) -> Result<Note,
             });
         }
     };
+    let id = NoteId::new(note_id);
     Ok(Note {
-        id: NoteId::new(note_id),
+        path: canonical_note_path(&id, &frontmatter),
+        id,
         frontmatter,
         body: document.body,
-        path: relative,
     })
 }
 
@@ -510,6 +501,18 @@ pub fn relative_path(
     path: impl AsRef<Path>,
 ) -> Result<String, ProjectionError> {
     relative_string(root.as_ref(), path.as_ref())
+}
+
+#[must_use]
+pub fn canonical_note_path(id: &NoteId, frontmatter: &crate::domain::Frontmatter) -> String {
+    let title = match frontmatter.get("title") {
+        Some(FrontmatterValue::String(title)) => title.as_str(),
+        _ => "untitled",
+    };
+    let slug = markdown::slugify(title);
+    let slug = if slug.is_empty() { "untitled" } else { &slug };
+    let prefix = id.as_str().chars().take(3).collect::<String>();
+    format!("{prefix}/{id}-{slug}.md")
 }
 
 /// Scan a legacy workspace, assigning relocation-stable IDs in memory when they are absent.
@@ -587,10 +590,10 @@ fn scan_impl(root: &Path, generate_missing_ids: bool) -> Result<ScanReport, Proj
             continue;
         }
         report.notes.push(Note {
+            path: canonical_note_path(&id, &frontmatter),
             id,
             frontmatter,
             body: document.body,
-            path: relative,
         });
     }
     Ok(report)
@@ -631,10 +634,11 @@ fn parse_timestamp(value: &str) -> Option<OffsetDateTime> {
 
 pub fn materialize(root: impl AsRef<Path>, note: &Note) -> Result<PathBuf, ProjectionError> {
     let root = root.as_ref();
-    let destination = safe_join(root, &note.path)?;
+    let path = canonical_note_path(&note.id, &note.frontmatter);
+    let destination = safe_join(root, &path)?;
     let parent = destination
         .parent()
-        .ok_or_else(|| ProjectionError::InvalidPath(note.path.clone()))?;
+        .ok_or_else(|| ProjectionError::InvalidPath(path.clone()))?;
     std::fs::create_dir_all(parent)?;
     let content = markdown::render(&note.frontmatter, &note.body)?;
     write_content(&destination, parent, content.as_bytes())?;
@@ -648,10 +652,11 @@ pub fn materialize_expected(
     expected_writes: &ExpectedWrites,
 ) -> Result<PathBuf, ProjectionError> {
     let root = root.as_ref();
-    let destination = safe_join(root, &note.path)?;
+    let path = canonical_note_path(&note.id, &note.frontmatter);
+    let destination = safe_join(root, &path)?;
     let parent = destination
         .parent()
-        .ok_or_else(|| ProjectionError::InvalidPath(note.path.clone()))?;
+        .ok_or_else(|| ProjectionError::InvalidPath(path.clone()))?;
     std::fs::create_dir_all(parent)?;
     let content = markdown::render(&note.frontmatter, &note.body)?;
     expected_writes.record(
@@ -770,7 +775,8 @@ mod tests {
     #[test]
     fn materialize_and_scan_round_trip() {
         let directory = tempfile::tempdir().unwrap();
-        let expected = note("note002", "notes/one.md");
+        let mut expected = note("note002", "notes/one.md");
+        expected.path = canonical_note_path(&expected.id, &expected.frontmatter);
         materialize(directory.path(), &expected).unwrap();
         let report = scan(directory.path()).unwrap();
         assert_eq!(report.notes, vec![expected]);
@@ -778,23 +784,36 @@ mod tests {
     }
 
     #[test]
+    fn canonical_path_uses_id_prefix_full_id_and_title_slug() {
+        let note = note("note002", "ignored.md");
+        assert_eq!(
+            canonical_note_path(&note.id, &note.frontmatter),
+            "not/note002-title.md"
+        );
+    }
+
+    #[test]
     fn scan_diagnoses_duplicates_and_ignores_hidden_state() {
         let directory = tempfile::tempdir().unwrap();
-        materialize(directory.path(), &note("note002", "notes/one.md")).unwrap();
-        materialize(directory.path(), &note("note002", "notes/two.md")).unwrap();
-        materialize(directory.path(), &note("hide002", ".exo/hidden.md")).unwrap_err();
+        let duplicate = note("note002", "unused.md");
+        let content = markdown::render(&duplicate.frontmatter, &duplicate.body).unwrap();
+        std::fs::create_dir_all(directory.path().join("notes")).unwrap();
+        std::fs::write(directory.path().join("notes/one.md"), &content).unwrap();
+        std::fs::write(directory.path().join("notes/two.md"), content).unwrap();
+        std::fs::create_dir_all(directory.path().join(".exo")).unwrap();
+        std::fs::write(directory.path().join(".exo/hidden.md"), "ignored").unwrap();
         let report = scan(directory.path()).unwrap();
         assert_eq!(report.notes.len(), 1);
         assert_eq!(report.diagnostics[0].code, "duplicate-id");
     }
 
     #[test]
-    fn materialize_rejects_path_traversal() {
+    fn materialize_uses_the_canonical_path_instead_of_the_supplied_path() {
         let directory = tempfile::tempdir().unwrap();
-        assert!(matches!(
-            materialize(directory.path(), &note("note002", "../escape.md")),
-            Err(ProjectionError::InvalidPath(_))
-        ));
+        let note = note("note002", "../escape.md");
+        let path = materialize(directory.path(), &note).unwrap();
+        assert_eq!(path, directory.path().join("not/note002-title.md"));
+        assert!(!directory.path().join("../escape.md").is_file());
     }
 
     #[test]
@@ -848,7 +867,9 @@ mod tests {
         let state = ProjectionState::open(directory.path()).unwrap();
         let original = note("note002", "deep/original.md");
         let first = state.reconcile(std::slice::from_ref(&original)).unwrap();
-        let path = state.root().join(&original.path);
+        let path = state
+            .root()
+            .join(canonical_note_path(&original.id, &original.frontmatter));
         assert_eq!(first.materialized, vec![path.clone()]);
         assert!(state.consume_if_expected(&path).unwrap());
 

@@ -3,6 +3,7 @@ mod operator;
 use std::fmt::Write as _;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -34,7 +35,7 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let node = xo_core::iroh_node::IrohNode::persistent(&cli.state_dir).await?;
+    let node = Arc::new(xo_core::iroh_node::IrohNode::persistent(&cli.state_dir).await?);
     let workspace_ids = node.workspace_ids().await?;
     for workspace_id in &workspace_ids {
         let workspace = node
@@ -54,13 +55,7 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("bind operator server to {}", cli.operator_bind))?;
     let operator_addr = listener.local_addr()?;
-    let state = OperatorState::new(
-        node.endpoint_id().to_string(),
-        node.author_id().to_string(),
-        node.state_dir().to_path_buf(),
-        workspace_ids,
-        token,
-    );
+    let state = OperatorState::new(Arc::clone(&node), workspace_ids, token);
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let operator_task = tokio::spawn(operator::serve(listener, state, shutdown_rx));
     log_event(

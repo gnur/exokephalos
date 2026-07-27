@@ -60,6 +60,7 @@ A stage is complete only when every task and its exit gate are checked.
 - [x] Add a disposable SQLite index for IDs, paths, titles, types, tags, hashes, and diagnostics.
 - [x] Rebuild the complete index from authoritative Docs and Blob state.
 - [x] Materialize winning note heads into recursive Markdown paths.
+- [x] Canonicalize projected notes as `<first 3 chars of id>/<id>-<title-slug>.md` across scanning, mutation, import, and materialization.
 - [x] Materialize assets below the workspace `assets/` directory.
 - [x] Perform atomic same-directory projection writes.
 - [x] Retain expected-write hashes for crash recovery and watcher suppression.
@@ -169,6 +170,7 @@ A stage is complete only when every task and its exit gate are checked.
 - [x] Show the serialized raw Markdown document in preview with lightweight syntax highlighting.
 - [x] Prompt for a title before creation and open the complete new document in the external editor.
 - [x] Add a TUI-guided `xo-syncd` pairing flow with safe command generation, hidden tickets, server-output parsing, and durable peer connection.
+- [x] Add an authenticated browser setup page to `xo-syncd` and make workspace ID, ticket transfer, and the returned server ticket the primary TUI pairing flow.
 
 **Exit gate**
 
@@ -183,7 +185,8 @@ A stage is complete only when every task and its exit gate are checked.
 - `offline_tui_edit_reconnects_retains_conflict_and_converges` takes the primary peer offline, commits independent primary and central edits, reconnects, proves both peers retain the conflict, and verifies the immutable history converges.
 - `tui_pairing_invitation_connects_a_sync_peer` follows the TUI pairing APIs, imports the invitation into a server peer, returns its ticket, and proves a server write reaches the client.
 - `syncd_restart_converges_two_restarted_tui_clients_with_offline_conflict` launches the real `xo-syncd` binary, connects two independently persisted TUI sessions, restarts every participant, creates concurrent offline edits, and verifies both client histories plus the daemon's persisted conflict.
-- Pairing model/render tests cover POSIX-safe server commands, complete-output and direct-ticket parsing, every wizard step, and default ticket redaction.
+- Pairing model/render tests cover the browser-first setup instructions, POSIX-safe fallback commands, complete-output and direct-ticket parsing, every wizard step, and default ticket redaction.
+- Operator tests cover the public setup form, authentication, URL-encoded fields, workspace/ticket mismatch rejection without import, writable-ticket import, live synchronization startup, and server-ticket return.
 - Ratatui `TestBackend` tests cover the four-line, three-column header; view/search/tag-filter-aware faceted counts; tag-pane visibility; valid note selection; inline filtering and prefix goto navigation; metadata-rich preview; actions; deletion/restore; and encrypted temporary-file editing. The editor regression test also covers editors that atomically replace the temporary file.
 
 ## Stage 7 — Content workflows and feature parity

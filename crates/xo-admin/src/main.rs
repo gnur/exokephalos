@@ -590,7 +590,12 @@ async fn verify_roundtrip(
     {
         bail!("clean projection verification produced diagnostics");
     }
-    let projected = xo_core::projection::scan(projection.root())?;
+    let mut projected = xo_core::projection::scan(projection.root())?;
+    let mut expected_notes = expected_notes.to_vec();
+    projected
+        .notes
+        .sort_by(|left, right| left.id.cmp(&right.id));
+    expected_notes.sort_by(|left, right| left.id.cmp(&right.id));
     if projected.notes != expected_notes || !projected.diagnostics.is_empty() {
         bail!("clean Markdown projection differs from the imported source");
     }
@@ -709,7 +714,12 @@ mod tests {
             body: "unchanged\n".to_owned(),
             path: "notes/legacy.md".to_owned(),
         };
-        xo_core::projection::materialize(&source, &note)?;
+        let source_path = source.join(&note.path);
+        std::fs::create_dir_all(source_path.parent().context("note parent")?)?;
+        std::fs::write(
+            &source_path,
+            xo_core::markdown::render(&note.frontmatter, &note.body)?,
+        )?;
         let before = std::fs::read(source.join(&note.path))?;
         let asset_path = source.join("assets/images/cover.png");
         std::fs::create_dir_all(asset_path.parent().context("asset parent")?)?;

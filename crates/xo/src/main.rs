@@ -368,12 +368,25 @@ async fn event_loop(
                         }
                     }
                     (Some(PairingStep::ServerCommand), KeyCode::Char('c')) => {
-                        if let Some(command) = app.pairing_command() {
-                            match copy_to_clipboard(terminal, &command) {
-                                Ok(()) => app.message = "pairing commands copied".into(),
+                        if let Some(invitation) = app.pairing_invitation() {
+                            match copy_to_clipboard(terminal, &invitation) {
+                                Ok(()) => app.message = "writable ticket copied".into(),
                                 Err(error) => {
                                     if let Some(pairing) = &mut app.pairing {
-                                        pairing.error = format!("could not copy commands: {error}");
+                                        pairing.error = format!("could not copy ticket: {error}");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    (Some(PairingStep::ServerCommand), KeyCode::Char('C')) => {
+                        if let Some(command) = app.pairing_command() {
+                            match copy_to_clipboard(terminal, &command) {
+                                Ok(()) => app.message = "CLI fallback copied".into(),
+                                Err(error) => {
+                                    if let Some(pairing) = &mut app.pairing {
+                                        pairing.error =
+                                            format!("could not copy CLI fallback: {error}");
                                     }
                                 }
                             }
@@ -406,7 +419,8 @@ async fn event_loop(
                     (Some(PairingStep::ServerOutput), KeyCode::Enter) => {
                         let Some(ticket) = app.pairing_ticket() else {
                             if let Some(pairing) = &mut app.pairing {
-                                pairing.error = "paste the ticket= line printed by xo-admin".into();
+                                pairing.error =
+                                    "paste the server ticket returned by the setup page".into();
                             }
                             continue;
                         };
@@ -581,11 +595,13 @@ fn new_note_draft(instant: OffsetDateTime, title: &str) -> Result<Note> {
         "title".into(),
         xo_core::domain::FrontmatterValue::String(title.into()),
     );
+    let id = NoteId::new(id);
+    let frontmatter = required_frontmatter(frontmatter, id.as_str(), &created);
     Ok(Note {
-        id: NoteId::new(id.clone()),
-        frontmatter: required_frontmatter(frontmatter, &id, &created),
+        path: xo_core::projection::canonical_note_path(&id, &frontmatter),
+        id,
+        frontmatter,
         body: String::new(),
-        path: format!("notes/{id}.md"),
     })
 }
 
@@ -756,6 +772,11 @@ mod cli_tests {
         for field in ["id", "created", "tags", "title", "type"] {
             assert!(note.frontmatter.contains_key(field));
         }
+        let prefix = &note.id.as_str()[..3];
+        assert_eq!(
+            note.path,
+            format!("{prefix}/{}-my-title.md", note.id.as_str())
+        );
         assert!(note.body.is_empty());
     }
 }

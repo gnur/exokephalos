@@ -93,6 +93,7 @@ impl<'a> WorkspaceProjection<'a> {
     }
 
     /// Apply a debounced event batch. Upserts run before removals so renames form one revision.
+    #[allow(clippy::too_many_lines)]
     pub async fn apply_events(
         &self,
         events: &[ProjectionEvent],
@@ -100,6 +101,8 @@ impl<'a> WorkspaceProjection<'a> {
         let mut report = LocalApplyReport::default();
         let mut upserts = BTreeSet::<PathBuf>::new();
         let mut removals = BTreeSet::<PathBuf>::new();
+        let mut upserted_note_ids = BTreeSet::new();
+        let mut noncanonical_paths = BTreeSet::new();
         for event in events {
             let path = event.path();
             if self.state.consume_if_expected(path)? {
@@ -146,6 +149,10 @@ impl<'a> WorkspaceProjection<'a> {
             }
             match read_note(self.root(), &path) {
                 Ok(note) => {
+                    upserted_note_ids.insert(note.id.clone());
+                    if path != self.root().join(&note.path) {
+                        noncanonical_paths.insert(path);
+                    }
                     if let Some(revision_id) = self.commit_note(note).await? {
                         report.committed.push(revision_id);
                     }
@@ -176,11 +183,19 @@ impl<'a> WorkspaceProjection<'a> {
             else {
                 continue;
             };
+            if upserted_note_ids.contains(&base.note_id) {
+                continue;
+            }
             let timestamp = self.next_after(&base.hlc)?;
             let deletion = base.delete(timestamp, self.actor.clone())?;
             report
                 .committed
                 .push(self.records.commit_revision(&deletion).await?);
+        }
+        for path in noncanonical_paths {
+            if path.is_file() {
+                std::fs::remove_file(path).map_err(ProjectionError::from)?;
+            }
         }
 
         report.refresh = self.refresh().await?;
@@ -332,7 +347,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_edit_rename_and_delete_become_one_revision_each() -> anyhow::Result<()> {
+    async fn local_edit_noncanonical_move_and_delete_are_reconciled() -> anyhow::Result<()> {
         let _guard = crate::iroh_node::IROH_TEST_LOCK.lock().await;
         let directory = tempfile::tempdir()?;
         let node = IrohNode::persistent(directory.path().join("iroh")).await?;
@@ -344,7 +359,9 @@ mod tests {
         let projection_root = directory.path().join("projection");
         let projection = WorkspaceProjection::open(&workspace, &index, &projection_root)?;
         projection.refresh().await?;
-        let initial_path = projection.root().join(&initial.materialized_path);
+        let canonical_path =
+            crate::projection::canonical_note_path(&initial.note_id, &initial.frontmatter);
+        let initial_path = projection.root().join(&canonical_path);
 
         let suppressed = projection
             .apply_events(&[ProjectionEvent::Upsert(initial_path.clone())])
@@ -383,11 +400,11 @@ mod tests {
         std::fs::rename(&initial_path, &renamed_path)?;
         let rename = projection
             .apply_events(&[
-                ProjectionEvent::Remove(initial_path),
+                ProjectionEvent::Remove(initial_path.clone()),
                 ProjectionEvent::Upsert(renamed_path.clone()),
             ])
             .await?;
-        assert_eq!(rename.committed.len(), 1);
+        assert!(rename.committed.is_empty());
         assert_eq!(
             records
                 .load_note(&initial.note_id)
@@ -396,12 +413,14 @@ mod tests {
                 .visible
                 .expect("visible rename")
                 .materialized_path,
-            "archive/renamed.md"
+            canonical_path
         );
+        assert!(initial_path.is_file());
+        assert!(!renamed_path.exists());
 
-        std::fs::remove_file(&renamed_path)?;
+        std::fs::remove_file(&initial_path)?;
         let deletion = projection
-            .apply_events(&[ProjectionEvent::Remove(renamed_path)])
+            .apply_events(&[ProjectionEvent::Remove(initial_path)])
             .await?;
         assert_eq!(deletion.committed.len(), 1);
         assert!(

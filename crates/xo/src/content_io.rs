@@ -95,13 +95,13 @@ pub fn prepare_import(source: &Path, existing: &[Note], default_type: &str) -> R
                 note.id
             );
         }
+        normalize_imported_note(note, default_type)?;
         if let Some(id) = existing_paths.get(note.path.as_str()) {
             bail!(
                 "import path {} conflicts with existing note {id}; nothing was imported",
                 note.path
             );
         }
-        normalize_imported_note(note, source, default_type)?;
     }
     Ok(notes)
 }
@@ -170,7 +170,7 @@ pub fn export_notes(
     })
 }
 
-fn normalize_imported_note(note: &mut Note, source: &Path, default_type: &str) -> Result<()> {
+fn normalize_imported_note(note: &mut Note, default_type: &str) -> Result<()> {
     note.frontmatter.insert(
         "id".to_owned(),
         FrontmatterValue::String(note.id.to_string()),
@@ -214,10 +214,9 @@ fn normalize_imported_note(note: &mut Note, source: &Path, default_type: &str) -
             .map(str::to_owned)
             .map_or_else(
                 || {
-                    let modified = source.join(&note.path).metadata()?.modified()?;
-                    OffsetDateTime::from(modified)
+                    OffsetDateTime::now_utc()
                         .format(&Rfc3339)
-                        .context("format imported file modification time")
+                        .context("format import timestamp")
                 },
                 Ok,
             )?;
@@ -227,7 +226,9 @@ fn normalize_imported_note(note: &mut Note, source: &Path, default_type: &str) -
     note.frontmatter
         .values()
         .try_for_each(FrontmatterValue::validate)
-        .with_context(|| format!("validate imported note {}", note.path))
+        .with_context(|| format!("validate imported note {}", note.path))?;
+    note.path = xo_core::projection::canonical_note_path(&note.id, &note.frontmatter);
+    Ok(())
 }
 
 fn ensure_empty_destination(destination: &Path) -> Result<()> {

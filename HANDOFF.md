@@ -236,11 +236,27 @@ The TUI now drives that exchange with `J`:
 
 - it asks for the server state directory;
 - generates a writable client invitation;
-- builds POSIX-quoted stop/import/start commands for the system service;
-- copies them through OSC 52 or reveals them on explicit request;
-- accepts either complete `xo-admin` output or its `ticket=` line;
+- shows the workspace ID, loopback setup URL, and operator-token location;
+- copies the invitation through OSC 52 or reveals it on explicit request;
+- directs the user to the authenticated `xo-syncd` setup page, which validates
+  the workspace ID and writable capability before importing it;
+- retains POSIX-quoted stop/import/start commands behind `C` as a headless
+  fallback;
+- accepts the returned server ticket, complete page output, or a `ticket=` line;
 - validates and connects the returned server ticket; and
 - zeroizes the in-memory invitation, pasted output, and clipboard payload.
+
+The daemon serves its setup form at `/setup`. It imports the matching writable
+ticket through the live Iroh node, starts synchronization, adds the workspace
+to authenticated status/metrics output, and returns a server-addressed ticket.
+The form is protected by the operator token and does not persist submitted
+secrets in browser storage.
+
+Projected note paths are canonical:
+`<first-three-ID-characters>/<ID>-<title-slug>.md`. The scanner,
+materializer, TUI mutation path, and Markdown importer all use the same helper;
+title changes therefore move the projection while retaining the stable note
+identity.
 
 Example system and user units live below `examples/systemd/`.
 
@@ -339,7 +355,7 @@ cargo test -p xo-admin
 5 passed; 0 failed
 
 cargo test --workspace
-89 passed; 0 failed
+101 passed; 0 failed
 
 git diff --check
 passed

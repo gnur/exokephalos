@@ -200,6 +200,35 @@ the `/` title query, then show how many notes would remain if each tag were
 added to the currently selected tag filters. Selecting or clearing a tag
 therefore updates every displayed count immediately.
 
+## Import and export Markdown
+
+`xo import` recursively imports Markdown into the configured active workspace:
+
+```console
+xo import ~/incoming-notes
+xo import ~/incoming-books --type book
+```
+
+The source must be a directory outside the active Markdown projection. xo scans
+and parses every Markdown file before committing the first revision, reports
+all malformed-document and duplicate-ID diagnostics, and rejects IDs or paths
+that collide with the active workspace. Files without complete frontmatter get
+stable IDs and the required `id`, `created`, `tags`, `title`, and `type` fields.
+The source tree is never modified.
+
+`xo export` writes winning workspace notes as conventional Markdown:
+
+```console
+xo export ~/xo-export
+xo export ~/xo-notes-export --type note
+```
+
+The destination must be new or empty; xo will not overwrite an existing file.
+Output is grouped below `<type>/<year>/<month>/`, internal `id`, `type`, and
+`created` fields are removed, and duplicate title slugs receive deterministic
+`-1`, `-2`, and later suffixes. Encrypted note bodies retain their `id` because
+their ciphertext is bound to it.
+
 ## Edit workspace behavior
 
 Workspace behavior is replicated and projected as `xo.scm`. A new workspace

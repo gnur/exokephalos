@@ -60,6 +60,11 @@ impl WorkspaceSession {
         self.workspace.id().to_string()
     }
 
+    #[must_use]
+    pub fn projection_root(&self) -> &Path {
+        self.projection.root()
+    }
+
     pub async fn snapshot(&self) -> Result<WorkspaceSnapshot> {
         let snapshot = WorkspaceRecords::new(&self.workspace).snapshot().await?;
         self.projection.reconcile(&snapshot.notes)?;

@@ -188,14 +188,20 @@ A stage is complete only when every task and its exit gate are checked.
 
 ## Stage 7 — Content workflows and feature parity
 
-- [ ] Port recursive Markdown import and conventional Markdown export.
-- [ ] Port URL capture and readable-content conversion.
+- [x] Port recursive Markdown import and conventional Markdown export.
+- [ ] Implement URL capture and readable-content conversion as a capability-gated Steel action plugin, backed by a testable native host service rather than ambient Steel network access.
 - [ ] Add optional authenticated webhook ingestion to `xo-syncd`.
 - [ ] Add image attachment import, validation, collision handling, materialization, and transfer.
 - [ ] Complete encrypted-note user workflows.
 - [ ] Port Goodreads import and Hardcover search.
 - [ ] Port reading states and statistics.
 - [ ] Place external integrations behind testable traits and fixtures.
+
+Import/export coverage includes recursive discovery, source immutability,
+required-field normalization, full diagnostic preflight, active-workspace
+identity/path collisions, type-filtered conventional output, deterministic
+filename collisions, encrypted-ID preservation, refusal to overwrite a
+non-empty destination, and a real `xo import` → `xo export` process test.
 
 **Exit gate**
 
@@ -242,7 +248,7 @@ A stage is complete only when every task and its exit gate are checked.
 
 ## Repository-wide verification
 
-- [x] `cargo test --workspace` passes.
+- [ ] `cargo test --workspace` passes. The current run is blocked by the reproducible pre-existing `restored_peer_serves_blobs_and_rejoins_an_active_peer` Iroh blob lookup failure; all new import/export tests pass.
 - [x] `cargo clippy --workspace --all-targets -- -D warnings` passes.
 - [x] `cargo fmt --all -- --check` passes.
 - [x] `git diff --check` passes.

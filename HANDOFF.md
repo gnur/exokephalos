@@ -180,6 +180,26 @@ original tempfile has been replaced at path ...
 
 There is a regression test that replaces the temporary file with `mv`.
 
+### Recursive import and conventional export
+
+- `xo import SOURCE [--type TYPE]` operates on the configured active workspace.
+  It recursively scans outside the active projection, completes all Markdown,
+  duplicate-ID, and active-workspace collision checks before committing, adds
+  required fields, leaves the source unchanged, and materializes the imported
+  winning revisions.
+- `xo export DESTINATION [--type TYPE]` exports winning revisions only to a new
+  or empty destination. It groups files by type/year/month, strips ordinary
+  internal metadata, allocates deterministic filename suffixes, preserves IDs
+  for encrypted bodies, and never overwrites existing files.
+- `crates/xo/tests/import_export.rs` invokes the real binary for a recursive
+  import/export round trip. Pure model tests cover malformed input, collisions,
+  filtering, encrypted output, and destination refusal.
+
+URL capture/readable-content conversion is explicitly reserved for a
+capability-gated Steel action plugin. Its network/readability implementation
+must sit behind a testable native host service; do not grant ambient network
+access to the Steel runtime or hard-code URL capture into the TUI.
+
 ## Synchronization server workflow
 
 `README.md` documents the implemented setup:
@@ -257,6 +277,7 @@ The main incomplete stages are already checkable in
 - `crates/xo/src/app.rs` — TUI model, filtering, faceted tags, goto menu, preview,
   highlighting, rendering, and most TUI tests
 - `crates/xo/src/config.rs` — native command configuration
+- `crates/xo/src/content_io.rs` — recursive import preflight and deterministic conventional export
 - `crates/xo/src/session.rs` — local workspace selection, projection hydration,
   behavior bootstrap, persistence, and Iroh-backed TUI tests
 - `crates/xo-core/src/iroh_node.rs` — persistent endpoint and workspace sync API
@@ -278,15 +299,34 @@ The main incomplete stages are already checkable in
 
 ## Last verified state
 
-After the goto-menu and faceted-tag TUI changes, focused verification is:
+After the recursive import/export changes, focused verification is:
 
 ```text
+cargo fmt --all -- --check
+passed
+
+cargo clippy --workspace --all-targets -- -D warnings
+passed
+
 cargo test -p xo
-26 passed; 0 failed
+31 passed; 0 failed
+
+git diff --check
+passed
 ```
 
-The prior full-workspace verification after the real-daemon, multi-TUI E2E
-changes was:
+The current `cargo test --workspace` run passes all new import/export tests but
+fails in the unrelated existing
+`backup::tests::restored_peer_serves_blobs_and_rejoins_an_active_peer` test
+while reading an Iroh entry blob:
+
+```text
+Io(Kind(NotFound)): entity not found
+```
+
+The failure reproduces with the feature-enabled backup test in isolation. The
+prior full-workspace verification after the real-daemon, multi-TUI E2E changes
+was:
 
 ```text
 cargo fmt --all -- --check

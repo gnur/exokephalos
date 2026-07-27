@@ -24,6 +24,7 @@ Steel Scheme defines synchronized workspace behavior.
 - Views define display names, shortcuts, predicates, sorting, title/subtitle fields, preview templates, tag visibility, and statistics templates.
 - Subviews add named filtering predicates.
 - Actions define a label, applicability predicate, granted capabilities, and a note transformation.
+- URL capture and readable-content conversion are delivered as a Steel action plugin. Network fetching and readability run through an explicitly granted, testable native host capability; Steel itself receives no ambient network access.
 - Scripts receive a flat note value with frontmatter fields, id, path, and body.
 - The host provides deterministic tag, date, ID, link, and bounded-query helpers.
 - Steel runs in a capability sandbox without filesystem, network, process, wall-clock, or secret access unless explicitly granted.
@@ -157,4 +158,3 @@ Shared domain and sync layer.
 - Steel scripts are capability-isolated and produce scoped diagnostics on failure.
 - Revoked devices cannot publish future heads.
 - Backup restore reproduces documents, blobs, Steel configuration, and the Markdown projection.
-

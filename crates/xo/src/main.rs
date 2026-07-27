@@ -52,15 +52,27 @@ enum Command {
     ConfigInit,
     /// Validate that a Markdown document can be read by the Rust core.
     Validate { path: PathBuf },
+    /// Recursively import Markdown into the configured active workspace.
+    Import {
+        source: PathBuf,
+        #[arg(long = "type", default_value = "note")]
+        item_type: String,
+    },
+    /// Export the configured active workspace as conventional Markdown.
+    Export {
+        destination: PathBuf,
+        #[arg(long = "type")]
+        item_type: Option<String>,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    match cli.command {
+    match &cli.command {
         Some(Command::ConfigInit) => print!("{}", XoConfig::default().document()?),
         Some(Command::Validate { path }) => {
-            let content = std::fs::read_to_string(&path)?;
+            let content = std::fs::read_to_string(path)?;
             let document = xo_core::markdown::parse(&content)?;
             println!(
                 "{}: valid (frontmatter={}, body_bytes={})",
@@ -69,27 +81,64 @@ async fn main() -> Result<()> {
                 document.body.len()
             );
         }
+        Some(Command::Import { source, item_type }) => {
+            let config = configured(&cli)?;
+            let mut session = WorkspaceSession::open(
+                &config.state_dir,
+                config.workspace.as_deref(),
+                cli.ticket.as_deref(),
+                config.projection,
+            )
+            .await?;
+            let result = xo::content_io::import_markdown(&mut session, source, item_type).await;
+            let shutdown = session.shutdown().await;
+            let imported = result?;
+            shutdown?;
+            println!("imported={imported}");
+        }
+        Some(Command::Export {
+            destination,
+            item_type,
+        }) => {
+            let config = configured(&cli)?;
+            let session = WorkspaceSession::open(
+                &config.state_dir,
+                config.workspace.as_deref(),
+                cli.ticket.as_deref(),
+                config.projection,
+            )
+            .await?;
+            let result =
+                xo::content_io::export_markdown(&session, destination, item_type.as_deref()).await;
+            let shutdown = session.shutdown().await;
+            let exported = result?;
+            shutdown?;
+            println!("exported={}", exported.exported);
+        }
         None => {
-            let home = home_dir()?;
-            let ticket = cli.ticket;
-            let config = XoConfig::load(&config_path(&home), &home)?.apply(
-                CliOverrides {
-                    state_dir: cli.state_dir,
-                    workspace: cli.workspace,
-                    projection: cli.projection,
-                },
-                &home,
-            );
+            let config = configured(&cli)?;
             run_tui(
                 &config.state_dir,
                 config.workspace.as_deref(),
-                ticket.as_deref(),
+                cli.ticket.as_deref(),
                 config.projection,
             )
             .await?;
         }
     }
     Ok(())
+}
+
+fn configured(cli: &Cli) -> Result<XoConfig> {
+    let home = home_dir()?;
+    Ok(XoConfig::load(&config_path(&home), &home)?.apply(
+        CliOverrides {
+            state_dir: cli.state_dir.clone(),
+            workspace: cli.workspace.clone(),
+            projection: cli.projection.clone(),
+        },
+        &home,
+    ))
 }
 
 async fn run_tui(

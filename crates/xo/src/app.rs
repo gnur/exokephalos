@@ -168,6 +168,19 @@ impl App {
             Pane::Tags | Pane::Notes => Pane::Preview,
         };
     }
+    pub fn focus_right(&mut self) {
+        self.pane = match self.pane {
+            Pane::Tags => Pane::Notes,
+            Pane::Notes | Pane::Preview => Pane::Preview,
+        };
+    }
+    pub fn focus_left(&mut self) {
+        self.pane = match self.pane {
+            Pane::Tags => Pane::Tags,
+            Pane::Notes if self.tags_visible => Pane::Tags,
+            Pane::Notes | Pane::Preview => Pane::Notes,
+        };
+    }
     pub fn toggle_tags_visible(&mut self) {
         self.tags_visible = !self.tags_visible;
         if !self.tags_visible && self.pane == Pane::Tags {
@@ -718,7 +731,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         ])
         .split(header[1]);
     for (area, lines) in key_columns.iter().zip([
-        vec!["[↑↓/jk] select · [Tab] pane", "[Space] tag · [/] filter"],
+        vec!["[↑↓/jk] select · [←→/hl] pane", "[Space] tag · [/] filter"],
         vec![
             "[Enter/e] edit · [c] create",
             "[d/u] del/restore · [g] goto",
@@ -1490,6 +1503,34 @@ mod tests {
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
         assert!(!screen.contains("Tags · 1 selected"));
+    }
+
+    #[test]
+    fn horizontal_focus_moves_spatially_across_visible_panes() {
+        let mut app = fixture();
+        app.pane = Pane::Tags;
+
+        app.focus_left();
+        assert_eq!(app.pane, Pane::Tags);
+        app.focus_right();
+        assert_eq!(app.pane, Pane::Notes);
+        app.focus_right();
+        assert_eq!(app.pane, Pane::Preview);
+        app.focus_right();
+        assert_eq!(app.pane, Pane::Preview);
+        app.focus_left();
+        assert_eq!(app.pane, Pane::Notes);
+        app.focus_left();
+        assert_eq!(app.pane, Pane::Tags);
+
+        app.toggle_tags_visible();
+        assert_eq!(app.pane, Pane::Notes);
+        app.focus_left();
+        assert_eq!(app.pane, Pane::Notes);
+        app.focus_right();
+        assert_eq!(app.pane, Pane::Preview);
+        app.focus_left();
+        assert_eq!(app.pane, Pane::Notes);
     }
 
     #[test]

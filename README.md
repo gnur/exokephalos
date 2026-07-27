@@ -191,8 +191,9 @@ arrow keys and Enter. View navigation does not use a command prompt or
 separately configured direct-view keys.
 
 Press `T` to show or hide the tag pane. When it is visible, `Tab` and
-`Shift-Tab` include it in pane navigation. Highlight a tag with the arrow keys
-or `j`/`k`, then press Space or Enter to toggle that filter.
+`Shift-Tab` include it in cyclic pane navigation. Use Left/Right or `h`/`l` for
+spatial pane movement between Tags, Notes, and Preview. Highlight a tag with
+Up/Down or `j`/`k`, then press Space or Enter to toggle that filter.
 
 Tag counts are live facets. They first respect the active view or subview and
 the `/` title query, then show how many notes would remain if each tag were

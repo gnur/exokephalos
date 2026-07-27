@@ -389,6 +389,8 @@ async fn event_loop(
                 KeyCode::Char('q') => break,
                 KeyCode::Tab => app.next_pane(),
                 KeyCode::BackTab => app.previous_pane(),
+                KeyCode::Left | KeyCode::Char('h') => app.focus_left(),
+                KeyCode::Right | KeyCode::Char('l') => app.focus_right(),
                 KeyCode::Down | KeyCode::Char('j') => match app.pane {
                     app::Pane::Tags => app.select_next_tag(),
                     _ => app.select_next(),

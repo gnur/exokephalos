@@ -114,6 +114,7 @@ The screen currently contains:
 Important controls:
 
 - `Tab`/`Shift-Tab`: change pane
+- Left/Right or `h`/`l`: move spatially between visible panes
 - arrows or `j`/`k`: move through the focused list
 - `Space` or `Enter` in the tag pane: toggle the highlighted tag filter
 - `/`: open the title-filter input between header and content
@@ -281,7 +282,7 @@ After the goto-menu and faceted-tag TUI changes, focused verification is:
 
 ```text
 cargo test -p xo
-25 passed; 0 failed
+26 passed; 0 failed
 ```
 
 The prior full-workspace verification after the real-daemon, multi-TUI E2E

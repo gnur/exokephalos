@@ -260,6 +260,13 @@ identity.
 
 Example system and user units live below `examples/systemd/`.
 
+The root `Dockerfile` builds only `xo-syncd` in a Rust 1.89 builder and runs it
+as UID/GID 10001 with `/data` as its durable volume. The operator endpoint binds
+inside the container on port 9464; deployment examples publish it only to host
+loopback. `.github/workflows/build.yml` now runs Rust formatting, strict Clippy,
+the complete workspace tests, native Linux/macOS release builds, and a
+multi-platform syncd-only GHCR image build.
+
 `syncd_restart_converges_two_restarted_tui_clients_with_offline_conflict` is a
 process-level E2E test. It launches the compiled `xo-syncd`, joins two
 independent TUI sessions, restarts the daemon and both clients, creates

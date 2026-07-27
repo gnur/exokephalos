@@ -122,6 +122,42 @@ systemctl --user enable --now xo-syncd
 The TUI pairing wizard described below supplies the values needed by the
 daemon's browser setup page. The same flow works for system and user services.
 
+### Container
+
+The repository's Docker image contains only `xo-syncd`; the TUI and
+administrative binaries are not installed. Build it locally with:
+
+```console
+docker build -t xo-syncd .
+```
+
+Run it with a named volume and publish the operator interface to host loopback:
+
+```console
+docker run --detach \
+  --name xo-syncd \
+  --restart unless-stopped \
+  --publish 127.0.0.1:9464:9464 \
+  --volume xo-syncd-data:/data \
+  xo-syncd
+```
+
+The process runs as UID/GID `10001`, stores all durable state below `/data`,
+and reports container health through `/readyz`. Read the generated operator
+token with:
+
+```console
+docker exec xo-syncd cat /data/operator.token
+```
+
+Then open `http://127.0.0.1:9464/setup` and follow the TUI pairing flow below.
+For a remote Docker host, use the same SSH port forwarding described in that
+flow. Do not publish port `9464` on an unrestricted interface.
+
+Pushes to `main` and version tags publish multi-platform `linux/amd64` and
+`linux/arm64` images to `ghcr.io/gnur/exokephalos`. Pull requests build the
+same image without publishing it.
+
 ## Connect the TUI
 
 ### 1. Create the local configuration

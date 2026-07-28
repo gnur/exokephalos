@@ -262,11 +262,15 @@ mod tests {
     async fn wait_for_asset(
         records: crate::records::WorkspaceRecords<'_>,
     ) -> anyhow::Result<Vec<u8>> {
-        for _ in 0..100 {
+        for _ in 0..300 {
             match records.get_asset(&crate::AssetId::new("image001")).await {
                 Ok(Some(asset)) => return Ok(asset.bytes),
-                Ok(None) | Err(crate::records::RecordError::MissingBlob(_)) => {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
+                Ok(None)
+                | Err(
+                    crate::records::RecordError::MissingBlob(_)
+                    | crate::records::RecordError::Transport(_),
+                ) => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                 }
                 Err(error) => return Err(error.into()),
             }

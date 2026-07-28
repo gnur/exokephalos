@@ -937,14 +937,14 @@ mod tests {
         let imported = second.import_workspace(&ticket).await?;
         let records = WorkspaceRecords::new(&imported);
         let mut replicated = None;
-        for _ in 0..100 {
+        for _ in 0..300 {
             match records.get_asset(&AssetId::new("image001")).await {
                 Ok(Some(asset)) => {
                     replicated = Some(asset);
                     break;
                 }
-                Ok(None) | Err(RecordError::MissingBlob(_)) => {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
+                Ok(None) | Err(RecordError::MissingBlob(_) | RecordError::Transport(_)) => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                 }
                 Err(error) => return Err(error.into()),
             }

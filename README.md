@@ -31,6 +31,17 @@ ARM64, and Windows x86-64. Pushing any tag creates the corresponding GitHub
 Release automatically with generated release notes, all four archives, and a
 `SHA256SUMS` file.
 
+Create a release tag from a clean, fully committed checkout with:
+
+```console
+./release.sh
+```
+
+The script creates an annotated UTC tag in ISO 8601 basic format, such as
+`20260728T143012Z`, then asks whether it should push the tag to `origin`. The
+default answer is no. It refuses to tag while staged, unstaged, or untracked
+changes exist. Pushing the tag starts the GitHub Release workflow.
+
 ## Set up a new synchronization server
 
 ### 1. Prepare a seed directory

@@ -272,6 +272,10 @@ Windows x86-64. Any pushed tag creates a GitHub Release after all four
 archives succeed, attaching those archives plus `SHA256SUMS` and generated
 release notes.
 
+`release.sh` refuses dirty worktrees and creates an annotated UTC timestamp tag
+in ISO 8601 basic form (`YYYYMMDDTHHMMSSZ`). It asks before pushing to
+`origin`, defaults to no, and prints the manual push command when declined.
+
 `syncd_restart_converges_two_restarted_tui_clients_with_offline_conflict` is a
 process-level E2E test. It launches the compiled `xo-syncd`, joins two
 independent TUI sessions, restarts the daemon and both clients, creates

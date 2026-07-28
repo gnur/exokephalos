@@ -375,6 +375,23 @@ mod tests {
 
     use super::*;
 
+    async fn wait_for_value(workspace: &IrohWorkspace, key: &str) -> Result<Vec<u8>> {
+        let mut last_error = None;
+        for _ in 0..300 {
+            match workspace.get(key).await {
+                Ok(Some(value)) => return Ok(value),
+                Ok(None) => {}
+                Err(error) => last_error = Some(error),
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        if let Some(error) = last_error {
+            return Err(error).with_context(|| format!("wait for workspace value {key}"));
+        }
+        bail!("workspace value {key} did not replicate");
+    }
+
     #[tokio::test]
     async fn two_peers_sync_and_second_peer_survives_restart() -> Result<()> {
         let _guard = IROH_TEST_LOCK.lock().await;
@@ -392,15 +409,8 @@ mod tests {
         let imported = second.import_workspace(&ticket).await?;
         assert_eq!(imported.id(), workspace_id);
 
-        let mut replicated = None;
-        for _ in 0..100 {
-            if let Some(value) = imported.get("note/test/revision/one").await? {
-                replicated = Some(value);
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        assert_eq!(replicated.as_deref(), Some(b"hello".as_slice()));
+        let replicated = wait_for_value(&imported, "note/test/revision/one").await?;
+        assert_eq!(replicated, b"hello");
 
         second.shutdown().await?;
         drop(imported);
@@ -420,17 +430,8 @@ mod tests {
         workspace
             .put("note/test/revision/two", "after restart")
             .await?;
-        let mut resumed = None;
-        for _ in 0..100 {
-            match reopened.get("note/test/revision/two").await {
-                Ok(Some(value)) => {
-                    resumed = Some(value);
-                    break;
-                }
-                Ok(None) | Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
-            }
-        }
-        assert_eq!(resumed.as_deref(), Some(b"after restart".as_slice()));
+        let resumed = wait_for_value(&reopened, "note/test/revision/two").await?;
+        assert_eq!(resumed, b"after restart");
 
         restarted.shutdown().await?;
         first.shutdown().await?;
@@ -507,17 +508,8 @@ mod tests {
             BlobStatus::Partial { .. }
         ));
         let imported = receiver.import_workspace(&ticket).await?;
-        let mut completed_bytes = None;
-        for _ in 0..200 {
-            match imported.get("asset-blob/large").await {
-                Ok(Some(value)) => {
-                    completed_bytes = Some(value);
-                    break;
-                }
-                Ok(None) | Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
-            }
-        }
-        assert_eq!(completed_bytes.as_deref(), Some(bytes.as_slice()));
+        let completed_bytes = wait_for_value(&imported, "asset-blob/large").await?;
+        assert_eq!(completed_bytes, bytes);
         assert_eq!(
             receiver.blobs.blobs().status(hash).await?,
             BlobStatus::Complete {

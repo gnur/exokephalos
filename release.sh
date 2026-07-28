@@ -28,7 +28,7 @@ echo "Created release tag ${release_tag} at $(git rev-parse --short HEAD)."
 read -r -p "Push ${release_tag} to origin now? [y/N] " push_answer || push_answer=""
 case "${push_answer}" in
   y | Y | yes | Yes | YES)
-    git push origin "${release_tag}"
+    git push origin "${release_tag}" && git push
     echo "Pushed ${release_tag}; the GitHub Release workflow will start."
     ;;
   *)

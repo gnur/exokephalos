@@ -45,6 +45,17 @@ jobs:
       - name: Run workspace tests
         run: cargo test --workspace --locked
 
+      - name: Run networked syncd end-to-end test
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            echo "syncd end-to-end attempt ${attempt}/3"
+            if cargo test -p xo-syncd --test multiple_tui_clients --locked -- --ignored; then
+              exit 0
+            fi
+          done
+          exit 1
+
   binaries:
     name: Binaries (${{ matrix.target }})
     needs: quality

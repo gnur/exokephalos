@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::io::Read as _;
 use std::net::{SocketAddr, TcpListener};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -28,7 +29,7 @@ impl SyncdProcess {
             .arg(operator_addr.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .context("start xo-syncd")?;
         let mut process = Self {
@@ -42,7 +43,14 @@ impl SyncdProcess {
     async fn wait_until_ready(&mut self) -> Result<()> {
         for _ in 0..200 {
             if let Some(status) = self.child.try_wait().context("poll xo-syncd")? {
-                bail!("xo-syncd exited before becoming ready: {status}");
+                let mut stderr = String::new();
+                if let Some(mut stream) = self.child.stderr.take() {
+                    stream.read_to_string(&mut stderr)?;
+                }
+                bail!(
+                    "xo-syncd exited before becoming ready: {status}: {}",
+                    stderr.trim()
+                );
             }
             if tokio::net::TcpStream::connect(self.operator_addr)
                 .await
@@ -75,6 +83,7 @@ impl Drop for SyncdProcess {
 }
 
 #[tokio::test]
+#[ignore = "requires public N0 discovery and relay services"]
 #[allow(clippy::too_many_lines)]
 async fn syncd_restart_converges_two_restarted_tui_clients_with_offline_conflict() -> Result<()> {
     let directory = tempfile::tempdir()?;
@@ -159,6 +168,8 @@ async fn syncd_restart_converges_two_restarted_tui_clients_with_offline_conflict
     client_two.save(&client_two_edit).await?;
 
     let daemon = SyncdProcess::start(&server_state).await?;
+    client_one.connect_peer(&server_ticket).await?;
+    client_two.connect_peer(&server_ticket).await?;
     wait_until(
         "offline conflict to converge to both TUI clients",
         || async {
@@ -196,15 +207,20 @@ async fn syncd_restart_converges_two_restarted_tui_clients_with_offline_conflict
         .await?
         .context("xo-syncd workspace disappeared after restart")?;
     let records = WorkspaceRecords::new(&persisted_workspace);
-    let snapshot = records.snapshot().await?;
+    let snapshot = retry_until_ok("persisted server snapshot", || async {
+        records.snapshot().await.map_err(Into::into)
+    })
+    .await?;
     assert!(snapshot.resolved.iter().any(|note| {
         note.conflict
             .as_ref()
             .is_some_and(|conflict| conflict.note_id == base.id)
     }));
-    let bodies = records
-        .revision_history(&base.id)
-        .await?
+    let history = retry_until_ok("persisted server revision history", || async {
+        records.revision_history(&base.id).await.map_err(Into::into)
+    })
+    .await?;
+    let bodies = history
         .into_iter()
         .map(|(_, revision)| revision.body)
         .collect::<BTreeSet<_>>();
@@ -244,13 +260,16 @@ fn note(id: &str, title: &str, body: &str) -> Note {
 }
 
 async fn find_note(session: &WorkspaceSession, id: &NoteId) -> Result<Note> {
-    session
-        .snapshot()
-        .await?
-        .notes
-        .into_iter()
-        .find(|note| &note.id == id)
-        .with_context(|| format!("note {id} is missing"))
+    retry_until_ok(&format!("note {id} to be readable"), || async {
+        session
+            .snapshot()
+            .await?
+            .notes
+            .into_iter()
+            .find(|note| &note.id == id)
+            .with_context(|| format!("note {id} is missing"))
+    })
+    .await
 }
 
 async fn has_note(session: &WorkspaceSession, id: &NoteId) -> bool {
@@ -271,9 +290,11 @@ async fn has_conflict(session: &WorkspaceSession, id: &NoteId) -> bool {
 }
 
 async fn assert_history(session: &WorkspaceSession, id: &NoteId) -> Result<()> {
-    let bodies = session
-        .history(id)
-        .await?
+    let history = retry_until_ok(&format!("history for note {id}"), || async {
+        session.history(id).await
+    })
+    .await?;
+    let bodies = history
         .into_iter()
         .map(|(_, revision)| revision.body)
         .collect::<BTreeSet<_>>();
@@ -286,6 +307,26 @@ async fn assert_history(session: &WorkspaceSession, id: &NoteId) -> Result<()> {
         ])
     );
     Ok(())
+}
+
+async fn retry_until_ok<T, F, Fut>(description: &str, mut operation: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let mut last_error = None;
+    for _ in 0..600 {
+        match operation().await {
+            Ok(value) => return Ok(value),
+            Err(error) => last_error = Some(error),
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    match last_error {
+        Some(error) => Err(error).with_context(|| format!("timed out waiting for {description}")),
+        None => bail!("timed out waiting for {description}"),
+    }
 }
 
 async fn wait_until<F, Fut>(description: &str, mut condition: F) -> Result<()>

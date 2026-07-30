@@ -124,7 +124,9 @@ jobs:
 
   container:
     name: xo-syncd container
-    needs: quality
+    needs:
+      - quality
+      - binaries
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -133,6 +135,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Download Linux release binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: xo-*-unknown-linux-gnu
+          path: container-binaries
+
+      - name: Prepare container binaries
+        shell: bash
+        run: |
+          mkdir -p container-dist/amd64 container-dist/arm64
+          tar -xzf container-binaries/xo-x86_64-unknown-linux-gnu/xo-x86_64-unknown-linux-gnu.tar.gz \
+            -C container-dist/amd64 xo-syncd
+          tar -xzf container-binaries/xo-aarch64-unknown-linux-gnu/xo-aarch64-unknown-linux-gnu.tar.gz \
+            -C container-dist/arm64 xo-syncd
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
@@ -169,6 +186,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          target: runtime-prebuilt
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name == 'push' }}
           tags: ${{ steps.meta.outputs.tags }}

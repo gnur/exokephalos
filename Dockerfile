@@ -14,7 +14,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     cargo build --locked --release -p xo-syncd && \
     cp target/release/xo-syncd /usr/local/bin/xo-syncd
 
-FROM debian:bookworm-slim AS runtime
+FROM debian:bookworm-slim AS runtime-base
 
 RUN apt-get update && \
     apt-get install --yes --no-install-recommends ca-certificates curl && \
@@ -22,8 +22,6 @@ RUN apt-get update && \
     groupadd --gid 10001 xo && \
     useradd --uid 10001 --gid xo --home-dir /data --shell /usr/sbin/nologin xo && \
     install --directory --owner xo --group xo --mode 0700 /data
-
-COPY --from=builder /usr/local/bin/xo-syncd /usr/local/bin/xo-syncd
 
 USER xo:xo
 VOLUME ["/data"]
@@ -35,3 +33,13 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 ENTRYPOINT ["/usr/local/bin/xo-syncd"]
 CMD ["--state-dir", "/data", "--operator-bind", "0.0.0.0:9464"]
+
+# CI reuses the release binaries built natively by the platform matrix instead
+# of compiling the ARM binary under QEMU.
+FROM runtime-base AS runtime-prebuilt
+ARG TARGETARCH
+COPY --chown=xo:xo container-dist/${TARGETARCH}/xo-syncd /usr/local/bin/xo-syncd
+
+# Keep local `docker build` self-contained and independent of CI artifacts.
+FROM runtime-base AS runtime
+COPY --from=builder /usr/local/bin/xo-syncd /usr/local/bin/xo-syncd

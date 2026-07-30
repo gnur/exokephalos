@@ -42,13 +42,169 @@ The script creates an annotated UTC tag in ISO 8601 basic format, such as
 default answer is no. It refuses to tag while staged, unstaged, or untracked
 changes exist. Pushing the tag starts the GitHub Release workflow.
 
-## Set up a new synchronization server
+## How synchronization works
 
-### 1. Prepare a seed directory
+### Iroh documents and the Markdown projection
 
-`xo-admin import-workspace` creates the replicated workspace used by the
-server. Its source can be an existing Markdown projection or an empty directory
-for a new workspace.
+An xo workspace is an [Iroh Docs](https://www.iroh.computer/docs) namespace.
+Every TUI and `xo-syncd` instance keeps a persistent local replica in its own
+state directory. A replica contains:
+
+- immutable note revisions and one current head per author;
+- workspace configuration, device records, and asset metadata; and
+- content hashes whose bytes are transferred through Iroh Blobs.
+
+The Markdown directory is a local projection of that replicated state, not the
+transport or source of truth. xo turns local Markdown edits into new immutable
+revisions and materializes incoming revisions back into canonical Markdown
+paths. This is why the projection remains editable while the machine is
+offline.
+
+An Iroh ticket contains the document capability, workspace ID, and addressing
+information for one or more peers. A writable ticket grants write access to the
+whole workspace; treat it like a secret. A read-only ticket can replicate data
+but cannot publish revisions. Tickets are needed to establish a peer
+relationship, not for every launch: Iroh stores known peers in the state
+directory and xo resumes synchronization on restart.
+
+Synchronization is peer-to-peer and eventually consistent. Iroh attempts a
+direct connection and can use its configured relay when a direct path is not
+available. `xo-syncd` is therefore not a central database or lock server. It is
+a stable, always-on replica that makes it easier for intermittently connected
+TUI clients to exchange revisions. Two TUI clients can both edit offline and
+converge after they reconnect.
+
+### Conflict detection and resolution
+
+Each note revision records its predecessor revisions. Normal sequential edits
+form a chain; an older head that is already an ancestor of a newer head is
+history, not a conflict. If two peers edit the same note without seeing each
+other's edit, both revisions remain heads and neither is an ancestor of the
+other. xo records that as a conflict.
+
+All peers choose the same visible revision without depending on message arrival
+order. Candidates are ordered first by their hybrid logical clock (HLC) and
+then by revision ID as a deterministic tie-breaker. The highest candidate is
+the visible winner. This choice only keeps the UI and Markdown projection
+stable—it does **not** discard or silently merge the other branch. Concurrent
+revision IDs and all immutable history remain in the document. A concurrent
+delete and edit are handled the same way, so both outcomes remain recoverable.
+
+Press `x` in the TUI to see conflicted note IDs, the selected winner, concurrent
+revision IDs, and revision history. To resolve a conflict, edit the visible note
+and incorporate any content you want to retain. When xo saves a conflicted
+note, the new revision names the winner and every concurrent revision as
+predecessors. It is therefore a descendant of all branches; once that revision
+replicates, every peer deterministically stops reporting the conflict. xo does
+not attempt a line-by-line Markdown merge, so the user decides the final
+content.
+
+## Recommended setup: TUI first, then xo-syncd
+
+The simplest setup starts with the first TUI as the workspace creator. Add the
+always-on replica only after the local workspace is working, then optionally
+join more TUI clients.
+
+### 1. Create the first TUI workspace
+
+Create the command configuration on the first client:
+
+```console
+mkdir -p ~/.config/xo
+xo config-init > ~/.config/xo/config.scm
+xo
+```
+
+The default configuration stores Iroh state in `~/.local/share/xo` and projects
+Markdown into `~/notes`:
+
+```scheme
+(xo-config
+  (schema 1)
+  (state-dir "~/.local/share/xo")
+  (workspace #f)
+  (projection "~/notes"))
+```
+
+On this first launch, xo creates a local Iroh endpoint and writable document,
+records it as the active workspace, installs the default `xo.scm`, and opens
+the TUI. Create or import some notes and verify that the local projection works
+before adding a server. At this point the workspace is fully usable offline.
+
+Keep the state directory as well as the Markdown projection. The state
+directory contains the endpoint identity, document capabilities, revision
+history, and blobs; the projection alone is not a complete backup.
+
+### 2. Start an empty xo-syncd service
+
+Install and start `xo-syncd` on the always-on host. The systemd and container
+options are documented under [Running xo-syncd](#running-xo-syncd). Do not seed
+a second workspace: the pairing flow imports the document created by the first
+TUI.
+
+The daemon creates an operator token on first start. For the system service it
+is `/var/lib/xo-syncd/operator.token`; for the documented container it is
+`/data/operator.token`. Keep the operator listener on loopback. It is an
+administrative HTTP interface, not Iroh's synchronization port.
+
+### 3. Pair the first TUI with xo-syncd
+
+In the first TUI, press `J` and follow the three-step **Connect xo-syncd**
+wizard. In outline:
+
+1. Enter the server state directory: normally `/var/lib/xo-syncd` for the
+   system service or `/data` for the documented container.
+2. xo creates a one-time writable invitation. Open
+   `http://127.0.0.1:9464/setup`, enter the operator token, workspace ID, and
+   invitation, and submit the form. For a remote host, first run
+   `ssh -L 9464:127.0.0.1:9464 user@server` and open the local URL.
+3. The server imports the workspace and returns its own writable ticket. Paste
+   that ticket into the TUI to complete the connection in the other direction.
+
+The two-ticket exchange gives each endpoint current addressing information and
+persists the peer relationship on both sides. After it succeeds, future TUI and
+daemon launches resume synchronization without either ticket. See the
+[full pairing walkthrough](#detailed-tui-to-xo-syncd-pairing-flow) for ticket
+visibility controls and the command-line fallback.
+
+### 4. Optionally add more TUI clients
+
+Each additional machine needs its own configuration and state directory:
+
+```console
+mkdir -p ~/.config/xo
+xo config-init > ~/.config/xo/config.scm
+```
+
+Create an invitation from the server state while `xo-syncd` is stopped, then
+restart it:
+
+```console
+sudo systemctl stop xo-syncd
+sudo -u xo xo-admin invite /var/lib/xo-syncd '<WORKSPACE_ID>'
+sudo systemctl start xo-syncd
+```
+
+Transfer the printed ticket privately and use it once on the new client:
+
+```console
+xo --ticket '<WRITABLE_TICKET>'
+```
+
+That launch imports the existing Iroh document, records it as the active local
+workspace, starts synchronization, and opens the TUI. Later launches use plain
+`xo`. Repeat these steps for any other optional clients. Add `--read-only` to
+`xo-admin invite` when a client should replicate but not publish changes. Never
+run `xo-admin` and `xo-syncd` concurrently against the same state directory.
+
+## Running xo-syncd
+
+### Optional: seed a headless workspace first
+
+The TUI-first flow above does not need this step. For a headless-first setup or
+a one-time migration, `xo-admin import-workspace` can create the replicated
+workspace used by the server from an existing Markdown projection or an empty
+directory.
 
 ```console
 mkdir -p /srv/xo-seed
@@ -73,7 +229,7 @@ do not commit it to a repository or put it in `config.scm`.
 The state directory contains the server's endpoint identity, workspace records,
 and blobs. Back it up and do not delete `endpoint.key`.
 
-### 2. Start the daemon
+### Start the daemon directly
 
 ```console
 xo-syncd \
@@ -174,9 +330,12 @@ Pushes to `main` and tags publish multi-platform `linux/amd64` and
 `linux/arm64` images to `ghcr.io/gnur/exokephalos`. Pull requests build the
 same image without publishing it.
 
-## Connect the TUI
+## Join an existing workspace with a ticket
 
-### 1. Create the local configuration
+This is the flow used by additional TUI clients and by a headless-first setup.
+It is not needed on the first TUI in the recommended TUI-first flow.
+
+### Create the local configuration
 
 On the client machine:
 
@@ -196,7 +355,7 @@ and `~/notes` for the Markdown projection:
   (projection "~/notes"))
 ```
 
-### 2. Join with the server ticket
+### Join with the server ticket
 
 Use the writable ticket printed while initializing the server:
 
@@ -331,27 +490,7 @@ Only the native declarative form is accepted. Configuration is parsed through a
 strict boundary: arbitrary filesystem, environment, process, network, clock,
 or evaluation expressions are rejected.
 
-## Add another client
-
-Stop `xo-syncd` before running an administrative command against its state
-directory, create another invitation, and then restart the daemon:
-
-```console
-sudo systemctl stop xo-syncd
-sudo -u xo xo-admin invite /var/lib/xo-syncd '<WORKSPACE_ID>'
-sudo systemctl start xo-syncd
-```
-
-Join on the new client using the printed ticket:
-
-```console
-xo --ticket '<NEW_TICKET>'
-```
-
-To create a client that can read but cannot publish writes, add `--read-only` to
-the `xo-admin invite` command.
-
-## Attach a server to an existing TUI workspace
+## Detailed TUI-to-xo-syncd pairing flow
 
 If the workspace was created in the TUI, press `J` to open **Connect
 xo-syncd**:

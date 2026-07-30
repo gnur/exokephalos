@@ -323,7 +323,7 @@ struct TicketImportResult {
 async fn import_ticket(state_dir: &Path, ticket: &str) -> Result<TicketImportResult> {
     validate_writable_ticket(ticket)?;
     let node = IrohNode::persistent(state_dir).await?;
-    let workspace = node.import_writable_workspace(ticket).await?;
+    let workspace = node.import_writable_workspace_synced(ticket).await?;
     let result = TicketImportResult {
         workspace_id: workspace.id().to_string(),
         ticket: workspace.share(true).await?,
@@ -694,8 +694,11 @@ mod tests {
 
     use super::*;
 
+    static IROH_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[tokio::test]
     async fn import_does_not_modify_the_source_workspace() -> Result<()> {
+        let _guard = IROH_TEST_LOCK.lock().await;
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("source");
         std::fs::create_dir(&source)?;
@@ -737,6 +740,7 @@ mod tests {
 
     #[tokio::test]
     async fn import_rejects_state_inside_source() -> Result<()> {
+        let _guard = IROH_TEST_LOCK.lock().await;
         let directory = tempfile::tempdir()?;
         assert!(
             import_workspace(directory.path(), &directory.path().join(".exo/native"))
@@ -748,7 +752,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ticket_import_is_idempotent_and_resumes_after_restart() -> Result<()> {
+    async fn ticket_import_is_idempotent_and_reconnects_after_restart() -> Result<()> {
+        let _guard = IROH_TEST_LOCK.lock().await;
         let directory = tempfile::tempdir()?;
         let source = IrohNode::persistent(directory.path().join("source")).await?;
         let workspace = source.create_workspace().await?;
@@ -779,8 +784,7 @@ mod tests {
             .open_workspace_str(&workspace_id)
             .await?
             .context("imported workspace missing after restart")?;
-        imported.resume_sync().await?;
-        workspace.start_sync(&first.ticket).await?;
+        imported.start_sync(&source_ticket).await?;
         workspace
             .put("note/import-ticket/revision/one", "after import")
             .await?;
@@ -803,6 +807,7 @@ mod tests {
 
     #[tokio::test]
     async fn example_workspace_imports_equivalent_versioned_steel_configuration() -> Result<()> {
+        let _guard = IROH_TEST_LOCK.lock().await;
         let directory = tempfile::tempdir()?;
         let source = Path::new(concat!(
             env!("CARGO_MANIFEST_DIR"),

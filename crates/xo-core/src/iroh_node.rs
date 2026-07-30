@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use futures_lite::StreamExt;
@@ -13,6 +14,7 @@ use iroh_blobs::store::fs::FsStore;
 use iroh_blobs::{ALPN as BLOBS_ALPN, BlobsProtocol};
 use iroh_docs::api::protocol::{AddrInfoOptions, ShareMode};
 use iroh_docs::api::{Doc, DocsApi};
+use iroh_docs::engine::LiveEvent;
 use iroh_docs::protocol::Docs;
 use iroh_docs::store::Query;
 use iroh_docs::{ALPN as DOCS_ALPN, AuthorId, DocTicket, NamespaceId};
@@ -158,6 +160,35 @@ impl IrohNode {
             .import(ticket)
             .await
             .context("import writable workspace ticket")?;
+        Ok(self.workspace(doc))
+    }
+
+    /// Import a writable workspace and wait for its initial peer synchronization to finish.
+    pub async fn import_writable_workspace_synced(&self, ticket: &str) -> Result<IrohWorkspace> {
+        validate_writable_ticket(ticket)?;
+        let ticket = DocTicket::from_str(ticket).context("parse workspace ticket")?;
+        let (doc, mut events) = self
+            .docs
+            .import_and_subscribe(ticket)
+            .await
+            .context("import writable workspace ticket")?;
+        let wait_for_sync = async {
+            while let Some(event) = events.next().await {
+                if let LiveEvent::SyncFinished(event) =
+                    event.context("read workspace sync event")?
+                {
+                    event
+                        .result
+                        .map_err(|error| anyhow::anyhow!(error))
+                        .context("initial workspace synchronization")?;
+                    return Ok(());
+                }
+            }
+            bail!("workspace synchronization event stream ended before initial sync");
+        };
+        tokio::time::timeout(Duration::from_secs(30), wait_for_sync)
+            .await
+            .context("timed out waiting for initial workspace synchronization")??;
         Ok(self.workspace(doc))
     }
 

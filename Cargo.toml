@@ -6,6 +6,7 @@ members = [
     "crates/xo-admin",
     "crates/xo-lsp",
     "crates/xo-syncd",
+    "crates/xo-web",
 ]
 
 [workspace.package]
@@ -53,6 +54,7 @@ thiserror = "2.0.12"
 time = { version = "0.3.41", features = ["formatting", "macros", "parsing"] }
 tokio = { version = "1.46.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 url = "2.5.4"
+wasm-bindgen = "0.2.105"
 zeroize = "1.8.1"
 
 [workspace.lints.rust]

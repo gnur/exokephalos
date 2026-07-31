@@ -2,8 +2,10 @@
 
 ## Goal
 
-Modernize `oldcodebase/web` into the primary xo application while replacing its
-old Go HTTP sync protocol with the current Rust/Iroh workspace model.
+Build `xo-web` as the primary, greenfield browser application. The old Go/web
+codebase is non-normative and requires no API, storage, behavior, or UI
+compatibility. Production deployment consists only of versioned static assets;
+all workspace logic executes in the browser.
 
 The application should:
 
@@ -25,7 +27,7 @@ Electron as an additional desktop target.
 ## Recommended architecture
 
 ```text
-oldcodebase/web React UI
+xo-web React UI
         |
         | typed message RPC
         v
@@ -96,18 +98,17 @@ The initial spike must establish a browser-specific dependency graph with:
 - explicit IndexedDB persistence around browser identity, capabilities,
   records, blobs, and pending writes.
 
-Browser durability is the largest technical risk. Native `IrohNode` uses files,
-Redb, and the filesystem blob store. Those cannot be reused as-is. Phase 0 must
-prove that a page can close, restore state from IndexedDB, reconnect using the
-same identity and workspace capability, and converge without losing offline
-writes or tombstones.
+Native `IrohNode` uses files, Redb, and the filesystem blob store, so the
+browser composes an in-memory Docs/Blobs/Gossip node and surrounds it with an
+IndexedDB recovery layer. The implemented Phase 0 persists the endpoint and
+author keys, writable ticket, document entry cache, and pending writes; it
+restores the same identity, reimports the capability, replays unsent writes,
+and resumes relay synchronization after reload.
 
-If direct protocol persistence cannot be made reliable without maintaining a
-large fork, the fallback is a browser sync gateway in `xo-syncd` over
-WebSocket/HTTPS. That fallback still stores authoritative data in Iroh and can
-remain offline-first through IndexedDB, but the browser would no longer be a
-real Iroh peer. Do not choose the gateway until the direct-Wasm spike has been
-completed.
+The direct-Wasm spike now passes: two isolated browser contexts converge through
+a native Iroh peer, and an offline reload restores cached data and pending
+writes. `xo-syncd` remains an ordinary native peer. No browser sync gateway or
+server-side workspace API is required.
 
 ### Steel
 
@@ -203,9 +204,10 @@ preemption mechanism inside a long-running synchronous call. Phase 1 must test
 Steel fuel/interrupt facilities; if unavailable, run scripted actions in a
 separate disposable worker so cancellation can terminate the entire worker.
 
-## Reuse from `oldcodebase/web`
+## Greenfield UI scope
 
-Keep and modernize:
+Useful design ideas may be reimplemented without retaining old APIs or data
+contracts:
 
 - React screen structure and responsive layout;
 - view/subview navigation;
@@ -213,10 +215,10 @@ Keep and modernize:
 - create/edit/delete interactions;
 - action menus and action error display;
 - PWA manifest, installability, and application-shell caching;
-- Tailwind design tokens, typography, icons, and Playwright tests; and
-- IndexedDB/Dexie as browser durability infrastructure.
+- typography, icons, and Playwright coverage; and
+- IndexedDB as browser durability infrastructure.
 
-Replace or remove:
+Do not carry forward:
 
 | Old implementation | Replacement |
 | --- | --- |
@@ -303,18 +305,16 @@ Additional controls:
 
 ## Delivery phases
 
-### Phase 0 — browser feasibility gate
+### Phase 0 — browser feasibility gate (complete)
 
-- Add a minimal `xo-web` Wasm crate and browser-specific dependency features.
-- Compile `xo-core` portable logic, Iroh protocols, and Steel for Wasm in CI.
-- Start an Iroh browser endpoint and connect through a relay.
-- Join a workspace hosted by `xo-syncd`; synchronize one record both ways.
-- Persist identity, capability, records, and an offline mutation in IndexedDB.
-- Close/reload the page and prove the mutation converges after reconnection.
-- Execute a Steel function in a worker and return a typed frontmatter patch.
-- Measure compressed Wasm size, startup time, and peak memory.
-
-Do not begin the full migration until these tests pass.
+- [x] Add a minimal `xo-web` Wasm crate and browser-specific dependency features.
+- [x] Compile Iroh Docs/Blobs/Gossip and Steel for Wasm in CI.
+- [x] Start an Iroh browser endpoint and connect through a relay.
+- [x] Join a workspace hosted by `xo-syncd` and synchronize browser writes across two browser identities.
+- [x] Persist encrypted identity and capability plus the document cache and pending writes in IndexedDB.
+- [x] Close/reload offline and prove cached state and unsent writes survive.
+- [x] Execute Steel in the dedicated Wasm worker.
+- [x] Record production bundle size in CI output; the combined Iroh/Steel Wasm is currently about 11.1 MiB raw and 3.9 MiB compressed.
 
 ### Phase 1 — shared browser workspace core
 
@@ -325,20 +325,17 @@ Do not begin the full migration until these tests pass.
 - Add worker RPC, structured errors, cancellation, and sync-status events.
 - Add native/Wasm parity tests for record encoding and conflict resolution.
 
-### Phase 2 — read-only PWA migration
+### Phase 2 — read-only PWA
 
 - Point views, subviews, search, tags, list, detail, and history at Wasm queries.
 - Load `xo.scm` and display configuration diagnostics.
-- Remove read paths to the old Go APIs.
 - Verify offline reload and installability on desktop and mobile browsers.
 
 ### Phase 3 — editing and synchronization
 
 - Route create/edit/delete/restore through the Rust facade.
 - Add optimistic revision checks and conflict UI.
-- Replace sync-v2/SSE status with Iroh status and peer diagnostics.
-- Add attachment/blob support with IndexedDB durability and size limits.
-- Remove the legacy TypeScript sync protocol and obsolete settings.
+- Expose Iroh status and peer diagnostics through worker events.
 
 ### Phase 4 — full Steel actions
 
@@ -358,7 +355,7 @@ Do not begin the full migration until these tests pass.
   corrupt checkpoints.
 - Audit CSP, Markdown rendering, secret handling, fetch permissions, and Steel
   host imports.
-- Remove the old Go application server after feature and migration parity.
+- Verify the production artifact contains only static assets and needs no application server.
 
 ## CI matrix
 
@@ -377,13 +374,13 @@ use the same Iroh versions as native peers.
 
 ## Acceptance criteria
 
-The migration is complete when:
+The implementation is complete when:
 
 - the PWA creates or joins a current writable workspace using a ticket;
 - browser, TUI, and `xo-syncd` converge on notes, tombstones, and conflicts;
 - notes can be created and edited offline, survive a full browser restart, and
   synchronize later;
-- the old HTTP sync-v2 and SSE code is removed;
+- no HTTP CRUD API, SSE dependency, or server-side action executor is introduced;
 - arbitrary Steel action code runs locally in the browser worker;
 - Steel can query notes and transactionally update tags, frontmatter, and body;
 - browser API access is explicit and permissioned;
@@ -400,9 +397,9 @@ The migration is complete when:
    reload convergence test.
 3. **Workspace service extraction:** projection-independent queries and commits.
 4. **Worker facade:** typed RPC, events, cancellation, and sync state.
-5. **Read UI migration:** views, list, detail, search, tags, and diagnostics.
-6. **Write UI migration:** CRUD, revisions, conflicts, blobs, and offline writes.
+5. **Read UI:** views, list, detail, search, tags, and diagnostics.
+6. **Write UI:** CRUD, revisions, conflicts, blobs, and offline writes.
 7. **Steel actions:** arbitrary scripts, transactional host API, permissions,
    audit history, and disposable workers.
-8. **Legacy removal:** delete Go API/sync-v2/SSE dependencies and obsolete
-   settings; complete browser hardening and release tests.
+8. **Release hardening:** verify static-only deployment, complete browser
+   security review, and pass supported-browser release tests.

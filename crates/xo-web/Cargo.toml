@@ -1,0 +1,33 @@
+[package]
+name = "xo-web"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Browser WebAssembly facade for the xo offline-first PWA"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+bytes.workspace = true
+console_error_panic_hook = "0.1.7"
+futures-lite.workspace = true
+getrandom = { version = "0.3", features = ["wasm_js"] }
+iroh = { version = "=0.98.0", default-features = false, features = ["tls-ring"] }
+iroh-blobs = { version = "=0.100.0", default-features = false }
+iroh-docs = { version = "=0.98.0", default-features = false }
+iroh-gossip = { version = "=0.98.0", default-features = false, features = ["net"] }
+js-sys = "0.3"
+n0-future = "0.3"
+serde.workspace = true
+serde_json.workspace = true
+steel-core.workspace = true
+wasm-bindgen.workspace = true
+wasm-bindgen-futures = "0.4"
+
+[lints]
+workspace = true

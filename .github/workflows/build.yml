@@ -56,6 +56,115 @@ jobs:
           done
           exit 1
 
+  web:
+    name: xo-web static PWA
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust 1.89 with Wasm target
+        uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: xo-web-wasm
+
+      - name: Install Wasm C compiler
+        run: sudo apt-get update && sudo apt-get install --yes clang
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --version 0.13.1 --locked
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Audit web dependencies
+        working-directory: web
+        run: npm audit
+
+      - name: Build Rust WebAssembly facade
+        working-directory: web
+        run: npm run build:wasm
+
+      - name: Typecheck and build static PWA
+        working-directory: web
+        run: npm run build
+
+      - name: Smoke-test static routes
+        working-directory: web
+        shell: bash
+        run: |
+          npm run preview -- --port 4173 > /tmp/xo-web-preview.log 2>&1 &
+          preview_pid=$!
+          trap 'kill ${preview_pid}' EXIT
+          for attempt in {1..20}; do
+            if curl --fail --silent http://127.0.0.1:4173/healthz > /dev/null; then
+              break
+            fi
+            sleep 0.25
+          done
+          curl --fail --silent http://127.0.0.1:4173/client/route | grep -q '<title>xo</title>'
+          curl --fail --silent http://127.0.0.1:4173/manifest.webmanifest | grep -q '"name":"xo"'
+
+      - name: Install Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Test browser Iroh convergence and offline recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked -p xo-admin -p xo-syncd
+          fixture=$(mktemp -d)
+          mkdir -p "${fixture}/source"
+          cat > "${fixture}/source/fixture.md" <<'EOF'
+          ---
+          id: abcdefg
+          type: note
+          title: Browser fixture
+          tags: []
+          created: 2026-01-01T00:00:00Z
+          ---
+          Browser fixture
+          EOF
+          target/debug/xo-admin import-workspace \
+            "${fixture}/source" "${fixture}/state" > "${fixture}/import.out"
+          ticket=$(grep '^ticket=' "${fixture}/import.out" | cut -d= -f2-)
+          target/debug/xo-syncd \
+            --state-dir "${fixture}/state" \
+            --operator-bind 127.0.0.1:19464 > "${fixture}/syncd.log" 2>&1 &
+          syncd_pid=$!
+          trap 'kill ${syncd_pid} 2>/dev/null || true' EXIT
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:19464/healthz > /dev/null; then
+              break
+            fi
+            sleep 0.5
+          done
+          curl --fail --silent http://127.0.0.1:19464/healthz > /dev/null
+          cd web
+          XO_IROH_TICKET="${ticket}" npm run test:e2e
+
+      - name: Upload static PWA
+        uses: actions/upload-artifact@v7
+        with:
+          name: xo-web
+          path: web/dist
+          if-no-files-found: error
+
   binaries:
     name: Binaries (${{ matrix.target }})
     needs: quality
@@ -194,6 +303,63 @@ jobs:
           annotations: ${{ steps.meta.outputs.annotations }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  web-container:
+    name: xo-web container
+    needs: web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GitHub Container Registry
+        if: github.event_name == 'push'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/xo-web
+          tags: |
+            type=ref,event=pr
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha
+          labels: |
+            org.opencontainers.image.title=xo-web
+            org.opencontainers.image.description=Static offline-first xo PWA
+
+      - name: Build and publish xo-web image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.xo-web
+          target: xo-web
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          cache-from: type=gha,scope=xo-web
+          cache-to: type=gha,mode=max,scope=xo-web
 
   release:
     name: GitHub Release

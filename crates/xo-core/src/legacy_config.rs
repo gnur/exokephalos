@@ -138,6 +138,7 @@ fn migrate_action(id: &str, form: &Form) -> Result<ActionDescriptor, MigrationEr
         )?,
         predicate: predicate(get(values, "when", &location)?, &format!("{location}.when"))?,
         effects: effects(get(values, "run", &location)?, &format!("{location}.run"))?,
+        plugin: None,
     })
 }
 

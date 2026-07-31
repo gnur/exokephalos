@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use xo_core::behavior::{Predicate, ViewDescriptor, WorkspaceBehavior};
+use xo_core::behavior::{
+    ActionDescriptor, ActionPlugin, Capability, Predicate, ViewDescriptor, WorkspaceBehavior,
+};
 use xo_core::iroh_node::{IrohNode, IrohWorkspace};
 use xo_core::projection::ProjectionState;
 use xo_core::records::{WorkspaceRecords, WorkspaceSnapshot};
@@ -88,6 +90,7 @@ impl WorkspaceSession {
                 }
             }
         }
+        let had_workspace_config = xo_main.is_some();
         let (mut behavior, upgrade_prerelease_config) = match xo_main {
             Some(source) => match xo_core::steel_runtime::SteelWorkspace::load(
                 &source,
@@ -114,7 +117,25 @@ impl WorkspaceSession {
             behavior.default_view = "notes".into();
             behavior.views = default_views();
         }
-        if upgrade_prerelease_config || install_default_views {
+        let install_url_capture = !had_workspace_config
+            && !behavior
+                .actions
+                .iter()
+                .any(|action| action.id == "capture-url");
+        if install_url_capture {
+            behavior.actions.push(ActionDescriptor {
+                id: "capture-url".into(),
+                description: "Capture readable content from a URL".into(),
+                predicate: Predicate::Always,
+                effects: vec![],
+                plugin: Some(ActionPlugin::CaptureUrl),
+            });
+            behavior.capability_grants.insert(
+                "capture-url".into(),
+                BTreeSet::from([Capability::CreateNote, Capability::Network]),
+            );
+        }
+        if upgrade_prerelease_config || install_default_views || install_url_capture {
             let predecessors = configs
                 .iter()
                 .find(|config| config.record.path == "xo.scm")
@@ -388,6 +409,8 @@ mod tests {
         let source = std::fs::read_to_string(projection.join("xo.scm"))?;
         assert!(source.starts_with("(workspace-config\n  (schema 1)"));
         assert!(source.contains("(field-equals \"type\" \"note\")"));
+        assert!(source.contains("(plugin (capture-url))"));
+        assert!(source.contains("(capabilities create-note network)"));
         assert!(!source.starts_with("(workspace-config \""));
         let configs = WorkspaceRecords::new(&session.workspace)
             .list_configs()

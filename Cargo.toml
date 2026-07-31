@@ -25,6 +25,7 @@ bytes = "1.12.1"
 ciborium = "0.2.2"
 clap = { version = "4.5.41", features = ["derive"] }
 crossterm = "0.29.0"
+dom_smoothie = "0.18.0"
 futures-lite = "2.6.1"
 http-body-util = "0.1.4"
 hyper = { version = "1.11.0", features = ["http1", "server"] }
@@ -34,7 +35,9 @@ iroh-blobs = "=0.100.0"
 iroh-docs = "=0.98.0"
 iroh-gossip = "=0.98.0"
 notify = "=8.2.0"
+quick_html2md = { version = "0.2.1", features = ["url"] }
 rand = "0.9.2"
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls-no-provider"] }
 ratatui = "0.30.2"
 rpassword = "7.4.0"
 regex = "1.11.1"
@@ -49,6 +52,7 @@ tempfile = "3.20.0"
 thiserror = "2.0.12"
 time = { version = "0.3.41", features = ["formatting", "macros", "parsing"] }
 tokio = { version = "1.46.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+url = "2.5.4"
 zeroize = "1.8.1"
 
 [workspace.lints.rust]

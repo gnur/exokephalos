@@ -146,6 +146,23 @@ pub struct ActionDescriptor {
     pub predicate: Predicate,
     #[serde(default)]
     pub effects: Vec<ActionEffect>,
+    #[serde(default)]
+    pub plugin: Option<ActionPlugin>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ActionPlugin {
+    CaptureUrl,
+}
+
+impl ActionPlugin {
+    #[must_use]
+    pub fn required_capabilities(self) -> BTreeSet<Capability> {
+        match self {
+            Self::CaptureUrl => BTreeSet::from([Capability::CreateNote, Capability::Network]),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -169,7 +186,9 @@ pub enum ActionEffect {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Capability {
+    CreateNote,
     MutateNote,
+    Network,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -315,26 +334,44 @@ impl WorkspaceBehavior {
         Ok(result)
     }
 
-    pub fn apply_action(&self, note: &mut Note, id: &str) -> Result<(), BehaviorError> {
+    pub fn action(
+        &self,
+        note: Option<&Note>,
+        id: &str,
+    ) -> Result<&ActionDescriptor, BehaviorError> {
         let action = self
             .actions
             .iter()
             .find(|value| value.id == id)
             .ok_or_else(|| BehaviorError::UnknownAction(id.to_owned()))?;
-        if !action.predicate.matches(note) {
+        if !action
+            .plugin
+            .is_some_and(|_| note.is_none() && action.predicate == Predicate::Always)
+            && !note.is_some_and(|note| action.predicate.matches(note))
+        {
             return Err(BehaviorError::ActionUnavailable(id.to_owned()));
         }
-        if !action.effects.is_empty()
-            && !self
-                .capability_grants
-                .get(id)
-                .is_some_and(|grants| grants.contains(&Capability::MutateNote))
-        {
-            return Err(BehaviorError::CapabilityDenied {
-                action: id.to_owned(),
-                capability: Capability::MutateNote,
-            });
+        let grants = self.capability_grants.get(id);
+        let mut required = action
+            .plugin
+            .map(ActionPlugin::required_capabilities)
+            .unwrap_or_default();
+        if !action.effects.is_empty() {
+            required.insert(Capability::MutateNote);
         }
+        for capability in required {
+            if !grants.is_some_and(|grants| grants.contains(&capability)) {
+                return Err(BehaviorError::CapabilityDenied {
+                    action: id.to_owned(),
+                    capability,
+                });
+            }
+        }
+        Ok(action)
+    }
+
+    pub fn apply_action(&self, note: &mut Note, id: &str) -> Result<(), BehaviorError> {
+        let action = self.action(Some(note), id)?;
         for effect in &action.effects {
             effect.apply(note);
         }
@@ -540,6 +577,7 @@ mod tests {
                         tag: "finished".into(),
                     },
                 ],
+                plugin: None,
             }],
             ..WorkspaceBehavior::default()
         };
@@ -573,6 +611,47 @@ mod tests {
                 tag: "finished".into()
             }
             .matches(&target)
+        );
+    }
+
+    #[test]
+    fn plugin_actions_require_every_host_capability() {
+        let mut behavior = WorkspaceBehavior {
+            actions: vec![ActionDescriptor {
+                id: "capture-url".into(),
+                description: "Capture URL".into(),
+                predicate: Predicate::Always,
+                effects: vec![],
+                plugin: Some(ActionPlugin::CaptureUrl),
+            }],
+            ..WorkspaceBehavior::default()
+        };
+        assert_eq!(
+            behavior.action(None, "capture-url"),
+            Err(BehaviorError::CapabilityDenied {
+                action: "capture-url".into(),
+                capability: Capability::CreateNote,
+            })
+        );
+        behavior.capability_grants.insert(
+            "capture-url".into(),
+            BTreeSet::from([Capability::CreateNote]),
+        );
+        assert_eq!(
+            behavior.action(None, "capture-url"),
+            Err(BehaviorError::CapabilityDenied {
+                action: "capture-url".into(),
+                capability: Capability::Network,
+            })
+        );
+        behavior
+            .capability_grants
+            .get_mut("capture-url")
+            .unwrap()
+            .insert(Capability::Network);
+        assert_eq!(
+            behavior.action(None, "capture-url").unwrap().plugin,
+            Some(ActionPlugin::CaptureUrl)
         );
     }
 }

@@ -98,18 +98,17 @@ The initial spike must establish a browser-specific dependency graph with:
 - explicit IndexedDB persistence around browser identity, capabilities,
   records, blobs, and pending writes.
 
-Browser durability is the largest technical risk. Native `IrohNode` uses files,
-Redb, and the filesystem blob store. Those cannot be reused as-is. Phase 0 must
-prove that a page can close, restore state from IndexedDB, reconnect using the
-same identity and workspace capability, and converge without losing offline
-writes or tombstones.
+Native `IrohNode` uses files, Redb, and the filesystem blob store, so the
+browser composes an in-memory Docs/Blobs/Gossip node and surrounds it with an
+IndexedDB recovery layer. The implemented Phase 0 persists the endpoint and
+author keys, writable ticket, document entry cache, and pending writes; it
+restores the same identity, reimports the capability, replays unsent writes,
+and resumes relay synchronization after reload.
 
-If direct protocol persistence cannot be made reliable without maintaining a
-large fork, the fallback is a browser sync gateway in `xo-syncd` over
-WebSocket/HTTPS. That fallback still stores authoritative data in Iroh and can
-remain offline-first through IndexedDB, but the browser would no longer be a
-real Iroh peer. Do not choose the gateway until the direct-Wasm spike has been
-completed.
+The direct-Wasm spike now passes: two isolated browser contexts converge through
+a native Iroh peer, and an offline reload restores cached data and pending
+writes. `xo-syncd` remains an ordinary native peer. No browser sync gateway or
+server-side workspace API is required.
 
 ### Steel
 
@@ -306,18 +305,16 @@ Additional controls:
 
 ## Delivery phases
 
-### Phase 0 — browser feasibility gate
+### Phase 0 — browser feasibility gate (complete)
 
-- Add a minimal `xo-web` Wasm crate and browser-specific dependency features.
-- Compile `xo-core` portable logic, Iroh protocols, and Steel for Wasm in CI.
-- Start an Iroh browser endpoint and connect through a relay.
-- Join a workspace hosted by `xo-syncd`; synchronize one record both ways.
-- Persist identity, capability, records, and an offline mutation in IndexedDB.
-- Close/reload the page and prove the mutation converges after reconnection.
-- Execute a Steel function in a worker and return a typed frontmatter patch.
-- Measure compressed Wasm size, startup time, and peak memory.
-
-Do not begin the full workspace UI until these tests pass.
+- [x] Add a minimal `xo-web` Wasm crate and browser-specific dependency features.
+- [x] Compile Iroh Docs/Blobs/Gossip and Steel for Wasm in CI.
+- [x] Start an Iroh browser endpoint and connect through a relay.
+- [x] Join a workspace hosted by `xo-syncd` and synchronize browser writes across two browser identities.
+- [x] Persist encrypted identity and capability plus the document cache and pending writes in IndexedDB.
+- [x] Close/reload offline and prove cached state and unsent writes survive.
+- [x] Execute Steel in the dedicated Wasm worker.
+- [x] Record production bundle size in CI output; the combined Iroh/Steel Wasm is currently about 11.1 MiB raw and 3.9 MiB compressed.
 
 ### Phase 1 — shared browser workspace core
 

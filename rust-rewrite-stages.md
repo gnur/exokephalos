@@ -223,11 +223,11 @@ authoritative for records, revisions, conflicts, encryption, behavior, and
 synchronization. A dedicated Web Worker owns Rust, Steel, Iroh, and IndexedDB
 coordination; the UI thread owns only presentation and browser interaction.
 
-- [x] Establish the static React/PWA shell, nginx `xo-web` image, typed dedicated-worker RPC, IndexedDB checkpoint probe, and sandboxed Steel Wasm probe.
+- [x] Establish the static React/PWA shell, nginx `xo-web` image, typed dedicated-worker RPC, encrypted IndexedDB recovery, and sandboxed Steel Wasm runtime.
 - [ ] Split browser-safe `xo-core` features from native filesystem, process, RPC, and Tokio networking dependencies.
 - [ ] Add a `xo-web` Wasm crate with a small message-based API for workspace lifecycle, queries, mutations, events, sync status, conflicts, encryption, and executable Steel actions.
-- [ ] Run an Iroh browser feasibility spike covering relay-only connectivity, Docs, Blobs, Gossip, native namespace interoperability, and restart recovery.
-- [ ] Use direct browser Iroh when feasible; if an upstream browser limitation blocks it, document the evidence and implement a narrow WebSocket/HTTPS `xo-syncd` transport without moving revision or action authority to the server.
+- [x] Run an Iroh browser feasibility spike covering relay-only connectivity, Docs, Blobs, Gossip, native namespace interoperability, offline writes, and restart recovery.
+- [x] Use direct, end-to-end encrypted browser Iroh through the relay; retain `xo-syncd` only as an always-available native peer, with no browser sync gateway or server-side action execution.
 - [ ] Persist browser identity, encrypted capabilities, verified records, blobs, pending writes, tombstones, and trusted plugin hashes in IndexedDB.
 - [ ] Rebuild disposable indexes and UI projections from verified IndexedDB state after startup or interruption.
 - [ ] Run each arbitrary Steel action in a disposable sandboxed worker with explicit browser host capabilities, time/size limits, and termination support.

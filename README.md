@@ -46,10 +46,18 @@ changes exist. Pushing the tag starts the GitHub Release workflow.
 
 ## Run the xo-web PWA
 
-The initial `xo-web` foundation proves the static deployment boundary, a typed
-dedicated-worker RPC layer, IndexedDB checkpoint recovery, and sandboxed Steel
-inside Rust WebAssembly. Browser Iroh synchronization and workspace operations
-are the next milestone. No Go service or application API is used by the PWA.
+`xo-web` is a static client-side application with a typed dedicated-worker RPC
+layer, sandboxed Steel, and direct browser Iroh Docs/Blobs/Gossip in Rust
+WebAssembly. It can create a writable document, join an existing writable
+ticket, synchronize through Iroh's end-to-end encrypted browser relay, publish
+entries offline, recover cached entries and pending writes after reload, and
+converge two browser contexts through a native `xo-syncd` peer. Endpoint and
+author keys plus the writable capability are encrypted in IndexedDB. No Go
+service or application API is used by the PWA.
+
+The current UI exposes the verified raw document snapshot so synchronization
+and recovery are testable end to end. Mapping those records into the complete
+xo note, view, revision, and conflict UI is the next milestone.
 
 Build the Wasm package and static application locally with:
 

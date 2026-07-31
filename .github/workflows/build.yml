@@ -74,6 +74,9 @@ jobs:
         with:
           key: xo-web-wasm
 
+      - name: Install Wasm C compiler
+        run: sudo apt-get update && sudo apt-get install --yes clang
+
       - name: Install wasm-pack
         run: cargo install wasm-pack --version 0.13.1 --locked
 
@@ -115,6 +118,44 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:4173/client/route | grep -q '<title>xo</title>'
           curl --fail --silent http://127.0.0.1:4173/manifest.webmanifest | grep -q '"name":"xo"'
+
+      - name: Install Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Test browser Iroh convergence and offline recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture=$(mktemp -d)
+          mkdir -p "${fixture}/source"
+          cat > "${fixture}/source/fixture.md" <<'EOF'
+          ---
+          id: abcdefg
+          type: note
+          title: Browser fixture
+          tags: []
+          created: 2026-01-01T00:00:00Z
+          ---
+          Browser fixture
+          EOF
+          cargo run --quiet -p xo-admin -- import-workspace \
+            "${fixture}/source" "${fixture}/state" > "${fixture}/import.out"
+          ticket=$(grep '^ticket=' "${fixture}/import.out" | cut -d= -f2-)
+          cargo run --quiet -p xo-syncd -- \
+            --state-dir "${fixture}/state" \
+            --operator-bind 127.0.0.1:19464 > "${fixture}/syncd.log" 2>&1 &
+          syncd_pid=$!
+          trap 'kill ${syncd_pid} 2>/dev/null || true' EXIT
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:19464/healthz > /dev/null; then
+              break
+            fi
+            sleep 0.5
+          done
+          curl --fail --silent http://127.0.0.1:19464/healthz > /dev/null
+          cd web
+          XO_IROH_TICKET="${ticket}" npm run test:e2e
 
       - name: Upload static PWA
         uses: actions/upload-artifact@v7

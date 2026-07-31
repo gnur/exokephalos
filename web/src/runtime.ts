@@ -1,4 +1,10 @@
-import type { RuntimeReport, WorkerMethod, WorkerRequest, WorkerResponse } from './protocol';
+import type {
+  PutEntryInput,
+  RuntimeReport,
+  WorkerMethod,
+  WorkerRequest,
+  WorkerResponse,
+} from './protocol';
 
 interface PendingCall {
   resolve: (value: unknown) => void;
@@ -33,6 +39,26 @@ export class XoRuntime {
     return this.#call<string>('steel-probe', source);
   }
 
+  createWorkspace() {
+    return this.#call<RuntimeReport>('create-workspace');
+  }
+
+  joinWorkspace(ticket: string) {
+    return this.#call<RuntimeReport>('join-workspace', ticket);
+  }
+
+  putEntry(input: PutEntryInput) {
+    return this.#call<RuntimeReport>('put-entry', input);
+  }
+
+  refreshSync() {
+    return this.#call<RuntimeReport>('refresh-sync');
+  }
+
+  shareTicket() {
+    return this.#call<string>('share-ticket');
+  }
+
   terminate() {
     this.#worker.terminate();
     this.#rejectAll(new Error('xo runtime worker terminated'));
@@ -45,7 +71,7 @@ export class XoRuntime {
       const timeout = window.setTimeout(() => {
         this.#pending.delete(id);
         reject(new Error(`${method} timed out`));
-      }, 30_000);
+      }, 45_000);
       this.#pending.set(id, {
         resolve: (value) => resolve(value as T),
         reject,

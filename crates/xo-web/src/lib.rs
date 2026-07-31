@@ -4,11 +4,18 @@
 //! boundary can be shipped as static PWA assets. Workspace and Iroh APIs will
 //! be added behind the same worker-owned boundary.
 
+mod iroh_sync;
+
 use steel::rvals::SteelVal;
 use steel::steel_vm::engine::Engine;
 use wasm_bindgen::prelude::*;
 
 const MAX_PROBE_SOURCE_BYTES: usize = 64 * 1024;
+
+#[wasm_bindgen(start)]
+fn start() {
+    console_error_panic_hook::set_once();
+}
 
 /// Describe the browser runtime without exposing Rust implementation types.
 #[wasm_bindgen]
@@ -18,8 +25,8 @@ pub fn runtime_info() -> String {
         "api_version": 1,
         "crate_version": env!("CARGO_PKG_VERSION"),
         "steel": true,
-        "iroh": false,
-        "persistence": "indexeddb-shell",
+        "iroh": true,
+        "persistence": "indexeddb-recovery",
     })
     .to_string()
 }
@@ -66,7 +73,7 @@ mod tests {
         let info: serde_json::Value = serde_json::from_str(&runtime_info()).unwrap();
         assert_eq!(info["api_version"], 1);
         assert_eq!(info["steel"], true);
-        assert_eq!(info["iroh"], false);
+        assert_eq!(info["iroh"], true);
     }
 
     #[test]

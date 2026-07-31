@@ -155,6 +155,41 @@ impl WorkspaceSession {
         Ok(behavior)
     }
 
+    pub async fn install_config(&mut self, path: &str, source: &[u8]) -> Result<()> {
+        if !path.starts_with("plugins/") || !xo_core::steel_runtime::valid_config_path(path) {
+            anyhow::bail!("plugin path must be below plugins/ and end in .scm");
+        }
+        let records = WorkspaceRecords::new(&self.workspace);
+        let configs = records.list_configs().await?;
+        let predecessors = configs
+            .iter()
+            .find(|config| config.record.path == path)
+            .map(|config| BTreeSet::from([config.revision_id.clone()]))
+            .unwrap_or_default();
+        records
+            .put_config(
+                path,
+                source.to_vec(),
+                self.clock.next(now_ms()?),
+                predecessors,
+            )
+            .await?;
+        self.projection
+            .reconcile_configs(&records.list_configs().await?)?;
+        Ok(())
+    }
+
+    pub async fn config_source(&self, path: &str) -> Result<String> {
+        let config = WorkspaceRecords::new(&self.workspace)
+            .list_configs()
+            .await?
+            .into_iter()
+            .find(|config| config.record.path == path)
+            .with_context(|| format!("plugin configuration {path} is unavailable"))?;
+        String::from_utf8(config.bytes)
+            .with_context(|| format!("plugin configuration {path} is not UTF-8"))
+    }
+
     pub async fn save(&mut self, note: &Note) -> Result<RevisionId> {
         self.commit(note, false).await
     }
@@ -416,6 +451,39 @@ mod tests {
             .list_configs()
             .await?;
         assert!(configs.iter().any(|config| config.record.path == "xo.scm"));
+        session.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bundled_plugin_install_is_replicated_projected_and_loaded() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state = directory.path().join("state");
+        let projection = directory.path().join("notes");
+        let mut session = WorkspaceSession::open(&state, None, None, projection.clone()).await?;
+        session.behavior().await?;
+        session
+            .install_config(
+                "plugins/hardcover.scm",
+                include_bytes!("../../../plugins/hardcover.scm"),
+            )
+            .await?;
+
+        let behavior = session.behavior().await?;
+        assert!(
+            behavior
+                .actions
+                .iter()
+                .any(|action| action.id == "hardcover-search")
+        );
+        assert!(projection.join("plugins/hardcover.scm").is_file());
+        assert!(
+            WorkspaceRecords::new(&session.workspace)
+                .list_configs()
+                .await?
+                .iter()
+                .any(|config| config.record.path == "plugins/hardcover.scm")
+        );
         session.shutdown().await?;
         Ok(())
     }

@@ -259,7 +259,8 @@ impl ProjectionState {
             if !valid_config_path(&config.record.path) {
                 return Err(ProjectionError::InvalidAsset {
                     path: config.record.path.clone(),
-                    message: "configuration must be xo.scm or modules/**/*.scm".to_owned(),
+                    message: "configuration must be xo.scm, modules/**/*.scm, or plugins/**/*.scm"
+                        .to_owned(),
                 });
             }
             if u64::try_from(config.bytes.len()).ok() != Some(config.record.size)
@@ -288,7 +289,7 @@ impl ProjectionState {
 #[cfg(feature = "iroh-sync")]
 fn valid_config_path(path: &str) -> bool {
     path == "xo.scm"
-        || (path.starts_with("modules/")
+        || ((path.starts_with("modules/") || path.starts_with("plugins/"))
             && Path::new(path)
                 .extension()
                 .is_some_and(|value| value == "scm")

@@ -10,6 +10,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use tempfile::NamedTempFile;
+use xo::steel_plugin::PluginChoice;
 use xo_core::behavior::{Query, WorkspaceBehavior};
 use xo_core::domain::{DeviceRecord, Frontmatter, FrontmatterValue};
 use xo_core::encryption;
@@ -33,6 +34,8 @@ pub enum Mode {
     Goto,
     ActionPicker,
     CaptureUrl,
+    PluginInput,
+    PluginResults,
     Conflicts,
     Devices,
     Sync,
@@ -78,6 +81,11 @@ pub struct App {
     pub tag_index: usize,
     pub action_query: String,
     pub capture_url: String,
+    pub plugin_input: String,
+    pub plugin_action: Option<String>,
+    pub plugin_prompt: String,
+    pub plugin_results: Vec<PluginChoice>,
+    pub plugin_index: usize,
     pub create_title: String,
     pub goto_input: String,
     pub goto_index: usize,
@@ -117,6 +125,11 @@ impl App {
             tag_index: 0,
             action_query: String::new(),
             capture_url: String::new(),
+            plugin_input: String::new(),
+            plugin_action: None,
+            plugin_prompt: String::new(),
+            plugin_results: vec![],
+            plugin_index: 0,
             create_title: String::new(),
             goto_input: String::new(),
             goto_index: 0,
@@ -682,12 +695,20 @@ fn highlighted_markdown(source: &str) -> Text<'static> {
 pub fn render(frame: &mut Frame<'_>, app: &App) {
     let has_input = matches!(
         app.mode,
-        Mode::Search | Mode::CreateTitle | Mode::Goto | Mode::ActionPicker | Mode::CaptureUrl
+        Mode::Search
+            | Mode::CreateTitle
+            | Mode::Goto
+            | Mode::ActionPicker
+            | Mode::CaptureUrl
+            | Mode::PluginInput
+            | Mode::PluginResults
     );
-    let input_height = if app.mode == Mode::Goto {
-        u16::try_from((app.goto_choices().len() + 3).clamp(4, 10)).unwrap_or(10)
-    } else {
-        3
+    let input_height = match app.mode {
+        Mode::Goto => u16::try_from((app.goto_choices().len() + 3).clamp(4, 10)).unwrap_or(10),
+        Mode::PluginResults => {
+            u16::try_from((app.plugin_results.len() + 2).clamp(3, 9)).unwrap_or(9)
+        }
+        _ => 3,
     };
     let vertical = Layout::default()
         .direction(Direction::Vertical)
@@ -809,6 +830,34 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 "Capture URL · Enter fetch · Esc cancel",
                 format!("URL: {}", app.capture_url),
             ),
+            Mode::PluginInput => (
+                "Steel plugin · Enter run · Esc cancel",
+                format!("{}: {}", app.plugin_prompt, app.plugin_input),
+            ),
+            Mode::PluginResults => {
+                let choices = app
+                    .plugin_results
+                    .iter()
+                    .enumerate()
+                    .map(|(index, choice)| {
+                        format!(
+                            "{} [{}] {}",
+                            if index == app.plugin_index {
+                                "→"
+                            } else {
+                                " "
+                            },
+                            index + 1,
+                            choice.label
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (
+                    "Plugin results · 1-9/↑↓ select · Enter add · Esc cancel",
+                    choices,
+                )
+            }
             _ => unreachable!(),
         };
         frame.render_widget(

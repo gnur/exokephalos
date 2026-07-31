@@ -107,7 +107,7 @@ fn is_projection_path(root: &Path, path: &Path) -> bool {
     let relative_string = relative.to_string_lossy().replace('\\', "/");
     let content_path = path.extension().is_some_and(|extension| extension == "md")
         || relative_string == "xo.scm"
-        || (relative_string.starts_with("modules/")
+        || ((relative_string.starts_with("modules/") || relative_string.starts_with("plugins/"))
             && Path::new(&relative_string)
                 .extension()
                 .is_some_and(|value| value == "scm"));
@@ -168,20 +168,30 @@ mod tests {
         let main = directory.path().join("xo.scm");
         let unsupported_main = directory.path().join("exo.scm");
         let module = directory.path().join("modules/views/books.scm");
+        let plugin = directory.path().join("plugins/hardcover.scm");
         let unrelated = directory.path().join("script.scm");
         std::fs::create_dir_all(module.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(plugin.parent().unwrap()).unwrap();
         std::fs::write(&main, "main").unwrap();
         std::fs::write(&unsupported_main, "unsupported main").unwrap();
         std::fs::write(&module, "module").unwrap();
+        std::fs::write(&plugin, "plugin").unwrap();
         std::fs::write(&unrelated, "no").unwrap();
         let events = normalize_paths(
             directory.path(),
-            vec![main.clone(), unsupported_main, module.clone(), unrelated],
+            vec![
+                main.clone(),
+                unsupported_main,
+                module.clone(),
+                plugin.clone(),
+                unrelated,
+            ],
         );
         assert_eq!(
             events,
             vec![
                 ProjectionEvent::Upsert(module),
+                ProjectionEvent::Upsert(plugin),
                 ProjectionEvent::Upsert(main),
             ]
         );

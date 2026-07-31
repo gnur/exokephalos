@@ -11,7 +11,7 @@ A stage is complete only when every task and its exit gate are checked.
 - Stage 3 is complete: native peers converge across partitions and restarts, retain conflicts, and resume verified partial Blob transfers.
 - Stage 4 is complete: central-peer operations, backup/restore, signed retirement, and namespace rotation/reinvitation pass their security and recovery scenarios.
 - Stages 5 and 6 are complete: portable sandboxed Steel behavior and the persistent daily-use Ratatui client pass their parity, offline, conflict, and convergence gates.
-- Stage 7 is in progress: import/export and capability-gated URL capture are complete; webhook, attachment, encrypted-note, book, and statistics workflows remain.
+- Stage 7 is in progress: import/export, capability-gated URL capture, and the executable Steel Hardcover/book-status plugin are complete; webhook, attachment, encrypted-note, Goodreads, and statistics workflows remain.
 - Stages 8–10 retain their previously listed foundations and placeholders.
 
 ## Stage 0 — Architecture and compatibility proof
@@ -197,7 +197,8 @@ A stage is complete only when every task and its exit gate are checked.
 - [ ] Add optional authenticated webhook ingestion to `xo-syncd`.
 - [ ] Add image attachment import, validation, collision handling, materialization, and transfer.
 - [ ] Complete encrypted-note user workflows.
-- [ ] Port Goodreads import and Hardcover search.
+- [ ] Port Goodreads import.
+- [x] Port Hardcover search as a capability-gated executable Steel plugin.
 - [ ] Port reading states and statistics.
 - [ ] Place external integrations behind testable traits and fixtures.
 

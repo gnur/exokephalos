@@ -158,11 +158,14 @@ jobs:
           cd web
           XO_IROH_TICKET="${ticket}" npm run test:e2e
 
+      - name: Package static PWA
+        run: tar -C web/dist -czf xo-web.tar.gz .
+
       - name: Upload static PWA
         uses: actions/upload-artifact@v7
         with:
           name: xo-web
-          path: web/dist
+          path: xo-web.tar.gz
           if-no-files-found: error
 
   binaries:

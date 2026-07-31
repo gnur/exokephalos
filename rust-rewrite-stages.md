@@ -223,6 +223,7 @@ authoritative for records, revisions, conflicts, encryption, behavior, and
 synchronization. A dedicated Web Worker owns Rust, Steel, Iroh, and IndexedDB
 coordination; the UI thread owns only presentation and browser interaction.
 
+- [x] Establish the static React/PWA shell, nginx `xo-web` image, typed dedicated-worker RPC, IndexedDB checkpoint probe, and sandboxed Steel Wasm probe.
 - [ ] Split browser-safe `xo-core` features from native filesystem, process, RPC, and Tokio networking dependencies.
 - [ ] Add a `xo-web` Wasm crate with a small message-based API for workspace lifecycle, queries, mutations, events, sync status, conflicts, encryption, and executable Steel actions.
 - [ ] Run an Iroh browser feasibility spike covering relay-only connectivity, Docs, Blobs, Gossip, native namespace interoperability, and restart recovery.

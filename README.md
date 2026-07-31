@@ -4,7 +4,9 @@ xo is an offline-first personal knowledge workspace. The `xo` terminal UI keeps
 an ordinary Markdown projection on disk, while Iroh provides replicated state
 and peer-to-peer synchronization. `xo-syncd` is an always-on peer: it stores a
 copy of a workspace and gives intermittently connected TUI clients a stable peer
-with which to synchronize.
+with which to synchronize. `xo-web` is the fully client-side, installable PWA;
+its Rust/Wasm runtime runs in a dedicated browser worker and its deployable
+output consists only of static files.
 
 This project is under active development. The commands below describe the
 currently implemented workflow.
@@ -41,6 +43,36 @@ The script creates an annotated UTC tag in ISO 8601 basic format, such as
 `20260728T143012Z`, then asks whether it should push the tag to `origin`. The
 default answer is no. It refuses to tag while staged, unstaged, or untracked
 changes exist. Pushing the tag starts the GitHub Release workflow.
+
+## Run the xo-web PWA
+
+The initial `xo-web` foundation proves the static deployment boundary, a typed
+dedicated-worker RPC layer, IndexedDB checkpoint recovery, and sandboxed Steel
+inside Rust WebAssembly. Browser Iroh synchronization and workspace operations
+are the next milestone. No Go service or application API is used by the PWA.
+
+Build the Wasm package and static application locally with:
+
+```console
+cargo install wasm-pack --version 0.13.1 --locked
+cd web
+npm ci
+npm run build:wasm
+npm run build
+```
+
+Everything needed at runtime is written to `web/dist`. Any static host with SPA
+fallback can serve it. The supplied nginx image is named `xo-web`:
+
+```console
+docker build -f Dockerfile.xo-web -t xo-web .
+docker run --rm -p 8080:8080 xo-web
+```
+
+Open `http://127.0.0.1:8080`. The container has no writable workspace volume,
+application process, API proxy, or server-side action executor. nginx serves
+the versioned assets, Wasm, manifest, and application-shell service worker;
+browser workspace durability belongs in IndexedDB.
 
 ## How synchronization works
 

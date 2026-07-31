@@ -2,8 +2,10 @@
 
 ## Goal
 
-Modernize `oldcodebase/web` into the primary xo application while replacing its
-old Go HTTP sync protocol with the current Rust/Iroh workspace model.
+Build `xo-web` as the primary, greenfield browser application. The old Go/web
+codebase is non-normative and requires no API, storage, behavior, or UI
+compatibility. Production deployment consists only of versioned static assets;
+all workspace logic executes in the browser.
 
 The application should:
 
@@ -25,7 +27,7 @@ Electron as an additional desktop target.
 ## Recommended architecture
 
 ```text
-oldcodebase/web React UI
+xo-web React UI
         |
         | typed message RPC
         v
@@ -203,9 +205,10 @@ preemption mechanism inside a long-running synchronous call. Phase 1 must test
 Steel fuel/interrupt facilities; if unavailable, run scripted actions in a
 separate disposable worker so cancellation can terminate the entire worker.
 
-## Reuse from `oldcodebase/web`
+## Greenfield UI scope
 
-Keep and modernize:
+Useful design ideas may be reimplemented without retaining old APIs or data
+contracts:
 
 - React screen structure and responsive layout;
 - view/subview navigation;
@@ -213,10 +216,10 @@ Keep and modernize:
 - create/edit/delete interactions;
 - action menus and action error display;
 - PWA manifest, installability, and application-shell caching;
-- Tailwind design tokens, typography, icons, and Playwright tests; and
-- IndexedDB/Dexie as browser durability infrastructure.
+- typography, icons, and Playwright coverage; and
+- IndexedDB as browser durability infrastructure.
 
-Replace or remove:
+Do not carry forward:
 
 | Old implementation | Replacement |
 | --- | --- |
@@ -314,7 +317,7 @@ Additional controls:
 - Execute a Steel function in a worker and return a typed frontmatter patch.
 - Measure compressed Wasm size, startup time, and peak memory.
 
-Do not begin the full migration until these tests pass.
+Do not begin the full workspace UI until these tests pass.
 
 ### Phase 1 — shared browser workspace core
 
@@ -325,20 +328,17 @@ Do not begin the full migration until these tests pass.
 - Add worker RPC, structured errors, cancellation, and sync-status events.
 - Add native/Wasm parity tests for record encoding and conflict resolution.
 
-### Phase 2 — read-only PWA migration
+### Phase 2 — read-only PWA
 
 - Point views, subviews, search, tags, list, detail, and history at Wasm queries.
 - Load `xo.scm` and display configuration diagnostics.
-- Remove read paths to the old Go APIs.
 - Verify offline reload and installability on desktop and mobile browsers.
 
 ### Phase 3 — editing and synchronization
 
 - Route create/edit/delete/restore through the Rust facade.
 - Add optimistic revision checks and conflict UI.
-- Replace sync-v2/SSE status with Iroh status and peer diagnostics.
-- Add attachment/blob support with IndexedDB durability and size limits.
-- Remove the legacy TypeScript sync protocol and obsolete settings.
+- Expose Iroh status and peer diagnostics through worker events.
 
 ### Phase 4 — full Steel actions
 
@@ -358,7 +358,7 @@ Do not begin the full migration until these tests pass.
   corrupt checkpoints.
 - Audit CSP, Markdown rendering, secret handling, fetch permissions, and Steel
   host imports.
-- Remove the old Go application server after feature and migration parity.
+- Verify the production artifact contains only static assets and needs no application server.
 
 ## CI matrix
 
@@ -377,13 +377,13 @@ use the same Iroh versions as native peers.
 
 ## Acceptance criteria
 
-The migration is complete when:
+The implementation is complete when:
 
 - the PWA creates or joins a current writable workspace using a ticket;
 - browser, TUI, and `xo-syncd` converge on notes, tombstones, and conflicts;
 - notes can be created and edited offline, survive a full browser restart, and
   synchronize later;
-- the old HTTP sync-v2 and SSE code is removed;
+- no HTTP CRUD API, SSE dependency, or server-side action executor is introduced;
 - arbitrary Steel action code runs locally in the browser worker;
 - Steel can query notes and transactionally update tags, frontmatter, and body;
 - browser API access is explicit and permissioned;
@@ -400,9 +400,9 @@ The migration is complete when:
    reload convergence test.
 3. **Workspace service extraction:** projection-independent queries and commits.
 4. **Worker facade:** typed RPC, events, cancellation, and sync state.
-5. **Read UI migration:** views, list, detail, search, tags, and diagnostics.
-6. **Write UI migration:** CRUD, revisions, conflicts, blobs, and offline writes.
+5. **Read UI:** views, list, detail, search, tags, and diagnostics.
+6. **Write UI:** CRUD, revisions, conflicts, blobs, and offline writes.
 7. **Steel actions:** arbitrary scripts, transactional host API, permissions,
    audit history, and disposable workers.
-8. **Legacy removal:** delete Go API/sync-v2/SSE dependencies and obsolete
-   settings; complete browser hardening and release tests.
+8. **Release hardening:** verify static-only deployment, complete browser
+   security review, and pass supported-browser release tests.

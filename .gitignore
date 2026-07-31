@@ -12,6 +12,7 @@ __pycache__/
 plugin-scripts/
 test-results
 web/dist
+web/src/generated/
 
 dist
 

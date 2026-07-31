@@ -6999,6 +6999,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "xo-web"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "steel-core",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "yasna"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,19 @@
+[package]
+name = "xo-web"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file = "../../LICENSE"
+repository.workspace = true
+description = "Browser WebAssembly facade for the xo offline-first PWA"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde_json.workspace = true
+steel-core.workspace = true
+wasm-bindgen.workspace = true
+
+[lints]
+workspace = true

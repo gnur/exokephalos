@@ -7,6 +7,9 @@ target
 oldcodebase
 node_modules
 dist
+web/node_modules
+web/dist
+web/src/generated
 coverage
 tmp-run
 

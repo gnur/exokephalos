@@ -494,6 +494,9 @@ Predicates support `always`, `field-equals`, `has-tag`, `not`, `all`, and
 `set-field`, and `append-body`; mutating actions require an explicit
 `mutate-note` capability grant. Optional lexical modules below
 `modules/**/*.scm` use the same fields inside `(workspace-module ...)`.
+Executable sandboxed plugins live below `plugins/**/*.scm`; their
+`xo-plugin-manifest` function contributes actions and their action entrypoint
+runs in a fresh, time-bounded `Engine::new_sandboxed()` VM.
 
 The `capture-url` plugin is a capability-gated native host action. Press `a`,
 select **Capture readable content from a URL**, and enter an HTTP or HTTPS URL.
@@ -502,7 +505,32 @@ extracts the readable article, converts it to Markdown, and commits an ordinary
 replicated note. Both `create-note` and `network` grants are required. Steel
 itself receives no ambient network API.
 
-Only the native declarative form is accepted. Configuration is parsed through a
+### Hardcover Steel plugin
+
+Install the bundled plugin into the active replicated workspace and provide its
+API token to the `xo` process:
+
+```console
+xo plugin install hardcover
+export HARDCOVER_TOKEN='your Hardcover API token'
+xo
+```
+
+Press `a` and select **Search Hardcover**. The plugin prompts for a title or
+author, performs the GraphQL request, presents up to five choices, and creates
+an ordinary `type: book` note tagged `to-read`. It also contributes the pure
+Steel actions **Start reading this book** (`to-read` → `reading`) and **Mark
+book as finished reading** (`reading` → `read`).
+
+`plugins/hardcover.scm` contains the GraphQL request, JSON traversal, metadata
+normalization, result labels, and note fields. Rust provides only generic,
+capability-checked `xo-secret` and `xo-http-post-json` host functions. Plugin
+HTTP is HTTPS-only, proxy-free, DNS-pinned to validated public addresses,
+redirect-free, time-bounded, header-restricted, and limited to 2 MiB. The
+plugin requires `create-note`, `network`, and `read-secret`; Steel receives no
+filesystem, process, socket, or dylib access.
+
+The declarative workspace/module form remains restricted. Configuration is parsed through a
 strict boundary: arbitrary filesystem, environment, process, network, clock,
 or evaluation expressions are rejected.
 

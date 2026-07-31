@@ -1,14 +1,17 @@
 //! Sandboxed Steel configuration loader.
 //!
 //! `xo.scm` evaluates to a workspace descriptor. Optional `modules/**/*.scm`
-//! files use `(workspace-module ...)`; their views, actions, templates, and
-//! grants are merged in lexical path order.
+//! files use `(workspace-module ...)`. Executable `plugins/**/*.scm` files run
+//! only for manifest discovery here; action execution uses a fresh sandboxed
+//! VM with capability-checked host services.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
+use serde::Deserialize;
 use steel::rvals::SteelVal;
 use steel::steel_vm::engine::Engine;
+use steel::steel_vm::interrupt::InterruptHandler;
 use steel::steel_vm::register_fn::RegisterFn;
 use thiserror::Error;
 
@@ -19,6 +22,7 @@ use crate::behavior::{
 use crate::domain::FrontmatterValue;
 
 pub const MAX_CONFIG_BYTES: usize = 1_048_576;
+const PLUGIN_MANIFEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Debug, Error)]
 pub enum SteelConfigError {
@@ -32,6 +36,8 @@ pub enum SteelConfigError {
     InvalidResult,
     #[error("invalid native xo configuration at byte {offset}: {message}")]
     NativeConfig { offset: usize, message: String },
+    #[error("invalid Steel plugin manifest in {path}: {message}")]
+    PluginManifest { path: String, message: String },
     #[error(transparent)]
     Behavior(#[from] BehaviorError),
 }
@@ -48,14 +54,17 @@ impl SteelWorkspace {
     ) -> Result<WorkspaceBehavior, SteelConfigError> {
         let mut behavior = evaluate(exo_scm, "workspace-config", deterministic_now)?;
         for (path, source) in modules {
-            if !valid_module_path(path) {
+            if valid_module_path(path) {
+                let module = evaluate(source, "workspace-module", deterministic_now)?;
+                behavior.views.extend(module.views);
+                behavior.actions.extend(module.actions);
+                behavior.templates.extend(module.templates);
+                behavior.capability_grants.extend(module.capability_grants);
+            } else if valid_plugin_path(path) {
+                merge_plugin(&mut behavior, path, source)?;
+            } else {
                 return Err(SteelConfigError::InvalidPath(path.clone()));
             }
-            let module = evaluate(source, "workspace-module", deterministic_now)?;
-            behavior.views.extend(module.views);
-            behavior.actions.extend(module.actions);
-            behavior.templates.extend(module.templates);
-            behavior.capability_grants.extend(module.capability_grants);
         }
         behavior.validate()?;
         Ok(behavior)
@@ -68,6 +77,103 @@ fn evaluate(
     _now: &str,
 ) -> Result<WorkspaceBehavior, SteelConfigError> {
     NativeWorkspaceParser::new(source, constructor).parse()
+}
+
+#[derive(Deserialize)]
+struct PluginManifest {
+    schema: u16,
+    actions: Vec<PluginAction>,
+}
+
+#[derive(Deserialize)]
+struct PluginAction {
+    id: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    prompt: String,
+    #[serde(default = "plugin_entrypoint")]
+    entrypoint: String,
+    #[serde(default)]
+    predicate: Predicate,
+    #[serde(default)]
+    effects: Vec<ActionEffect>,
+    #[serde(default)]
+    capabilities: BTreeSet<Capability>,
+}
+
+fn plugin_entrypoint() -> String {
+    "xo-plugin-run".to_owned()
+}
+
+fn merge_plugin(
+    behavior: &mut WorkspaceBehavior,
+    path: &str,
+    source: &str,
+) -> Result<(), SteelConfigError> {
+    if source.len() > MAX_CONFIG_BYTES {
+        return Err(SteelConfigError::TooLarge);
+    }
+    let mut engine = Engine::new_sandboxed();
+    // Manifest discovery compiles the complete plugin without granting host
+    // access. These inert signatures make capability calls resolvable; only
+    // the action runner installs real, grant-checked implementations.
+    engine
+        .register_fn("xo-secret", |_name: String| String::new())
+        .register_fn(
+            "xo-http-post-json",
+            |_url: String, _headers: String, _body: String| String::new(),
+        );
+    let interrupt = InterruptHandler::new(&mut engine, PLUGIN_MANIFEST_TIMEOUT);
+    let result = interrupt.run_with_timeout(|| {
+        engine.run(source.to_owned())?;
+        engine.call_function_by_name_with_args("xo-plugin-manifest", vec![])
+    });
+    let json = match result {
+        Ok(SteelVal::StringV(value)) => value.to_string(),
+        Ok(_) => {
+            return Err(SteelConfigError::PluginManifest {
+                path: path.to_owned(),
+                message: "xo-plugin-manifest must return a JSON string".into(),
+            });
+        }
+        Err(error) => {
+            return Err(SteelConfigError::PluginManifest {
+                path: path.to_owned(),
+                message: error.to_string(),
+            });
+        }
+    };
+    let manifest: PluginManifest =
+        serde_json::from_str(&json).map_err(|error| SteelConfigError::PluginManifest {
+            path: path.to_owned(),
+            message: error.to_string(),
+        })?;
+    if manifest.schema != 1 {
+        return Err(SteelConfigError::PluginManifest {
+            path: path.to_owned(),
+            message: format!("unsupported schema {}", manifest.schema),
+        });
+    }
+    for action in manifest.actions {
+        let plugin = action.effects.is_empty().then(|| ActionPlugin::Steel {
+            path: path.to_owned(),
+            entrypoint: action.entrypoint,
+            prompt: action.prompt,
+            capabilities: action.capabilities.clone(),
+        });
+        behavior
+            .capability_grants
+            .insert(action.id.clone(), action.capabilities);
+        behavior.actions.push(ActionDescriptor {
+            id: action.id,
+            description: action.description,
+            predicate: action.predicate,
+            effects: action.effects,
+            plugin,
+        });
+    }
+    Ok(())
 }
 
 /// Evaluate the native `~/.config/xo/config.scm` schema.
@@ -401,6 +507,23 @@ fn parse_plugin(form: &NativeForm) -> Result<ActionPlugin, SteelConfigError> {
     let (name, args) = native_call(form)?;
     match (name, args) {
         ("capture-url", []) => Ok(ActionPlugin::CaptureUrl),
+        (
+            "steel",
+            [
+                NativeForm::String(path),
+                NativeForm::String(entrypoint),
+                NativeForm::String(prompt),
+                NativeForm::List(capabilities),
+            ],
+        ) => Ok(ActionPlugin::Steel {
+            path: path.clone(),
+            entrypoint: entrypoint.clone(),
+            prompt: prompt.clone(),
+            capabilities: capabilities
+                .iter()
+                .map(parse_capability)
+                .collect::<Result<_, _>>()?,
+        }),
         _ => Err(native_error(format!("invalid action plugin {name}"))),
     }
 }
@@ -516,6 +639,7 @@ fn parse_capability(form: &NativeForm) -> Result<Capability, SteelConfigError> {
         "create-note" => Ok(Capability::CreateNote),
         "mutate-note" => Ok(Capability::MutateNote),
         "network" => Ok(Capability::Network),
+        "read-secret" => Ok(Capability::ReadSecret),
         value => Err(native_error(format!("unknown capability {value}"))),
     }
 }
@@ -912,11 +1036,21 @@ fn update_tags(tags: &str, tag: &str, add: bool) -> String {
 
 #[must_use]
 pub fn valid_config_path(path: &str) -> bool {
-    path == "xo.scm" || valid_module_path(path)
+    path == "xo.scm" || valid_module_path(path) || valid_plugin_path(path)
 }
 
 fn valid_module_path(path: &str) -> bool {
     path.starts_with("modules/")
+        && std::path::Path::new(path)
+            .extension()
+            .is_some_and(|value| value == "scm")
+        && !path
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+}
+
+fn valid_plugin_path(path: &str) -> bool {
+    path.starts_with("plugins/")
         && std::path::Path::new(path)
             .extension()
             .is_some_and(|value| value == "scm")
@@ -1031,7 +1165,7 @@ fn encode_action(action: &ActionDescriptor, indent: usize) -> String {
         .expect("writing to a String cannot fail");
     }
     output.push(')');
-    if let Some(plugin) = action.plugin {
+    if let Some(plugin) = &action.plugin {
         write!(output, "\n{field}(plugin {})", encode_plugin(plugin))
             .expect("writing to a String cannot fail");
     }
@@ -1039,9 +1173,25 @@ fn encode_action(action: &ActionDescriptor, indent: usize) -> String {
     output
 }
 
-fn encode_plugin(plugin: ActionPlugin) -> &'static str {
+fn encode_plugin(plugin: &ActionPlugin) -> String {
     match plugin {
-        ActionPlugin::CaptureUrl => "(capture-url)",
+        ActionPlugin::CaptureUrl => "(capture-url)".into(),
+        ActionPlugin::Steel {
+            path,
+            entrypoint,
+            prompt,
+            capabilities,
+        } => format!(
+            "(steel {} {} {} ({}))",
+            steel_string(path),
+            steel_string(entrypoint),
+            steel_string(prompt),
+            capabilities
+                .iter()
+                .map(|capability| encode_capability(*capability))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
     }
 }
 
@@ -1129,6 +1279,7 @@ fn encode_capability(capability: Capability) -> &'static str {
         Capability::CreateNote => "create-note",
         Capability::MutateNote => "mutate-note",
         Capability::Network => "network",
+        Capability::ReadSecret => "read-secret",
     }
 }
 
@@ -1169,6 +1320,46 @@ mod tests {
         .unwrap();
         assert_eq!(loaded.views[0].id, "notes");
         assert_eq!(loaded.actions[0].id, "done");
+    }
+
+    #[test]
+    fn executable_plugin_manifest_adds_search_and_reading_actions() {
+        let behavior = SteelWorkspace::load(
+            &encode_config(&WorkspaceBehavior::default(), false),
+            &BTreeMap::from([(
+                "plugins/hardcover.scm".into(),
+                include_str!("../../../plugins/hardcover.scm").into(),
+            )]),
+            "fixed",
+        )
+        .unwrap();
+        let search = behavior
+            .actions
+            .iter()
+            .find(|action| action.id == "hardcover-search")
+            .unwrap();
+        assert!(matches!(
+            search.plugin,
+            Some(ActionPlugin::Steel { ref path, .. }) if path == "plugins/hardcover.scm"
+        ));
+        let mut note = crate::Note {
+            id: crate::NoteId::new("book001"),
+            frontmatter: BTreeMap::from([(
+                "tags".into(),
+                FrontmatterValue::Sequence(vec![FrontmatterValue::String("to-read".into())]),
+            )]),
+            body: String::new(),
+            path: "boo/book001-book.md".into(),
+        };
+        behavior.apply_action(&mut note, "start-book").unwrap();
+        assert!(
+            Predicate::HasTag {
+                tag: "reading".into()
+            }
+            .matches(&note)
+        );
+        behavior.apply_action(&mut note, "finish-book").unwrap();
+        assert!(Predicate::HasTag { tag: "read".into() }.matches(&note));
     }
 
     #[test]

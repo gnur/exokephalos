@@ -150,17 +150,24 @@ pub struct ActionDescriptor {
     pub plugin: Option<ActionPlugin>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ActionPlugin {
     CaptureUrl,
+    Steel {
+        path: String,
+        entrypoint: String,
+        prompt: String,
+        capabilities: BTreeSet<Capability>,
+    },
 }
 
 impl ActionPlugin {
     #[must_use]
-    pub fn required_capabilities(self) -> BTreeSet<Capability> {
+    pub fn required_capabilities(&self) -> BTreeSet<Capability> {
         match self {
             Self::CaptureUrl => BTreeSet::from([Capability::CreateNote, Capability::Network]),
+            Self::Steel { capabilities, .. } => capabilities.clone(),
         }
     }
 }
@@ -189,6 +196,7 @@ pub enum Capability {
     CreateNote,
     MutateNote,
     Network,
+    ReadSecret,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -346,6 +354,7 @@ impl WorkspaceBehavior {
             .ok_or_else(|| BehaviorError::UnknownAction(id.to_owned()))?;
         if !action
             .plugin
+            .as_ref()
             .is_some_and(|_| note.is_none() && action.predicate == Predicate::Always)
             && !note.is_some_and(|note| action.predicate.matches(note))
         {
@@ -354,6 +363,7 @@ impl WorkspaceBehavior {
         let grants = self.capability_grants.get(id);
         let mut required = action
             .plugin
+            .as_ref()
             .map(ActionPlugin::required_capabilities)
             .unwrap_or_default();
         if !action.effects.is_empty() {

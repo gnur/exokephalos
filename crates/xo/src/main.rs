@@ -19,9 +19,10 @@ use ratatui::backend::CrosstermBackend;
 use time::OffsetDateTime;
 use xo::config::{CliOverrides, XoConfig, config_path, home_dir};
 use xo::session::WorkspaceSession;
+use xo::steel_plugin::{PluginChoice, execute as execute_steel_plugin};
 use xo::url_capture::{UrlCaptureService, captured_note};
 use xo_core::behavior::ActionPlugin;
-use xo_core::domain::Frontmatter;
+use xo_core::domain::{Frontmatter, FrontmatterValue};
 use xo_core::{Note, NoteId};
 use zeroize::Zeroizing;
 
@@ -66,6 +67,17 @@ enum Command {
         #[arg(long = "type")]
         item_type: Option<String>,
     },
+    /// Install a bundled executable Steel plugin into the active workspace.
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum PluginCommand {
+    /// Install or update a bundled plugin.
+    Install { name: String },
 }
 
 #[tokio::main]
@@ -116,6 +128,31 @@ async fn main() -> Result<()> {
             let exported = result?;
             shutdown?;
             println!("exported={}", exported.exported);
+        }
+        Some(Command::Plugin {
+            command: PluginCommand::Install { name },
+        }) => {
+            let (path, source) = match name.as_str() {
+                "hardcover" => (
+                    "plugins/hardcover.scm",
+                    include_bytes!("../../../plugins/hardcover.scm").as_slice(),
+                ),
+                _ => anyhow::bail!("unknown bundled plugin {name:?}"),
+            };
+            let config = configured(&cli)?;
+            let mut session = WorkspaceSession::open(
+                &config.state_dir,
+                config.workspace.as_deref(),
+                cli.ticket.as_deref(),
+                config.projection,
+            )
+            .await?;
+            // Establish the main workspace descriptor before adding a module,
+            // so generated defaults never absorb and duplicate plugin actions.
+            session.behavior().await?;
+            session.install_config(path, source).await?;
+            session.shutdown().await?;
+            println!("installed {name} as {path}");
         }
         None => {
             let config = configured(&cli)?;
@@ -215,6 +252,8 @@ async fn event_loop(
             Event::Paste(value) => {
                 if app.mode == Mode::CaptureUrl {
                     app.capture_url.push_str(value.trim());
+                } else if app.mode == Mode::PluginInput {
+                    app.plugin_input.push_str(value.trim());
                 } else if let Some(pairing) = &mut app.pairing
                     && pairing.step == PairingStep::ServerOutput
                 {
@@ -301,12 +340,24 @@ async fn event_loop(
                 KeyCode::Enter => {
                     let id = app.matching_actions().first().map(|value| value.id.clone());
                     if let Some(id) = id {
-                        match app.behavior.action(app.selected_note(), &id) {
-                            Ok(action) if action.plugin == Some(ActionPlugin::CaptureUrl) => {
+                        match app
+                            .behavior
+                            .action(app.selected_note(), &id)
+                            .map(|action| action.plugin.clone())
+                        {
+                            Ok(Some(ActionPlugin::CaptureUrl)) => {
                                 app.capture_url.clear();
                                 app.mode = Mode::CaptureUrl;
                             }
-                            Ok(_) => {
+                            Ok(Some(ActionPlugin::Steel { prompt, .. })) => {
+                                app.plugin_input.clear();
+                                app.plugin_results.clear();
+                                app.plugin_index = 0;
+                                app.plugin_action = Some(id);
+                                app.plugin_prompt = prompt;
+                                app.mode = Mode::PluginInput;
+                            }
+                            Ok(None) => {
                                 let note = app.run_action(&id)?;
                                 session.save(&note).await?;
                                 app.message = format!("applied {id}");
@@ -359,6 +410,86 @@ async fn event_loop(
                     }
                     app.capture_url.clear();
                     app.mode = Mode::Normal;
+                }
+                _ => {}
+            },
+            Mode::PluginInput => match key.code {
+                KeyCode::Esc => clear_plugin_state(app),
+                KeyCode::Backspace => {
+                    app.plugin_input.pop();
+                }
+                KeyCode::Char(value)
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    app.plugin_input.push(value);
+                }
+                KeyCode::Enter => {
+                    let input = app.plugin_input.trim().to_owned();
+                    if input.is_empty() {
+                        app.message = "plugin input is required".into();
+                        continue;
+                    }
+                    let Some(action_id) = app.plugin_action.clone() else {
+                        clear_plugin_state(app);
+                        continue;
+                    };
+                    let plugin = app
+                        .behavior
+                        .action(None, &action_id)
+                        .map(|action| action.plugin.clone());
+                    let Ok(Some(ActionPlugin::Steel {
+                        path,
+                        entrypoint,
+                        capabilities,
+                        ..
+                    })) = plugin
+                    else {
+                        app.message = "Steel plugin action is unavailable".into();
+                        clear_plugin_state(app);
+                        continue;
+                    };
+                    let source = session.config_source(&path).await?;
+                    suspend_tui(terminal)?;
+                    let result =
+                        execute_steel_plugin(source, entrypoint, input, capabilities).await;
+                    resume_tui(terminal)?;
+                    match result {
+                        Ok(result) if result.choices.is_empty() => {
+                            app.message = "plugin returned no results".into();
+                            clear_plugin_state(app);
+                        }
+                        Ok(result) => {
+                            app.plugin_results = result.choices;
+                            app.plugin_index = 0;
+                            app.mode = Mode::PluginResults;
+                        }
+                        Err(error) => {
+                            app.message = format!("Steel plugin failed: {error:#}");
+                            clear_plugin_state(app);
+                        }
+                    }
+                }
+                _ => {}
+            },
+            Mode::PluginResults => match key.code {
+                KeyCode::Esc => clear_plugin_state(app),
+                KeyCode::Up => {
+                    app.plugin_index = app.plugin_index.saturating_sub(1);
+                }
+                KeyCode::Down => {
+                    app.plugin_index =
+                        (app.plugin_index + 1).min(app.plugin_results.len().saturating_sub(1));
+                }
+                KeyCode::Char(value @ '1'..='9') => {
+                    let index = usize::try_from(value.to_digit(10).unwrap_or_default())
+                        .unwrap_or_default()
+                        .saturating_sub(1);
+                    add_plugin_result(app, session, index).await?;
+                }
+                KeyCode::Enter => {
+                    add_plugin_result(app, session, app.plugin_index).await?;
                 }
                 _ => {}
             },
@@ -613,6 +744,49 @@ async fn event_loop(
             },
         }
     }
+    Ok(())
+}
+
+fn clear_plugin_state(app: &mut App) {
+    app.plugin_input.clear();
+    app.plugin_action = None;
+    app.plugin_prompt.clear();
+    app.plugin_results.clear();
+    app.plugin_index = 0;
+    app.mode = Mode::Normal;
+}
+
+async fn add_plugin_result(
+    app: &mut App,
+    session: &mut WorkspaceSession,
+    index: usize,
+) -> Result<()> {
+    let Some(PluginChoice { mut note, label }) = app.plugin_results.get(index).cloned() else {
+        app.message = "plugin result is unavailable".into();
+        return Ok(());
+    };
+    let now = OffsetDateTime::now_utc();
+    let id = NoteId::new(xo_core::id::generate(now));
+    let created = now
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| now.date().to_string());
+    note.frontmatter
+        .insert("id".into(), FrontmatterValue::String(id.to_string()));
+    note.frontmatter
+        .insert("created".into(), FrontmatterValue::String(created));
+    let saved = Note {
+        path: xo_core::projection::canonical_note_path(&id, &note.frontmatter),
+        id,
+        frontmatter: note.frontmatter,
+        body: note.body,
+    };
+    session.save(&saved).await?;
+    app.search.clear();
+    app.selected_tags.clear();
+    app.set_view("all");
+    app.add_note(saved);
+    clear_plugin_state(app);
+    app.message = format!("added {label}");
     Ok(())
 }
 

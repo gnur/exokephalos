@@ -32,6 +32,7 @@ pub enum Mode {
     CreateTitle,
     Goto,
     ActionPicker,
+    CaptureUrl,
     Conflicts,
     Devices,
     Sync,
@@ -76,6 +77,7 @@ pub struct App {
     pub selected: usize,
     pub tag_index: usize,
     pub action_query: String,
+    pub capture_url: String,
     pub create_title: String,
     pub goto_input: String,
     pub goto_index: usize,
@@ -114,6 +116,7 @@ impl App {
             selected: 0,
             tag_index: 0,
             action_query: String::new(),
+            capture_url: String::new(),
             create_title: String::new(),
             goto_input: String::new(),
             goto_index: 0,
@@ -360,15 +363,18 @@ impl App {
     }
 
     pub fn matching_actions(&self) -> Vec<&xo_core::behavior::ActionDescriptor> {
-        let Some(note) = self.selected_note() else {
-            return vec![];
-        };
+        let note = self.selected_note();
         let needle = self.action_query.to_lowercase();
         let mut actions = self
             .behavior
             .actions
             .iter()
-            .filter(|action| action.predicate.matches(note))
+            .filter(|action| {
+                note.is_some_and(|note| action.predicate.matches(note))
+                    || (note.is_none()
+                        && action.plugin.is_some()
+                        && action.predicate == xo_core::behavior::Predicate::Always)
+            })
             .filter(|action| {
                 fuzzy(&format!("{} {}", action.id, action.description), &needle).is_some()
             })
@@ -383,6 +389,15 @@ impl App {
     }
 
     pub fn run_action(&mut self, id: &str) -> Result<Note> {
+        if self
+            .behavior
+            .actions
+            .iter()
+            .find(|action| action.id == id)
+            .is_some_and(|action| action.plugin.is_some())
+        {
+            bail!("action {id} requires its native host plugin");
+        }
         let note_id = self.selected_note().context("no selected note")?.id.clone();
         let note = self
             .notes
@@ -667,7 +682,7 @@ fn highlighted_markdown(source: &str) -> Text<'static> {
 pub fn render(frame: &mut Frame<'_>, app: &App) {
     let has_input = matches!(
         app.mode,
-        Mode::Search | Mode::CreateTitle | Mode::Goto | Mode::ActionPicker
+        Mode::Search | Mode::CreateTitle | Mode::Goto | Mode::ActionPicker | Mode::CaptureUrl
     );
     let input_height = if app.mode == Mode::Goto {
         u16::try_from((app.goto_choices().len() + 3).clamp(4, 10)).unwrap_or(10)
@@ -790,6 +805,10 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                     format!(">{}  → {selected}", app.action_query),
                 )
             }
+            Mode::CaptureUrl => (
+                "Capture URL · Enter fetch · Esc cancel",
+                format!("URL: {}", app.capture_url),
+            ),
             _ => unreachable!(),
         };
         frame.render_widget(
@@ -1131,6 +1150,7 @@ mod tests {
                 description: "Mark done".into(),
                 predicate: Predicate::Always,
                 effects: vec![ActionEffect::AddTag { tag: "done".into() }],
+                plugin: None,
             }],
             ..WorkspaceBehavior::default()
         };

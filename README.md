@@ -475,9 +475,18 @@ starts with native declarative Steel similar to:
       (preview #f)
       (predicate (field-equals "type" "note"))
       (subviews)))
-  (actions)
+  (actions
+    (action
+      (id "capture-url")
+      (description "Capture readable content from a URL")
+      (predicate (always))
+      (effects)
+      (plugin (capture-url))))
   (templates)
-  (capability-grants))
+  (capability-grants
+    (grant
+      (action "capture-url")
+      (capabilities create-note network))))
 ```
 
 Predicates support `always`, `field-equals`, `has-tag`, `not`, `all`, and
@@ -485,6 +494,13 @@ Predicates support `always`, `field-equals`, `has-tag`, `not`, `all`, and
 `set-field`, and `append-body`; mutating actions require an explicit
 `mutate-note` capability grant. Optional lexical modules below
 `modules/**/*.scm` use the same fields inside `(workspace-module ...)`.
+
+The `capture-url` plugin is a capability-gated native host action. Press `a`,
+select **Capture readable content from a URL**, and enter an HTTP or HTTPS URL.
+The host validates public destinations and redirects, limits the response,
+extracts the readable article, converts it to Markdown, and commits an ordinary
+replicated note. Both `create-note` and `network` grants are required. Steel
+itself receives no ambient network API.
 
 Only the native declarative form is accepted. Configuration is parsed through a
 strict boundary: arbitrary filesystem, environment, process, network, clock,

@@ -13,8 +13,8 @@ use steel::steel_vm::register_fn::RegisterFn;
 use thiserror::Error;
 
 use crate::behavior::{
-    ActionDescriptor, ActionEffect, BehaviorError, Capability, Predicate, SubviewDescriptor,
-    TemplateDescriptor, ViewDescriptor, WorkspaceBehavior,
+    ActionDescriptor, ActionEffect, ActionPlugin, BehaviorError, Capability, Predicate,
+    SubviewDescriptor, TemplateDescriptor, ViewDescriptor, WorkspaceBehavior,
 };
 use crate::domain::FrontmatterValue;
 
@@ -374,7 +374,7 @@ fn parse_action(form: &NativeForm) -> Result<ActionDescriptor, SteelConfigError>
     let args = constructor_args(form, "action")?;
     let fields = native_fields(
         args,
-        &["id", "description", "predicate", "effects"],
+        &["id", "description", "predicate", "effects", "plugin"],
         "action",
     )?;
     Ok(ActionDescriptor {
@@ -387,7 +387,22 @@ fn parse_action(form: &NativeForm) -> Result<ActionDescriptor, SteelConfigError>
                 .map(parse_effect)
                 .collect::<Result<Vec<_>, _>>()
         })?,
+        plugin: fields
+            .get("plugin")
+            .map(|forms| match *forms {
+                [form] => parse_plugin(form),
+                _ => Err(native_error("plugin expects exactly one value")),
+            })
+            .transpose()?,
     })
+}
+
+fn parse_plugin(form: &NativeForm) -> Result<ActionPlugin, SteelConfigError> {
+    let (name, args) = native_call(form)?;
+    match (name, args) {
+        ("capture-url", []) => Ok(ActionPlugin::CaptureUrl),
+        _ => Err(native_error(format!("invalid action plugin {name}"))),
+    }
 }
 
 fn parse_template(form: &NativeForm) -> Result<TemplateDescriptor, SteelConfigError> {
@@ -498,7 +513,9 @@ fn parse_frontmatter_value(form: &NativeForm) -> Result<FrontmatterValue, SteelC
 
 fn parse_capability(form: &NativeForm) -> Result<Capability, SteelConfigError> {
     match native_symbol(form, "capability")? {
+        "create-note" => Ok(Capability::CreateNote),
         "mutate-note" => Ok(Capability::MutateNote),
+        "network" => Ok(Capability::Network),
         value => Err(native_error(format!("unknown capability {value}"))),
     }
 }
@@ -1013,8 +1030,19 @@ fn encode_action(action: &ActionDescriptor, indent: usize) -> String {
         )
         .expect("writing to a String cannot fail");
     }
-    output.push_str("))");
+    output.push(')');
+    if let Some(plugin) = action.plugin {
+        write!(output, "\n{field}(plugin {})", encode_plugin(plugin))
+            .expect("writing to a String cannot fail");
+    }
+    output.push(')');
     output
+}
+
+fn encode_plugin(plugin: ActionPlugin) -> &'static str {
+    match plugin {
+        ActionPlugin::CaptureUrl => "(capture-url)",
+    }
 }
 
 fn encode_predicate(predicate: &Predicate) -> String {
@@ -1098,7 +1126,9 @@ fn encode_optional_string(value: Option<&str>) -> String {
 
 fn encode_capability(capability: Capability) -> &'static str {
     match capability {
+        Capability::CreateNote => "create-note",
         Capability::MutateNote => "mutate-note",
+        Capability::Network => "network",
     }
 }
 
@@ -1124,6 +1154,7 @@ mod tests {
                 description: String::new(),
                 predicate: Predicate::default(),
                 effects: vec![],
+                plugin: None,
             }],
             ..WorkspaceBehavior::default()
         };
@@ -1211,6 +1242,7 @@ mod tests {
                         text: "\nFinished.\n".into(),
                     },
                 ],
+                plugin: Some(ActionPlugin::CaptureUrl),
             }],
             templates: vec![TemplateDescriptor {
                 id: "daily".into(),
@@ -1219,7 +1251,11 @@ mod tests {
             }],
             capability_grants: BTreeMap::from([(
                 "finish".into(),
-                BTreeSet::from([Capability::MutateNote]),
+                BTreeSet::from([
+                    Capability::CreateNote,
+                    Capability::MutateNote,
+                    Capability::Network,
+                ]),
             )]),
             query_limit: 42,
         };

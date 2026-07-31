@@ -11,7 +11,8 @@ A stage is complete only when every task and its exit gate are checked.
 - Stage 3 is complete: native peers converge across partitions and restarts, retain conflicts, and resume verified partial Blob transfers.
 - Stage 4 is complete: central-peer operations, backup/restore, signed retirement, and namespace rotation/reinvitation pass their security and recovery scenarios.
 - Stages 5 and 6 are complete: portable sandboxed Steel behavior and the persistent daily-use Ratatui client pass their parity, offline, conflict, and convergence gates.
-- Stages 7–10 retain their previously listed foundations and placeholders.
+- Stage 7 is in progress: import/export and capability-gated URL capture are complete; webhook, attachment, encrypted-note, book, and statistics workflows remain.
+- Stages 8–10 retain their previously listed foundations and placeholders.
 
 ## Stage 0 — Architecture and compatibility proof
 
@@ -192,7 +193,7 @@ A stage is complete only when every task and its exit gate are checked.
 ## Stage 7 — Content workflows and feature parity
 
 - [x] Port recursive Markdown import and conventional Markdown export.
-- [ ] Implement URL capture and readable-content conversion as a capability-gated Steel action plugin, backed by a testable native host service rather than ambient Steel network access.
+- [x] Implement URL capture and readable-content conversion as a capability-gated Steel action plugin, backed by a testable native host service rather than ambient Steel network access.
 - [ ] Add optional authenticated webhook ingestion to `xo-syncd`.
 - [ ] Add image attachment import, validation, collision handling, materialization, and transfer.
 - [ ] Complete encrypted-note user workflows.
@@ -205,6 +206,13 @@ required-field normalization, full diagnostic preflight, active-workspace
 identity/path collisions, type-filtered conventional output, deterministic
 filename collisions, encrypted-ID preservation, refusal to overwrite a
 non-empty destination, and a real `xo import` → `xo export` process test.
+
+URL capture is declared by the native `(capture-url)` Steel plugin and requires
+both `create-note` and `network` grants. The native host pins validated public
+DNS results, revalidates redirects, limits status/content type/body size, runs
+readability extraction, converts links to absolute Markdown, and commits the
+result through the ordinary revision path. Fixture fetchers and extractors keep
+network and conversion behavior testable without ambient Steel access.
 
 **Exit gate**
 

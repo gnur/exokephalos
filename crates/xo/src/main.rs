@@ -19,6 +19,8 @@ use ratatui::backend::CrosstermBackend;
 use time::OffsetDateTime;
 use xo::config::{CliOverrides, XoConfig, config_path, home_dir};
 use xo::session::WorkspaceSession;
+use xo::url_capture::{UrlCaptureService, captured_note};
+use xo_core::behavior::ActionPlugin;
 use xo_core::domain::Frontmatter;
 use xo_core::{Note, NoteId};
 use zeroize::Zeroizing;
@@ -211,7 +213,9 @@ async fn event_loop(
         let key = match event::read()? {
             Event::Key(key) => key,
             Event::Paste(value) => {
-                if let Some(pairing) = &mut app.pairing
+                if app.mode == Mode::CaptureUrl {
+                    app.capture_url.push_str(value.trim());
+                } else if let Some(pairing) = &mut app.pairing
                     && pairing.step == PairingStep::ServerOutput
                 {
                     pairing.server_output.push_str(&value);
@@ -297,10 +301,63 @@ async fn event_loop(
                 KeyCode::Enter => {
                     let id = app.matching_actions().first().map(|value| value.id.clone());
                     if let Some(id) = id {
-                        let note = app.run_action(&id)?;
-                        session.save(&note).await?;
-                        app.message = format!("applied {id}");
+                        match app.behavior.action(app.selected_note(), &id) {
+                            Ok(action) if action.plugin == Some(ActionPlugin::CaptureUrl) => {
+                                app.capture_url.clear();
+                                app.mode = Mode::CaptureUrl;
+                            }
+                            Ok(_) => {
+                                let note = app.run_action(&id)?;
+                                session.save(&note).await?;
+                                app.message = format!("applied {id}");
+                                app.mode = Mode::Normal;
+                            }
+                            Err(error) => {
+                                app.message = error.to_string();
+                                app.mode = Mode::Normal;
+                            }
+                        }
+                    } else {
+                        app.mode = Mode::Normal;
                     }
+                }
+                _ => {}
+            },
+            Mode::CaptureUrl => match key.code {
+                KeyCode::Esc => {
+                    app.capture_url.clear();
+                    app.mode = Mode::Normal;
+                }
+                KeyCode::Backspace => {
+                    app.capture_url.pop();
+                }
+                KeyCode::Char(value)
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    app.capture_url.push(value);
+                }
+                KeyCode::Enter => {
+                    let raw_url = app.capture_url.trim().to_owned();
+                    if raw_url.is_empty() {
+                        app.message = "a URL is required".into();
+                        continue;
+                    }
+                    suspend_tui(terminal)?;
+                    let capture = capture_url(session, &raw_url).await;
+                    resume_tui(terminal)?;
+                    match capture {
+                        Ok(note) => {
+                            app.search.clear();
+                            app.selected_tags.clear();
+                            app.set_view("all");
+                            app.add_note(note);
+                            app.message = format!("captured {raw_url}");
+                        }
+                        Err(error) => app.message = format!("URL capture failed: {error:#}"),
+                    }
+                    app.capture_url.clear();
                     app.mode = Mode::Normal;
                 }
                 _ => {}
@@ -557,6 +614,13 @@ async fn event_loop(
         }
     }
     Ok(())
+}
+
+async fn capture_url(session: &mut WorkspaceSession, raw_url: &str) -> Result<Note> {
+    let page = UrlCaptureService::default().capture(raw_url).await?;
+    let note = captured_note(page, OffsetDateTime::now_utc());
+    session.save(&note).await?;
+    Ok(note)
 }
 
 async fn create_note(app: &mut App, session: &mut WorkspaceSession, title: &str) -> Result<()> {

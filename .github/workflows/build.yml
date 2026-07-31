@@ -127,6 +127,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cargo build --locked -p xo-admin -p xo-syncd
           fixture=$(mktemp -d)
           mkdir -p "${fixture}/source"
           cat > "${fixture}/source/fixture.md" <<'EOF'
@@ -139,10 +140,10 @@ jobs:
           ---
           Browser fixture
           EOF
-          cargo run --quiet -p xo-admin -- import-workspace \
+          target/debug/xo-admin import-workspace \
             "${fixture}/source" "${fixture}/state" > "${fixture}/import.out"
           ticket=$(grep '^ticket=' "${fixture}/import.out" | cut -d= -f2-)
-          cargo run --quiet -p xo-syncd -- \
+          target/debug/xo-syncd \
             --state-dir "${fixture}/state" \
             --operator-bind 127.0.0.1:19464 > "${fixture}/syncd.log" 2>&1 &
           syncd_pid=$!

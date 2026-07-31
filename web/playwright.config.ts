@@ -16,7 +16,7 @@ export default defineConfig({
   webServer: {
     command: 'npm run preview -- --port 4173',
     url: 'http://127.0.0.1:4173/healthz',
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: true,
     timeout: 30_000,
   },
 });

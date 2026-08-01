@@ -161,6 +161,7 @@ async fn main() -> Result<()> {
                 config.workspace.as_deref(),
                 cli.ticket.as_deref(),
                 config.projection,
+                &config.pwa_url,
             )
             .await?;
         }
@@ -185,12 +186,14 @@ async fn run_tui(
     workspace: Option<&str>,
     ticket: Option<&str>,
     projection: PathBuf,
+    pwa_url: &str,
 ) -> Result<()> {
     let mut session = WorkspaceSession::open(state_dir, workspace, ticket, projection).await?;
     let behavior = session.behavior().await?;
     let snapshot = session.snapshot().await?;
     let mut app = App::new(behavior, snapshot.notes.clone());
     app.workspace_id = session.workspace_id();
+    pwa_url.clone_into(&mut app.pwa_url);
     hydrate(&mut app, &session, snapshot).await?;
     enable_raw_mode()?;
     execute!(stdout(), EnterAlternateScreen, EnableBracketedPaste)?;
@@ -493,6 +496,21 @@ async fn event_loop(
                 }
                 _ => {}
             },
+            Mode::MobilePairing => match key.code {
+                KeyCode::Esc | KeyCode::Enter => app.cancel_mobile_pairing(),
+                KeyCode::Char('c') => {
+                    if let Some(pairing) = &app.mobile_pairing {
+                        let link = pairing.setup_url.clone();
+                        match copy_to_clipboard(terminal, &link) {
+                            Ok(()) => app.message = "mobile setup link copied".into(),
+                            Err(error) => {
+                                app.message = format!("could not copy setup link: {error}");
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            },
             Mode::Pairing => {
                 let step = app.pairing.as_ref().map(|pairing| pairing.step);
                 match (step, key.code) {
@@ -682,6 +700,15 @@ async fn event_loop(
                 KeyCode::Char('J') => {
                     app.start_server_pairing();
                 }
+                KeyCode::Char('M') => match session.writable_invitation().await {
+                    Ok(ticket) => {
+                        let ticket = Zeroizing::new(ticket);
+                        if let Err(error) = app.start_mobile_pairing(&ticket) {
+                            app.message = format!("could not create mobile setup: {error:#}");
+                        }
+                    }
+                    Err(error) => app.message = format!("could not create invitation: {error:#}"),
+                },
                 KeyCode::Char('r') => {
                     session.refresh_sync()?;
                     let snapshot = session.snapshot().await?;

@@ -71,11 +71,9 @@ test('converges two browser peers through a native Iroh document peer', async ({
     await first.getByRole('button', { name: 'Commit to Iroh Docs' }).click();
     await expect(first.locator('.entry-list').getByText(key)).toBeVisible();
 
-    await second.goto('/');
-    await expect(second.getByText('Runtime ready')).toBeVisible();
-    await second.getByLabel('Writable workspace ticket').fill(nativeTicket!);
-    await second.getByRole('button', { name: 'Join and synchronize' }).click();
+    await second.goto(`/#ticket=${encodeURIComponent(nativeTicket!)}`);
     await expect(second.getByText('Workspace online.')).toBeVisible();
+    await expect(second).toHaveURL(/\/$/);
     const replicated = second.locator('.entry-row').filter({ hasText: key });
     await expect(replicated).toBeVisible({ timeout: 60_000 });
     await expect(replicated).toContainText(value);

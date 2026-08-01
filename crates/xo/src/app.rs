@@ -4,6 +4,8 @@ use std::io::Write;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+use qrcode::render::unicode::Dense1x2;
+use qrcode::{EcLevel, QrCode};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
@@ -40,6 +42,7 @@ pub enum Mode {
     Devices,
     Sync,
     Pairing,
+    MobilePairing,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,6 +60,12 @@ pub struct ServerPairing {
     pub server_output: Zeroizing<String>,
     pub reveal_ticket: bool,
     pub error: String,
+}
+
+pub struct MobilePairing {
+    pub setup_url: Zeroizing<String>,
+    pub qr: Zeroizing<String>,
+    pub host: String,
 }
 
 pub struct App {
@@ -90,7 +99,9 @@ pub struct App {
     pub goto_input: String,
     pub goto_index: usize,
     pub message: String,
+    pub pwa_url: String,
     pub pairing: Option<ServerPairing>,
+    pub mobile_pairing: Option<MobilePairing>,
     pub decrypted_preview: Option<Zeroizing<String>>,
     sort_descending: bool,
 }
@@ -134,7 +145,9 @@ impl App {
             goto_input: String::new(),
             goto_index: 0,
             message: String::new(),
+            pwa_url: "https://xo.exokephalos.dev/".to_owned(),
             pairing: None,
+            mobile_pairing: None,
             decrypted_preview: None,
             sort_descending: false,
         }
@@ -464,6 +477,29 @@ impl App {
             .context("selected note disappeared")
     }
 
+    pub fn start_mobile_pairing(&mut self, ticket: &str) -> Result<()> {
+        let setup_url = mobile_setup_url(&self.pwa_url, ticket)?;
+        let code = QrCode::with_error_correction_level(setup_url.as_bytes(), EcLevel::L)
+            .context("encode mobile setup QR code")?;
+        let qr = code.render::<Dense1x2>().build();
+        let host = url::Url::parse(&self.pwa_url)?
+            .host_str()
+            .context("pwa-url has no host")?
+            .to_owned();
+        self.mobile_pairing = Some(MobilePairing {
+            setup_url,
+            qr: Zeroizing::new(qr),
+            host,
+        });
+        self.mode = Mode::MobilePairing;
+        Ok(())
+    }
+
+    pub fn cancel_mobile_pairing(&mut self) {
+        self.mobile_pairing = None;
+        self.mode = Mode::Normal;
+    }
+
     pub fn start_server_pairing(&mut self) {
         self.pairing = Some(ServerPairing {
             step: PairingStep::StateDirectory,
@@ -510,7 +546,25 @@ impl App {
     }
 }
 
-#[must_use]
+pub fn mobile_setup_url(base: &str, ticket: &str) -> Result<Zeroizing<String>> {
+    let mut url = url::Url::parse(base).context("parse pwa-url")?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        bail!("pwa-url must be an HTTPS origin");
+    }
+    let fragment = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("ticket", ticket)
+        .finish();
+    url.set_fragment(Some(&fragment));
+    Ok(Zeroizing::new(url.to_string()))
+}
+
 pub fn server_pairing_commands(state_dir: &str, ticket: &str) -> String {
     format!(
         "sudo systemctl stop xo-syncd\nsudo -u xo xo-admin import-ticket {} {}\nsudo systemctl start xo-syncd",
@@ -779,7 +833,10 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             "[Enter/e] edit · [c] create",
             "[d/u] del/restore · [g] goto",
         ],
-        vec!["[a] actions · [T] tags · [J] pair", "[r] sync · [q] quit"],
+        vec![
+            "[a] actions · [T] tags",
+            "[M] mobile · [J] server · [q] quit",
+        ],
     ]) {
         frame.render_widget(
             Paragraph::new(lines.join("\n")).style(Style::default().fg(Color::Cyan)),
@@ -868,6 +925,10 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     let content_area = vertical[usize::from(has_input) + 1];
     if app.mode == Mode::Pairing {
         render_pairing(frame, app, content_area);
+        return;
+    }
+    if app.mode == Mode::MobilePairing {
+        render_mobile_pairing(frame, app, content_area);
         return;
     }
     let pane_constraints = if app.tags_visible {
@@ -1087,6 +1148,53 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     );
 }
 
+fn render_mobile_pairing(frame: &mut Frame<'_>, app: &App, area: ratatui::layout::Rect) {
+    let Some(pairing) = &app.mobile_pairing else {
+        return;
+    };
+    let qr_width = pairing
+        .qr
+        .lines()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or_default();
+    let qr_height = pairing.qr.lines().count();
+    let fits = usize::from(area.width.saturating_sub(2)) >= qr_width
+        && usize::from(area.height.saturating_sub(6)) >= qr_height;
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!(
+                "Scan with your phone to open {} and join this workspace",
+                pairing.host
+            ),
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::raw("The QR contains a writable capability. Keep it private."),
+        Line::raw(""),
+    ];
+    if fits {
+        lines.extend(pairing.qr.lines().map(|line| Line::raw(line.to_owned())));
+    } else {
+        lines.push(Line::raw(format!(
+            "Enlarge the terminal to at least {} columns × {} rows to display the QR code.",
+            qr_width.saturating_add(2),
+            qr_height.saturating_add(10)
+        )));
+    }
+    lines.extend([
+        Line::raw(""),
+        Line::raw("c: copy setup link · Esc/Enter: close"),
+    ]);
+    frame.render_widget(
+        Paragraph::new(Text::from(lines)).block(
+            Block::default()
+                .title("Mobile PWA setup")
+                .borders(Borders::ALL),
+        ),
+        area,
+    );
+}
+
 fn render_pairing(frame: &mut Frame<'_>, app: &App, area: ratatui::layout::Rect) {
     let Some(pairing) = &app.pairing else {
         frame.render_widget(
@@ -1242,6 +1350,42 @@ mod tests {
         assert!(screen.contains("Offline"));
         assert!(screen.contains("[Enter/e] edit"));
         assert!(!screen.contains("pending=0"));
+    }
+
+    #[test]
+    fn mobile_setup_uses_a_fragment_and_supports_a_custom_host() {
+        let link = mobile_setup_url(
+            "https://notes.example.test/",
+            "writable ticket/with secrets",
+        )
+        .unwrap();
+        let parsed = url::Url::parse(&link).unwrap();
+        assert_eq!(parsed.host_str(), Some("notes.example.test"));
+        assert_eq!(parsed.path(), "/");
+        assert!(parsed.query().is_none());
+        let parameters = url::form_urlencoded::parse(parsed.fragment().unwrap().as_bytes())
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            parameters.get("ticket").unwrap().as_ref(),
+            "writable ticket/with secrets"
+        );
+
+        let mut app = fixture();
+        app.pwa_url = "https://notes.example.test/".into();
+        app.start_mobile_pairing("writable ticket/with secrets")
+            .unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(160, 60)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(screen.contains("Mobile PWA setup"));
+        assert!(screen.contains("notes.example.test"));
+        assert!(!screen.contains("writable ticket/with secrets"));
     }
 
     #[test]

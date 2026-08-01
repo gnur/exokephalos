@@ -37,6 +37,15 @@ type InstallPrompt = Event & {
 };
 
 const updateServiceWorker = registerSW({ immediate: true });
+let scannedWorkspaceTicket = consumeWorkspaceTicket();
+
+function consumeWorkspaceTicket() {
+  const parameters = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  const ticket = parameters.get('ticket')?.trim();
+  if (!ticket) return undefined;
+  window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+  return ticket;
+}
 
 function App() {
   const runtimeRef = useRef<XoRuntime | undefined>(undefined);
@@ -53,18 +62,24 @@ function App() {
     const runtime = new XoRuntime();
     runtimeRef.current = runtime;
     let active = true;
-    void runtime.initialize().then(
-      (next) => {
-        if (!active) return;
-        setReport(next);
-        setState('ready');
-      },
-      (cause: unknown) => {
-        if (!active) return;
-        setError(errorMessage(cause));
-        setState('error');
-      },
-    );
+    void (async () => {
+      const setupTicket = scannedWorkspaceTicket;
+      let next = await runtime.initialize();
+      if (setupTicket) {
+        try {
+          next = await runtime.joinWorkspace(setupTicket);
+        } finally {
+          scannedWorkspaceTicket = undefined;
+        }
+      }
+      if (!active) return;
+      setReport(next);
+      setState('ready');
+    })().catch((cause: unknown) => {
+      if (!active) return;
+      setError(errorMessage(cause));
+      setState('error');
+    });
     return () => {
       active = false;
       if (runtimeRef.current === runtime) runtimeRef.current = undefined;

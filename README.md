@@ -59,6 +59,25 @@ The current UI exposes the verified raw document snapshot so synchronization
 and recovery are testable end to end. Mapping those records into the complete
 xo note, view, revision, and conflict UI is the next milestone.
 
+### Pair a phone from the TUI
+
+Press `M` in the TUI to create a writable invitation and display a QR code.
+Scanning it opens `https://xo.exokephalos.dev/`, imports the writable capability,
+starts relay synchronization, stores the encrypted browser identity, and removes
+the capability from the address bar. The capability is encoded in the URL
+fragment, so it is not included in the HTTP request. Treat the QR code and copied
+setup link as secrets.
+
+To use another PWA deployment, set its absolute HTTPS URL in
+`~/.config/xo/config.scm`:
+
+```scheme
+(pwa-url "https://notes.example.test/")
+```
+
+The configured value must be an HTTPS origin without credentials, a path,
+query parameters, or a fragment.
+
 Build the Wasm package and static application locally with:
 
 ```console
@@ -159,10 +178,11 @@ Markdown into `~/notes`:
 
 ```scheme
 (xo-config
-  (schema 1)
+  (schema 2)
   (state-dir "~/.local/share/xo")
   (workspace #f)
-  (projection "~/notes"))
+  (projection "~/notes")
+  (pwa-url "https://xo.exokephalos.dev/"))
 ```
 
 On this first launch, xo creates a local Iroh endpoint and writable document,
@@ -387,10 +407,11 @@ and `~/notes` for the Markdown projection:
 
 ```scheme
 (xo-config
-  (schema 1)
+  (schema 2)
   (state-dir "~/.local/share/xo")
   (workspace #f)
-  (projection "~/notes"))
+  (projection "~/notes")
+  (pwa-url "https://xo.exokephalos.dev/"))
 ```
 
 ### Join with the server ticket

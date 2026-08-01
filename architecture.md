@@ -48,7 +48,7 @@ The TUI is the full-featured application.
 
 The PWA is an incidental-access client using Iroh WASM bindings and IndexedDB-backed local state.
 
-- Browser Iroh identity, workspace tickets, offline cache, durable operations, sync status, reconnection, and conflict indication.
+- Browser Iroh identity, workspace tickets, QR-based TUI onboarding, offline cache, durable operations, sync status, reconnection, and conflict indication.
 - Browse views and subviews, search titles, filter tags, read sanitized Markdown, and view attachments.
 - Create quick/inbox notes; edit/delete notes; edit YAML frontmatter; attach images; capture URLs.
 - Encrypt and unlock note bodies in the browser.

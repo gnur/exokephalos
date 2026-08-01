@@ -178,7 +178,7 @@ fn merge_plugin(
 
 /// Evaluate the native `~/.config/xo/config.scm` schema.
 ///
-/// Only the five named field forms are admitted. The parsed values are rebuilt
+/// Only the named field forms are admitted. The parsed values are rebuilt
 /// into a canonical program before Steel evaluates them, so arbitrary ambient
 /// expressions can never execute.
 pub fn evaluate_xo_config(source: &str) -> Result<String, SteelConfigError> {
@@ -204,14 +204,20 @@ fn sandbox(now: &str) -> Engine {
         .register_fn("state-dir", |value: String| value)
         .register_fn("workspace", optional_config_value)
         .register_fn("projection", |value: String| value)
+        .register_fn("pwa-url", |value: String| value)
         .register_fn(
             "xo-config",
-            |schema: String, state_dir: String, workspace: String, projection: String| {
+            |schema: String,
+             state_dir: String,
+             workspace: String,
+             projection: String,
+             pwa_url: String| {
                 serde_json::json!({
                     "schema": schema.parse::<u16>().unwrap_or_default(),
                     "state_dir": state_dir,
                     "workspace": (!workspace.is_empty()).then_some(workspace),
                     "projection": projection,
+                    "pwa_url": pwa_url,
                 })
                 .to_string()
             },
@@ -813,6 +819,7 @@ struct NativeXoFields {
     state_dir: String,
     workspace: Option<String>,
     projection: String,
+    pwa_url: String,
 }
 
 impl NativeXoFields {
@@ -822,11 +829,12 @@ impl NativeXoFields {
         };
         let optional = |value: Option<&str>| value.map_or_else(|| "#f".to_owned(), string);
         format!(
-            "(xo-config (schema {}) (state-dir {}) (workspace {}) (projection {}))",
+            "(xo-config (schema {}) (state-dir {}) (workspace {}) (projection {}) (pwa-url {}))",
             self.schema,
             string(&self.state_dir),
             optional(self.workspace.as_deref()),
             string(&self.projection),
+            string(&self.pwa_url),
         )
     }
 }
@@ -851,6 +859,7 @@ impl<'a> NativeXoParser<'a> {
         let mut state_dir = None;
         let mut workspace = None;
         let mut projection = None;
+        let mut pwa_url = None;
         loop {
             self.skip_ignored();
             if self.peek() == Some(')') {
@@ -873,6 +882,9 @@ impl<'a> NativeXoParser<'a> {
                 "projection" => {
                     set_once(&mut projection, self.string()?, "projection", self.position)?;
                 }
+                "pwa-url" => {
+                    set_once(&mut pwa_url, self.string()?, "pwa-url", self.position)?;
+                }
                 _ => return self.error(format!("unknown field {key}")),
             }
             self.expect_char(')')?;
@@ -886,6 +898,7 @@ impl<'a> NativeXoParser<'a> {
             state_dir: required(state_dir, "state-dir", self.position)?,
             workspace: required(workspace, "workspace", self.position)?,
             projection: required(projection, "projection", self.position)?,
+            pwa_url: required(pwa_url, "pwa-url", self.position)?,
         })
     }
 
@@ -1513,7 +1526,8 @@ mod tests {
             (schema 1)
             (state-dir (env-var "HOME"))
             (workspace #f)
-            (projection "."))"#;
+            (projection ".")
+            (pwa-url "https://xo.exokephalos.dev/"))"#;
         assert!(evaluate_xo_config(native_attack).is_err());
     }
 

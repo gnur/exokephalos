@@ -68,7 +68,7 @@ ten minutes. A changed deployment produces an explicit full-refresh banner.
 
 ### Pair a phone from the TUI
 
-Press `M` in the TUI to create a writable invitation and display a QR code.
+Press `Space`, then `m` in the TUI to create a writable invitation and display a QR code.
 Scanning it opens `https://xo.exokephalos.dev/`, imports the writable capability,
 starts relay synchronization, stores the encrypted browser identity, and removes
 the capability from the address bar. The capability is encoded in the URL
@@ -155,7 +155,7 @@ stable—it does **not** discard or silently merge the other branch. Concurrent
 revision IDs and all immutable history remain in the document. A concurrent
 delete and edit are handled the same way, so both outcomes remain recoverable.
 
-Press `x` in the TUI to see conflicted note IDs, the selected winner, concurrent
+Press `Space`, then `x` in the TUI to see conflicted note IDs, the selected winner, concurrent
 revision IDs, and revision history. To resolve a conflict, edit the visible note
 and incorporate any content you want to retain. When xo saves a conflicted
 note, the new revision names the winner and every concurrent revision as
@@ -180,16 +180,17 @@ xo config-init > ~/.config/xo/config.scm
 xo
 ```
 
-The default configuration stores Iroh state in `~/.local/share/xo` and projects
-Markdown into `~/notes`:
+The default configuration stores Iroh state in `~/.local/share/xo`, projects
+Markdown into `~/notes`, and uses Space as the TUI leader key:
 
 ```scheme
 (xo-config
-  (schema 2)
+  (schema 3)
   (state-dir "~/.local/share/xo")
   (workspace #f)
   (projection "~/notes")
-  (pwa-url "https://xo.exokephalos.dev/"))
+  (pwa-url "https://xo.exokephalos.dev/")
+  (leader-key " "))
 ```
 
 On this first launch, xo creates a local Iroh endpoint and writable document,
@@ -215,7 +216,7 @@ administrative HTTP interface, not Iroh's synchronization port.
 
 ### 3. Pair the first TUI with xo-syncd
 
-In the first TUI, press `J` and follow the three-step **Connect xo-syncd**
+In the first TUI, press `Space`, then `j` and follow the three-step **Connect xo-syncd**
 wizard. In outline:
 
 1. Enter the server state directory: normally `/var/lib/xo-syncd` for the
@@ -409,16 +410,17 @@ mkdir -p ~/.config/xo
 xo config-init > ~/.config/xo/config.scm
 ```
 
-The default configuration uses `~/.local/share/xo` for replicated local state
-and `~/notes` for the Markdown projection:
+The default configuration uses `~/.local/share/xo` for replicated local state,
+`~/notes` for the Markdown projection, and Space as the TUI leader key:
 
 ```scheme
 (xo-config
-  (schema 2)
+  (schema 3)
   (state-dir "~/.local/share/xo")
   (workspace #f)
   (projection "~/notes")
-  (pwa-url "https://xo.exokephalos.dev/"))
+  (pwa-url "https://xo.exokephalos.dev/")
+  (leader-key " "))
 ```
 
 ### Join with the server ticket
@@ -455,21 +457,26 @@ You can also select it for one launch:
 xo --workspace '<WORKSPACE_ID>'
 ```
 
-The TUI header reports connectivity, pending operations, missing blobs, and
-convergence. Press `y` for detailed synchronization state and `r` to refresh and
-retry synchronization.
+The uncluttered TUI header shows only xo and the embedded release version.
+Press `Space`, then `s` for detailed synchronization state or `Space`, then `r`
+to refresh and retry synchronization.
 
-### TUI navigation and tag filtering
+### TUI leader, navigation, and tag filtering
 
-Press `g` to open the goto menu. Every configured view and subview is shown with
-its shortest unique prefix; type that prefix to switch immediately, or use the
-arrow keys and Enter. View navigation does not use a command prompt or
-separately configured direct-view keys.
+Pressing the configured leader opens a popup listing views, tags, actions,
+mobile setup, server setup/status, synchronization status, conflicts, devices,
+refresh, sorting, and preview unlocking. Space is the default. Set another
+single printable character with `(leader-key ",")` in the schema-3 command
+configuration.
 
-Press `T` to show or hide the tag pane. When it is visible, `Tab` and
-`Shift-Tab` include it in cyclic pane navigation. Use Left/Right or `h`/`l` for
-spatial pane movement between Tags, Notes, and Preview. Highlight a tag with
-Up/Down or `j`/`k`, then press Space or Enter to toggle that filter.
+Press `Space`, then `v` to open the view menu. Every configured view and subview
+is shown with its shortest unique prefix; type that prefix to switch immediately,
+or use the arrow keys and Enter.
+
+Press `Space`, then `t` to show or hide the tag pane. When it is visible, `Tab`
+and `Shift-Tab` include it in cyclic pane navigation. Use Left/Right or `h`/`l`
+for spatial pane movement between Tags, Notes, and Preview. Highlight a tag with
+Up/Down or `j`/`k`, then press Enter to toggle that filter.
 
 Tag counts are live facets. They first respect the active view or subview and
 the `/` title query, then show how many notes would remain if each tag were
@@ -564,7 +571,7 @@ Executable sandboxed plugins live below `plugins/**/*.scm`; their
 `xo-plugin-manifest` function contributes actions and their action entrypoint
 runs in a fresh, time-bounded `Engine::new_sandboxed()` VM.
 
-The `capture-url` plugin is a capability-gated native host action. Press `a`,
+The `capture-url` plugin is a capability-gated native host action. Press `Space`, then `a`,
 select **Capture readable content from a URL**, and enter an HTTP or HTTPS URL.
 The host validates public destinations and redirects, limits the response,
 extracts the readable article, converts it to Markdown, and commits an ordinary
@@ -582,7 +589,7 @@ export HARDCOVER_TOKEN='your Hardcover API token'
 xo
 ```
 
-Press `a` and select **Search Hardcover**. The plugin prompts for a title or
+Press `Space`, then `a` and select **Search Hardcover**. The plugin prompts for a title or
 author, performs the GraphQL request, presents up to five choices, and creates
 an ordinary `type: book` note tagged `to-read`. It also contributes the pure
 Steel actions **Start reading this book** (`to-read` → `reading`) and **Mark
@@ -602,7 +609,7 @@ or evaluation expressions are rejected.
 
 ## Detailed TUI-to-xo-syncd pairing flow
 
-If the workspace was created in the TUI, press `J` to open **Connect
+If the workspace was created in the TUI, press `Space`, then `j` to open **Connect
 xo-syncd**:
 
 1. Confirm the server state directory. The default is `/var/lib/xo-syncd`.

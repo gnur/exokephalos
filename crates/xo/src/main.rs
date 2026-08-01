@@ -162,6 +162,7 @@ async fn main() -> Result<()> {
                 cli.ticket.as_deref(),
                 config.projection,
                 &config.pwa_url,
+                &config.leader_key,
             )
             .await?;
         }
@@ -187,6 +188,7 @@ async fn run_tui(
     ticket: Option<&str>,
     projection: PathBuf,
     pwa_url: &str,
+    leader_key: &str,
 ) -> Result<()> {
     let mut session = WorkspaceSession::open(state_dir, workspace, ticket, projection).await?;
     let behavior = session.behavior().await?;
@@ -194,6 +196,10 @@ async fn run_tui(
     let mut app = App::new(behavior, snapshot.notes.clone());
     app.workspace_id = session.workspace_id();
     pwa_url.clone_into(&mut app.pwa_url);
+    app.leader_key = leader_key
+        .chars()
+        .next()
+        .context("leader-key is unavailable")?;
     hydrate(&mut app, &session, snapshot).await?;
     enable_raw_mode()?;
     execute!(stdout(), EnterAlternateScreen, EnableBracketedPaste)?;
@@ -242,6 +248,38 @@ async fn hydrate(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LeaderCommand {
+    ToggleTags,
+    ChooseView,
+    Actions,
+    Mobile,
+    Server,
+    Sync,
+    Conflicts,
+    Devices,
+    Refresh,
+    ReverseSort,
+    Unlock,
+}
+
+const fn leader_command(key: char) -> Option<LeaderCommand> {
+    match key {
+        't' => Some(LeaderCommand::ToggleTags),
+        'v' => Some(LeaderCommand::ChooseView),
+        'a' => Some(LeaderCommand::Actions),
+        'm' => Some(LeaderCommand::Mobile),
+        'j' => Some(LeaderCommand::Server),
+        's' => Some(LeaderCommand::Sync),
+        'x' => Some(LeaderCommand::Conflicts),
+        'i' => Some(LeaderCommand::Devices),
+        'r' => Some(LeaderCommand::Refresh),
+        'o' => Some(LeaderCommand::ReverseSort),
+        'p' => Some(LeaderCommand::Unlock),
+        _ => None,
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -271,6 +309,80 @@ async fn event_loop(
             continue;
         }
         match app.mode {
+            Mode::Leader => match key.code {
+                KeyCode::Char(value)
+                    if leader_command(value) == Some(LeaderCommand::ToggleTags) =>
+                {
+                    app.toggle_tags_visible();
+                    app.mode = Mode::Normal;
+                }
+                KeyCode::Char(value)
+                    if leader_command(value) == Some(LeaderCommand::ChooseView) =>
+                {
+                    app.goto_input.clear();
+                    app.goto_index = 0;
+                    app.mode = Mode::Goto;
+                }
+                KeyCode::Char(value) if leader_command(value) == Some(LeaderCommand::Actions) => {
+                    app.action_query.clear();
+                    app.mode = Mode::ActionPicker;
+                }
+                KeyCode::Char(value) if leader_command(value) == Some(LeaderCommand::Mobile) => {
+                    match session.writable_invitation().await {
+                        Ok(ticket) => {
+                            let ticket = Zeroizing::new(ticket);
+                            if let Err(error) = app.start_mobile_pairing(&ticket) {
+                                app.message = format!("could not create mobile setup: {error:#}");
+                                app.mode = Mode::Normal;
+                            }
+                        }
+                        Err(error) => {
+                            app.message = format!("could not create invitation: {error:#}");
+                            app.mode = Mode::Normal;
+                        }
+                    }
+                }
+                KeyCode::Char(value) if leader_command(value) == Some(LeaderCommand::Server) => {
+                    app.start_server_pairing();
+                }
+                KeyCode::Char(value) if leader_command(value) == Some(LeaderCommand::Sync) => {
+                    app.mode = Mode::Sync;
+                    app.message = sync_summary(app);
+                }
+                KeyCode::Char(value) if leader_command(value) == Some(LeaderCommand::Conflicts) => {
+                    app.mode = Mode::Conflicts;
+                    app.message = conflict_summary(app);
+                }
+                KeyCode::Char(value) if leader_command(value) == Some(LeaderCommand::Devices) => {
+                    app.mode = Mode::Devices;
+                    app.message = device_summary(app);
+                }
+                KeyCode::Char(value) if leader_command(value) == Some(LeaderCommand::Refresh) => {
+                    session.refresh_sync()?;
+                    let snapshot = session.snapshot().await?;
+                    hydrate(app, session, snapshot).await?;
+                    app.message = "refreshed and retried synchronization".into();
+                    app.mode = Mode::Normal;
+                }
+                KeyCode::Char(value)
+                    if leader_command(value) == Some(LeaderCommand::ReverseSort) =>
+                {
+                    app.toggle_sort();
+                    app.mode = Mode::Normal;
+                }
+                KeyCode::Char(value) if leader_command(value) == Some(LeaderCommand::Unlock) => {
+                    app.mode = Mode::Normal;
+                    suspend_tui(terminal)?;
+                    let unlock_result = unlock(app);
+                    resume_tui(terminal)?;
+                    unlock_result?;
+                }
+                KeyCode::Char(value) => {
+                    app.message = format!("unknown leader command {value}");
+                    app.mode = Mode::Normal;
+                }
+                _ => app.mode = Mode::Normal,
+            },
             Mode::Search => match key.code {
                 KeyCode::Esc | KeyCode::Enter => app.mode = Mode::Normal,
                 KeyCode::Backspace => {
@@ -655,6 +767,9 @@ async fn event_loop(
                 }
             }
             _ => match key.code {
+                KeyCode::Char(value) if value == app.leader_key => {
+                    app.mode = Mode::Leader;
+                }
                 KeyCode::Char('q') => break,
                 KeyCode::Tab => app.next_pane(),
                 KeyCode::BackTab => app.previous_pane(),
@@ -668,52 +783,11 @@ async fn event_loop(
                     app::Pane::Tags => app.select_previous_tag(),
                     _ => app.select_previous(),
                 },
-                KeyCode::Char(' ') | KeyCode::Enter if app.pane == app::Pane::Tags => {
+                KeyCode::Enter if app.pane == app::Pane::Tags => {
                     app.toggle_highlighted_tag();
                 }
                 KeyCode::Char('/') => {
                     app.mode = Mode::Search;
-                }
-                KeyCode::Char('g') => {
-                    app.goto_input.clear();
-                    app.goto_index = 0;
-                    app.mode = Mode::Goto;
-                }
-                KeyCode::Char('a') => {
-                    app.action_query.clear();
-                    app.mode = Mode::ActionPicker;
-                }
-                KeyCode::Char('s') => app.toggle_sort(),
-                KeyCode::Char('T') => app.toggle_tags_visible(),
-                KeyCode::Char('x') => {
-                    app.mode = Mode::Conflicts;
-                    app.message = conflict_summary(app);
-                }
-                KeyCode::Char('v') => {
-                    app.mode = Mode::Devices;
-                    app.message = device_summary(app);
-                }
-                KeyCode::Char('y') => {
-                    app.mode = Mode::Sync;
-                    app.message = sync_summary(app);
-                }
-                KeyCode::Char('J') => {
-                    app.start_server_pairing();
-                }
-                KeyCode::Char('M') => match session.writable_invitation().await {
-                    Ok(ticket) => {
-                        let ticket = Zeroizing::new(ticket);
-                        if let Err(error) = app.start_mobile_pairing(&ticket) {
-                            app.message = format!("could not create mobile setup: {error:#}");
-                        }
-                    }
-                    Err(error) => app.message = format!("could not create invitation: {error:#}"),
-                },
-                KeyCode::Char('r') => {
-                    session.refresh_sync()?;
-                    let snapshot = session.snapshot().await?;
-                    hydrate(app, session, snapshot).await?;
-                    app.message = "refreshed and retried synchronization".into();
                 }
                 KeyCode::Char('R') => {
                     if let Some(operation) = app.operations.first() {
@@ -756,12 +830,6 @@ async fn event_loop(
                         session.retire_device(device.clone()).await?;
                         app.message = format!("retired device {}", device.endpoint_id);
                     }
-                }
-                KeyCode::Char('p') => {
-                    suspend_tui(terminal)?;
-                    let unlock_result = unlock(app);
-                    resume_tui(terminal)?;
-                    unlock_result?;
                 }
                 KeyCode::Esc => {
                     app.mode = Mode::Normal;
@@ -1003,6 +1071,17 @@ mod cli_tests {
             Cli::command().get_version(),
             Some(xo_core::version::VERSION)
         );
+    }
+
+    #[test]
+    fn leader_keys_route_to_the_documented_commands() {
+        assert_eq!(leader_command('t'), Some(LeaderCommand::ToggleTags));
+        assert_eq!(leader_command('v'), Some(LeaderCommand::ChooseView));
+        assert_eq!(leader_command('a'), Some(LeaderCommand::Actions));
+        assert_eq!(leader_command('m'), Some(LeaderCommand::Mobile));
+        assert_eq!(leader_command('j'), Some(LeaderCommand::Server));
+        assert_eq!(leader_command('s'), Some(LeaderCommand::Sync));
+        assert_eq!(leader_command('?'), None);
     }
 
     #[test]

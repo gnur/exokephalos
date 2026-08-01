@@ -20,8 +20,9 @@ Image attachments and a native iOS application are not in scope.
 
 ### `xo` TUI
 
-The native TUI provides:
+The native TUI uses strict schema-3 command configuration; `leader-key` is one printable character and defaults to Space. It provides:
 
+- an uncluttered release-only header, a configurable leader-key popup for operational commands, and a compact footer for leader/search/edit/create/delete/restore/quit hints;
 - view and subview navigation, title search, conjunctive tag filters, sorting, note lists, and Markdown preview;
 - note creation, frontmatter/body editing, deletion, restoration, revision/conflict inspection, and encrypted-note unlocking;
 - generic action selection, URL capture, executable Steel plugins, import/export, diagnostics, retries, and device management;

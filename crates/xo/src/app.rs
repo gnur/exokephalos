@@ -7,10 +7,10 @@ use anyhow::{Context, Result, bail};
 use qrcode::render::unicode::Dense1x2;
 use qrcode::{EcLevel, QrCode};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use tempfile::NamedTempFile;
 use xo::steel_plugin::PluginChoice;
 use xo_core::behavior::{Query, WorkspaceBehavior};
@@ -31,6 +31,7 @@ pub enum Pane {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Mode {
     Normal,
+    Leader,
     Search,
     CreateTitle,
     Goto,
@@ -100,6 +101,7 @@ pub struct App {
     pub goto_index: usize,
     pub message: String,
     pub pwa_url: String,
+    pub leader_key: char,
     pub pairing: Option<ServerPairing>,
     pub mobile_pairing: Option<MobilePairing>,
     pub decrypted_preview: Option<Zeroizing<String>>,
@@ -146,6 +148,7 @@ impl App {
             goto_index: 0,
             message: String::new(),
             pwa_url: "https://xo.exokephalos.dev/".to_owned(),
+            leader_key: ' ',
             pairing: None,
             mobile_pairing: None,
             decrypted_preview: None,
@@ -754,84 +757,43 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         .direction(Direction::Vertical)
         .constraints(if has_input {
             vec![
-                Constraint::Length(4),
+                Constraint::Length(1),
                 Constraint::Length(input_height),
                 Constraint::Min(1),
+                Constraint::Length(1),
             ]
         } else {
-            vec![Constraint::Length(4), Constraint::Min(1)]
+            vec![
+                Constraint::Length(1),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ]
         })
         .split(frame.area());
-    let workspace = if app.workspace_id.is_empty() {
-        "local".to_owned()
-    } else {
-        app.workspace_id.chars().take(12).collect()
-    };
-    let status = app.sync.as_ref().map_or_else(
-        || "Offline · pending 0 · missing 0 · not converged".to_owned(),
-        |sync| {
-            format!(
-                "{:?} · pending {} · missing {} · {}",
-                sync.connectivity,
-                sync.pending_operations,
-                sync.missing_blobs.len(),
-                if sync.converged {
-                    "converged"
-                } else {
-                    "not converged"
-                }
-            )
-        },
-    );
-    let header = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(2), Constraint::Length(2)])
-        .split(vertical[0]);
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(format!(
-                "xo {} · workspace {workspace} · {status}",
-                xo_core::version::VERSION
-            )),
-            Line::from(format!(
-                "conflicts {} · devices {} · diagnostics {}{}",
-                app.conflicts.len(),
-                app.devices.len(),
-                app.diagnostics.len(),
-                if app.message.is_empty() {
-                    String::new()
-                } else {
-                    format!(" · {}", app.message)
-                }
-            )),
-        ])
-        .style(Style::default().fg(Color::Cyan)),
-        header[0],
+        Paragraph::new(format!("xo {}", xo_core::version::VERSION)).style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        vertical[0],
     );
-    let key_columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(33),
-            Constraint::Percentage(34),
-            Constraint::Percentage(33),
-        ])
-        .split(header[1]);
-    for (area, lines) in key_columns.iter().zip([
-        vec!["[↑↓/jk] select · [←→/hl] pane", "[Space] tag · [/] filter"],
-        vec![
-            "[Enter/e] edit · [c] create",
-            "[d/u] del/restore · [g] goto",
-        ],
-        vec![
-            "[a] actions · [T] tags",
-            "[M] mobile · [J] server · [q] quit",
-        ],
-    ]) {
-        frame.render_widget(
-            Paragraph::new(lines.join("\n")).style(Style::default().fg(Color::Cyan)),
-            *area,
-        );
+    let leader = if app.leader_key == ' ' {
+        "Space".to_owned()
+    } else {
+        app.leader_key.to_string()
+    };
+    let mut footer = format!(
+        "[{leader}] menu · [/] search · [e/Enter] edit · [c] create · [d] delete · [u] restore · [q] quit"
+    );
+    if !app.message.is_empty() {
+        footer.push_str(" · ");
+        footer.push_str(&app.message);
     }
+    frame.render_widget(
+        Paragraph::new(footer).style(Style::default().fg(Color::DarkGray)),
+        vertical[vertical.len() - 1],
+    );
     if has_input {
         let (title, value) = match app.mode {
             Mode::Search => (
@@ -858,7 +820,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                     .collect::<Vec<_>>()
                     .join("\n");
                 (
-                    "Goto view · type shown prefix · ↑/↓ choose · Enter apply · Esc close",
+                    "Goto view · type shown prefix · Enter apply · Esc close",
                     format!("g{}\n{menu}", app.goto_input),
                 )
             }
@@ -900,7 +862,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                     .collect::<Vec<_>>()
                     .join("\n");
                 (
-                    "Plugin results · 1-9/↑↓ select · Enter add · Esc cancel",
+                    "Plugin results · 1-9 select · Enter add · Esc cancel",
                     choices,
                 )
             }
@@ -1110,7 +1072,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             )),
         ),
         _ => (
-            "Raw Markdown",
+            "Preview",
             if app.selected_note().is_none() {
                 Text::from("No notes match the current view and filter.")
             } else {
@@ -1135,6 +1097,42 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         ),
         panes[preview_pane],
     );
+    if app.mode == Mode::Leader {
+        render_leader_menu(frame);
+    }
+}
+
+fn render_leader_menu(frame: &mut Frame<'_>) {
+    let area = centered_rect(54, 8, frame.area());
+    let menu = Text::from(vec![
+        Line::raw("t  toggle tags          v  choose view"),
+        Line::raw("a  actions              m  setup mobile client"),
+        Line::raw("j  server setup/status  s  synchronization status"),
+        Line::raw("x  conflicts            i  devices"),
+        Line::raw("r  refresh sync         o  reverse sort"),
+        Line::raw("p  unlock preview       Esc  cancel"),
+    ]);
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(menu).block(
+            Block::default()
+                .title("Leader menu")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        ),
+        area,
+    );
+}
+
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    }
 }
 
 fn render_mobile_pairing(frame: &mut Frame<'_>, app: &App, area: ratatui::layout::Rect) {
@@ -1336,10 +1334,37 @@ mod tests {
         assert!(screen.contains("Tags"));
         assert!(screen.contains("First"));
         assert!(screen.contains("Hello **world**"));
-        assert!(screen.contains(xo_core::version::VERSION));
-        assert!(screen.contains("Offline"));
-        assert!(screen.contains("[Enter/e] edit"));
-        assert!(!screen.contains("pending=0"));
+        assert!(screen.contains(&format!("xo {}", xo_core::version::VERSION)));
+        assert!(screen.contains("Preview"));
+        assert!(screen.contains("[Space] menu"));
+        assert!(screen.contains("[/] search"));
+        assert!(screen.contains("[e/Enter] edit"));
+        assert!(!screen.contains("Offline"));
+        assert!(!screen.contains("↑↓/jk"));
+    }
+
+    #[test]
+    fn leader_popup_lists_commands_and_uses_the_configured_key_in_the_footer() {
+        let mut app = fixture();
+        app.leader_key = ',';
+        app.mode = Mode::Leader;
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(screen.contains("[,] menu"));
+        assert!(screen.contains("Leader menu"));
+        assert!(screen.contains("t  toggle tags"));
+        assert!(screen.contains("v  choose view"));
+        assert!(screen.contains("a  actions"));
+        assert!(screen.contains("m  setup mobile client"));
+        assert!(screen.contains("j  server setup/status"));
+        assert!(screen.contains("s  synchronization status"));
     }
 
     #[test]

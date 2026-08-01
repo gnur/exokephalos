@@ -140,7 +140,65 @@ jobs:
           tags: []
           created: 2026-01-01T00:00:00Z
           ---
-          Browser fixture
+          Browser fixture created by a native peer.
+          EOF
+          cat > "${fixture}/source/reading.md" <<'EOF'
+          ---
+          id: bkabcde
+          type: book
+          title: TUI Reading Fixture
+          tags: [reading]
+          created: 2026-01-02T00:00:00Z
+          ---
+          Reading item created by a native TUI peer.
+          EOF
+          cat > "${fixture}/source/finished.md" <<'EOF'
+          ---
+          id: bkabcdf
+          type: book
+          title: TUI Finished Fixture
+          tags: [finished]
+          created: 2026-01-03T00:00:00Z
+          ---
+          Finished item created by a native TUI peer.
+          EOF
+          cat > "${fixture}/source/xo.scm" <<'EOF'
+          (workspace-config
+            (schema 1)
+            (default-view "library")
+            (query-limit 500)
+            (views
+              (view
+                (id "library")
+                (name "Library")
+                (key #f)
+                (show-tags #t)
+                (title-field "title")
+                (subtitle-field "type")
+                (sort-field "title")
+                (descending #f)
+                (preview #f)
+                (predicate (field-equals "type" "book"))
+                (subviews
+                  (subview
+                    (id "reading")
+                    (name "Reading")
+                    (predicate (has-tag "reading")))))
+              (view
+                (id "notes")
+                (name "Notes")
+                (key #f)
+                (show-tags #t)
+                (title-field "title")
+                (subtitle-field "type")
+                (sort-field "title")
+                (descending #f)
+                (preview #f)
+                (predicate (field-equals "type" "note"))
+                (subviews)))
+            (actions)
+            (templates)
+            (capability-grants))
           EOF
           target/debug/xo-admin import-workspace \
             "${fixture}/source" "${fixture}/state" > "${fixture}/import.out"

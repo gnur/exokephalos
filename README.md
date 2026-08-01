@@ -270,7 +270,9 @@ run `xo-admin` and `xo-syncd` concurrently against the same state directory.
 
 The TUI-first flow above does not need this step. For a headless-first setup,
 `xo-admin import-workspace` can create the replicated workspace used by the
-server from a current Markdown projection or an empty directory.
+server from a current projection or an empty directory. Markdown notes, assets,
+and valid `xo.scm`, `modules/**/*.scm`, and `plugins/**/*.scm` configuration are
+imported without modifying the source.
 
 ```console
 mkdir -p /srv/xo-seed
@@ -286,6 +288,7 @@ workspace_id=<WORKSPACE_ID>
 ticket=<WRITABLE_TICKET>
 imported=0
 assets=0
+configs=0
 ```
 
 Save both `workspace_id` and `ticket`. A writable ticket is a capability: anyone

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -24,7 +24,7 @@ struct Cli {
 enum Command {
     /// Validate every Markdown file in an existing workspace without modifying it.
     AuditWorkspace { path: PathBuf },
-    /// Import a Markdown workspace into a new native replicated workspace.
+    /// Import Markdown, assets, and Steel configuration into a replicated workspace.
     ImportWorkspace {
         /// Existing workspace to read. This directory is never modified.
         source: PathBuf,
@@ -99,6 +99,7 @@ async fn main() -> Result<()> {
             println!("ticket={}", imported.ticket);
             println!("imported={}", imported.imported);
             println!("assets={}", imported.assets);
+            println!("configs={}", imported.configs);
         }
         Command::ImportTicket { state_dir, ticket } => {
             let imported = import_ticket(&state_dir, &ticket).await?;
@@ -285,6 +286,7 @@ struct ImportResult {
     ticket: String,
     imported: usize,
     assets: usize,
+    configs: usize,
 }
 
 #[derive(Debug)]
@@ -339,6 +341,7 @@ async fn import_workspace(source: &Path, state_dir: &Path) -> Result<ImportResul
         );
     }
     let source_assets = scan_assets(&source)?;
+    let source_configs = scan_configs(&source)?;
 
     let node = IrohNode::persistent(&state_dir).await?;
     let workspace = node.create_workspace().await?;
@@ -378,15 +381,120 @@ async fn import_workspace(source: &Path, state_dir: &Path) -> Result<ImportResul
                 .context("imported asset record disappeared")?,
         );
     }
-    verify_roundtrip(&records, &report.notes, &imported_assets).await?;
+    for config in &source_configs {
+        records
+            .put_config(
+                &config.path,
+                config.bytes.clone(),
+                clock.next(wall_clock_ms),
+                BTreeSet::new(),
+            )
+            .await?;
+    }
+    verify_roundtrip(&records, &report.notes, &imported_assets, &source_configs).await?;
     let result = ImportResult {
         workspace_id: workspace.id().to_string(),
         ticket: workspace.share(true).await?,
         imported: report.notes.len(),
         assets: imported_assets.len(),
+        configs: source_configs.len(),
     };
     node.shutdown().await?;
     Ok(result)
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct SourceConfig {
+    path: String,
+    bytes: Vec<u8>,
+}
+
+fn scan_configs(source: &Path) -> Result<Vec<SourceConfig>> {
+    let mut paths = Vec::new();
+    for relative in ["xo.scm", "modules", "plugins"] {
+        let path = source.join(relative);
+        if path
+            .symlink_metadata()
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        {
+            bail!(
+                "configuration symlinks are not imported: {}",
+                path.display()
+            );
+        }
+        if path.is_file() {
+            paths.push(path);
+        } else if path.is_dir() {
+            collect_config_files(source, &path, &mut paths)?;
+        }
+    }
+    paths.sort();
+    let configs = paths
+        .into_iter()
+        .map(|path| {
+            let relative = path
+                .strip_prefix(source)
+                .context("configuration is outside source workspace")?
+                .to_string_lossy()
+                .replace('\\', "/");
+            if !xo_core::steel_runtime::valid_config_path(&relative) {
+                bail!("invalid workspace configuration path {relative}");
+            }
+            Ok(SourceConfig {
+                path: relative,
+                bytes: std::fs::read(path)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if !configs.is_empty() {
+        let main = configs
+            .iter()
+            .find(|config| config.path == "xo.scm")
+            .context("modules and plugins require a root xo.scm configuration")?;
+        let source = String::from_utf8(main.bytes.clone()).context("xo.scm is not UTF-8")?;
+        let modules = configs
+            .iter()
+            .filter(|config| config.path != "xo.scm")
+            .map(|config| {
+                Ok((
+                    config.path.clone(),
+                    String::from_utf8(config.bytes.clone())
+                        .with_context(|| format!("{} is not UTF-8", config.path))?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        xo_core::steel_runtime::SteelWorkspace::load(&source, &modules, "1970-01-01T00:00:00Z")
+            .context("validate imported workspace configuration")?;
+    }
+    Ok(configs)
+}
+
+fn collect_config_files(source: &Path, directory: &Path, paths: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            bail!(
+                "configuration symlinks are not imported: {}",
+                path.display()
+            );
+        }
+        if file_type.is_dir() {
+            collect_config_files(source, &path, paths)?;
+        } else if file_type.is_file() && path.extension().is_some_and(|value| value == "scm") {
+            let relative = path.strip_prefix(source).unwrap_or(&path);
+            if !relative.components().any(|component| {
+                component
+                    .as_os_str()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with('.'))
+            }) {
+                paths.push(path);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -476,6 +584,7 @@ async fn verify_roundtrip(
     records: &WorkspaceRecords<'_>,
     expected_notes: &[Note],
     expected_assets: &[ProjectedAsset],
+    expected_configs: &[SourceConfig],
 ) -> Result<()> {
     let snapshot = records.snapshot().await?;
     if !snapshot.diagnostics.is_empty() {
@@ -516,9 +625,12 @@ async fn verify_roundtrip(
             );
         }
     }
-    for config in &snapshot.configs {
-        if std::fs::read(projection.root().join(&config.record.path))? != config.bytes {
-            bail!("projected configuration differs: {}", config.record.path);
+    if snapshot.configs.len() != expected_configs.len() {
+        bail!("authoritative configurations differ from imported source");
+    }
+    for config in expected_configs {
+        if std::fs::read(projection.root().join(&config.path))? != config.bytes {
+            bail!("projected configuration differs: {}", config.path);
         }
     }
     Ok(())
@@ -633,10 +745,26 @@ mod tests {
         std::fs::create_dir_all(asset_path.parent().context("asset parent")?)?;
         std::fs::write(&asset_path, b"asset bytes")?;
         let asset_before = std::fs::read(&asset_path)?;
+        let mut behavior = xo_core::behavior::WorkspaceBehavior::default();
+        behavior.default_view = "notes".into();
+        behavior.views = xo_core::behavior::default_views();
+        behavior.views[0]
+            .subviews
+            .push(xo_core::behavior::SubviewDescriptor {
+                id: "important".into(),
+                name: "Important".into(),
+                predicate: xo_core::behavior::Predicate::HasTag {
+                    tag: "important".into(),
+                },
+            });
+        let config = xo_core::steel_runtime::encode_config(&behavior, false);
+        std::fs::write(source.join("xo.scm"), &config)?;
 
         let imported = import_workspace(&source, &directory.path().join("native-state")).await?;
         assert_eq!(imported.imported, 1);
         assert_eq!(imported.assets, 1);
+        assert_eq!(imported.configs, 1);
+        assert_eq!(std::fs::read_to_string(source.join("xo.scm"))?, config);
         assert_eq!(std::fs::read(source.join(&note.path))?, before);
         assert_eq!(std::fs::read(asset_path)?, asset_before);
         assert!(!source.join(".xo").exists());

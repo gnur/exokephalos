@@ -421,6 +421,119 @@ mod tests {
         Ok(())
     }
 
+    fn library_behavior() -> WorkspaceBehavior {
+        WorkspaceBehavior {
+            default_view: "library".into(),
+            views: vec![xo_core::behavior::ViewDescriptor {
+                id: "library".into(),
+                name: "Library".into(),
+                key: None,
+                show_tags: true,
+                title_field: "title".into(),
+                subtitle_field: Some("type".into()),
+                sort_field: Some("title".into()),
+                descending: false,
+                preview: None,
+                predicate: Predicate::FieldEquals {
+                    field: "type".into(),
+                    value: "book".into(),
+                },
+                subviews: vec![xo_core::behavior::SubviewDescriptor {
+                    id: "reading".into(),
+                    name: "Reading".into(),
+                    predicate: Predicate::HasTag {
+                        tag: "reading".into(),
+                    },
+                }],
+            }],
+            ..WorkspaceBehavior::default()
+        }
+    }
+
+    fn reading_book() -> Note {
+        Note {
+            id: NoteId::new("bkabcde"),
+            path: "books/bkabcde.md".into(),
+            frontmatter: Frontmatter::from([
+                ("id".into(), FrontmatterValue::String("bkabcde".into())),
+                (
+                    "title".into(),
+                    FrontmatterValue::String("TUI reading fixture".into()),
+                ),
+                ("type".into(), FrontmatterValue::String("book".into())),
+                (
+                    "tags".into(),
+                    FrontmatterValue::Sequence(vec![FrontmatterValue::String("reading".into())]),
+                ),
+            ]),
+            body: "created by the native TUI peer".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn tui_peer_receives_replicated_views_subviews_and_items() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut source = WorkspaceSession::open(
+            &directory.path().join("source-state"),
+            None,
+            None,
+            directory.path().join("source-notes"),
+        )
+        .await?;
+        let behavior = library_behavior();
+        WorkspaceRecords::new(&source.workspace)
+            .put_config(
+                "xo.scm",
+                xo_core::steel_runtime::encode_config(&behavior, false).into_bytes(),
+                source.clock.next(now_ms()?),
+                BTreeSet::new(),
+            )
+            .await?;
+        source.save(&reading_book()).await?;
+        let ticket = source.writable_invitation().await?;
+
+        let mut peer = WorkspaceSession::open(
+            &directory.path().join("peer-state"),
+            None,
+            Some(&ticket),
+            directory.path().join("peer-notes"),
+        )
+        .await?;
+        let mut replicated_snapshot = None;
+        for _ in 0..200 {
+            if let Ok(snapshot) = peer.snapshot().await
+                && snapshot
+                    .configs
+                    .iter()
+                    .any(|config| config.record.path == "xo.scm")
+                && snapshot
+                    .notes
+                    .iter()
+                    .any(|note| note.id.as_str() == "bkabcde")
+            {
+                replicated_snapshot = Some(snapshot);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let snapshot = replicated_snapshot.context("TUI peer did not receive note and config")?;
+        let replicated = peer.behavior().await?;
+        assert_eq!(replicated.default_view, "library");
+        assert_eq!(replicated.views[0].subviews[0].id, "reading");
+        let matches = replicated.query(
+            &snapshot.notes,
+            &xo_core::behavior::Query {
+                view: "library".into(),
+                subview: Some("reading".into()),
+                ..xo_core::behavior::Query::default()
+            },
+        )?;
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].id.as_str(), "bkabcde");
+        peer.shutdown().await?;
+        source.shutdown().await
+    }
+
     #[tokio::test]
     async fn tui_pairing_invitation_connects_a_sync_peer() -> Result<()> {
         let directory = tempfile::tempdir()?;

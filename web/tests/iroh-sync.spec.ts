@@ -111,6 +111,28 @@ test('checks the deployed version every ten minutes', async ({ page, request }) 
   await expect(page.getByText('A newer xo release is available.')).toBeVisible();
 });
 
+test('receives native items and replicated views and subviews', async ({ page }) => {
+  test.skip(!nativeTicket, 'XO_IROH_TICKET is required for the networked convergence test');
+  await page.goto('/');
+  await expect(page.getByText('Runtime ready')).toBeVisible();
+  await page.getByLabel('Writable workspace ticket').fill(nativeTicket!);
+  await page.getByRole('button', { name: 'Join and synchronize' }).click();
+  await expect(page.getByRole('button', { name: 'New note' })).toBeVisible();
+
+  const workspaceNavigation = page.getByRole('navigation', { name: 'Workspace' });
+  await expect(workspaceNavigation.getByRole('button', { name: 'Library' })).toBeVisible({ timeout: 60_000 });
+  await expect(workspaceNavigation.getByRole('button', { name: 'Reading' })).toBeVisible();
+  await workspaceNavigation.getByRole('button', { name: 'Library' }).click();
+  await expect(page.getByText('TUI Reading Fixture', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('TUI Finished Fixture', { exact: true }).first()).toBeVisible();
+  await workspaceNavigation.getByRole('button', { name: 'Reading' }).click();
+  await expect(page.getByText('TUI Reading Fixture', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('TUI Finished Fixture', { exact: true })).toHaveCount(0);
+  await workspaceNavigation.getByRole('button', { name: 'Notes' }).click();
+  await expect(page.getByText('Browser fixture', { exact: true }).first()).toBeVisible();
+  await expect(page.locator('.markdown-preview')).toContainText('created by a native peer');
+});
+
 test('converges two browser peers through a native Iroh document peer', async ({ browser }) => {
   test.skip(!nativeTicket, 'XO_IROH_TICKET is required for the networked convergence test');
   const firstContext = await browser.newContext();
@@ -126,6 +148,8 @@ test('converges two browser peers through a native Iroh document peer', async ({
     await first.getByLabel('Writable workspace ticket').fill(nativeTicket!);
     await first.getByRole('button', { name: 'Join and synchronize' }).click();
     await expect(first.getByRole('button', { name: 'New note' })).toBeVisible();
+    await first.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name: 'Notes' }).click();
+
     await first.getByRole('button', { name: 'New note' }).click();
     await first.getByLabel('Title', { exact: true }).fill(title);
     await first.getByLabel('Frontmatter and Markdown').fill(`---\ntitle: ${title}\ntype: note\ntags: [browser]\n---\n${value}`);
@@ -135,6 +159,7 @@ test('converges two browser peers through a native Iroh document peer', async ({
     await second.goto(`/#ticket=${encodeURIComponent(nativeTicket!)}`);
     await expect(second.getByRole('button', { name: 'New note' })).toBeVisible();
     await expect(second).toHaveURL(/\/$/);
+    await second.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name: 'Notes' }).click();
     await expect(second.getByText(title, { exact: true }).first()).toBeVisible({ timeout: 60_000 });
     await expect(second.locator('.markdown-preview')).toContainText(value);
   } finally {

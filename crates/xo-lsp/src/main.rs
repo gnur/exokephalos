@@ -1,7 +1,11 @@
 use clap::Parser;
 
 #[derive(Debug, Parser)]
-#[command(name = "xo-lsp", version, about = "Editor integration for exokephalos")]
+#[command(
+    name = "xo-lsp",
+    version = xo_core::version::VERSION,
+    about = "Editor integration for exokephalos"
+)]
 struct Cli {}
 
 fn main() {

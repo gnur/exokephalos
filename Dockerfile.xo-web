@@ -1,6 +1,10 @@
 # syntax=docker/dockerfile:1.7
 
+ARG XO_VERSION=dev
+
 FROM --platform=$BUILDPLATFORM docker.io/library/rust:1.89-bookworm AS wasm-builder
+ARG XO_VERSION
+ENV XO_VERSION=$XO_VERSION
 WORKDIR /source
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends clang \
@@ -17,6 +21,8 @@ RUN mkdir -p web/src/generated/xo-web \
         --out-dir ../../web/src/generated/xo-web
 
 FROM --platform=$BUILDPLATFORM docker.io/library/node:22-alpine AS web-builder
+ARG XO_VERSION
+ENV XO_VERSION=$XO_VERSION
 WORKDIR /source/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci

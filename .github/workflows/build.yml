@@ -18,6 +18,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
+  XO_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
 
 jobs:
   quality:
@@ -118,6 +119,7 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:4173/client/route | grep -q '<title>xo</title>'
           curl --fail --silent http://127.0.0.1:4173/manifest.webmanifest | grep -q '"name":"xo"'
+          curl --fail --silent http://127.0.0.1:4173/version.json | grep -q "\"version\":\"${XO_VERSION}\""
 
       - name: Install Chromium
         working-directory: web
@@ -203,6 +205,17 @@ jobs:
 
       - name: Build release binaries
         run: cargo build --workspace --release --locked --target ${{ matrix.target }}
+
+      - name: Verify embedded release version
+        shell: bash
+        run: |
+          extension=""
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            extension=".exe"
+          fi
+          for binary in xo xo-admin xo-lsp xo-syncd; do
+            "target/${{ matrix.target }}/release/${binary}${extension}" --version | grep -F "${XO_VERSION}"
+          done
 
       - name: Package Unix release binaries
         if: runner.os != 'Windows'
@@ -361,6 +374,8 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
+          build-args: |
+            XO_VERSION=${{ env.XO_VERSION }}
           cache-from: type=gha,scope=xo-web
           cache-to: type=gha,mode=max,scope=xo-web
 
@@ -374,6 +389,14 @@ jobs:
       actions: read
       contents: write
     steps:
+      - name: Validate timestamp release tag
+        shell: bash
+        run: |
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
+            echo "release tag must be a UTC timestamp such as 20260731T171136Z" >&2
+            exit 1
+          fi
+
       - name: Download release binaries
         uses: actions/download-artifact@v8
         with:

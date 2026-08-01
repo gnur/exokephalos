@@ -2,7 +2,7 @@ export type RuntimeState = 'starting' | 'ready' | 'error';
 
 export interface RuntimeInfo {
   api_version: number;
-  crate_version: string;
+  version: string;
   steel: boolean;
   iroh: boolean;
   persistence: string;

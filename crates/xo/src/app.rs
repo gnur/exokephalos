@@ -803,7 +803,10 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         .split(vertical[0]);
     frame.render_widget(
         Paragraph::new(vec![
-            Line::from(format!("xo · workspace {workspace} · {status}")),
+            Line::from(format!(
+                "xo {} · workspace {workspace} · {status}",
+                xo_core::version::VERSION
+            )),
             Line::from(format!(
                 "conflicts {} · devices {} · diagnostics {}{}",
                 app.conflicts.len(),
@@ -1347,6 +1350,7 @@ mod tests {
         assert!(screen.contains("Tags"));
         assert!(screen.contains("First"));
         assert!(screen.contains("Hello **world**"));
+        assert!(screen.contains(xo_core::version::VERSION));
         assert!(screen.contains("Offline"));
         assert!(screen.contains("[Enter/e] edit"));
         assert!(!screen.contains("pending=0"));

@@ -29,7 +29,7 @@ use zeroize::Zeroizing;
 #[derive(Debug, Parser)]
 #[command(
     name = "xo",
-    version,
+    version = xo_core::version::VERSION,
     about = "Offline-first personal knowledge workspace"
 )]
 struct Cli {
@@ -993,7 +993,17 @@ fn sync_summary(app: &App) -> String {
 
 #[cfg(test)]
 mod cli_tests {
+    use clap::CommandFactory as _;
+
     use super::*;
+
+    #[test]
+    fn command_version_matches_the_embedded_git_version() {
+        assert_eq!(
+            Cli::command().get_version(),
+            Some(xo_core::version::VERSION)
+        );
+    }
 
     #[test]
     fn no_subcommand_selects_the_tui_mode() {

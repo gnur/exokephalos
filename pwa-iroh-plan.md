@@ -56,7 +56,10 @@ IndexedDB
 Run Rust, Iroh, and Steel in a dedicated worker. The UI thread should only
 render React and issue coarse commands. A service worker remains responsible
 for the application shell and static asset cache; it must not own the Iroh
-endpoint because browsers may suspend or terminate it at any time.
+endpoint because browsers may suspend or terminate it at any time. The cached
+application embeds the release tag and compares it with an uncached static
+version manifest on load, page restoration, reconnect, and every ten minutes.
+Updates require an explicit user-confirmed full refresh.
 
 The browser should be a real Iroh participant while the page is active. Iroh's
 browser implementation is relay-only: browser peers cannot use UDP or hole

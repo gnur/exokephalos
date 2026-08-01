@@ -36,8 +36,59 @@ type InstallPrompt = Event & {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
 };
 
-const updateServiceWorker = registerSW({ immediate: true });
+const APP_VERSION = __XO_VERSION__;
+const UPDATE_INTERVAL_MS = 10 * 60 * 1_000;
+const UPDATE_EVENT = 'xo-update-available';
+let updateIsAvailable = false;
+let serviceWorkerRegistration: ServiceWorkerRegistration | undefined;
+
+const updateServiceWorker = registerSW({
+  immediate: true,
+  onNeedRefresh() {
+    announceUpdate();
+  },
+  onRegisteredSW(_serviceWorkerUrl, registration) {
+    serviceWorkerRegistration = registration;
+  },
+});
 let scannedWorkspaceTicket = consumeWorkspaceTicket();
+
+function announceUpdate() {
+  updateIsAvailable = true;
+  window.dispatchEvent(new Event(UPDATE_EVENT));
+}
+
+async function checkForUpdates() {
+  try {
+    const registration = serviceWorkerRegistration ?? await navigator.serviceWorker.getRegistration();
+    if (registration) {
+      serviceWorkerRegistration = registration;
+      await registration.update();
+    }
+  } catch {
+    // The service worker can be unavailable during first load or while offline.
+  }
+  try {
+    const response = await fetch(`/version.json?checked=${Date.now()}`, {
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) return;
+    const manifest = await response.json() as { version?: string };
+    if (manifest.version && manifest.version !== APP_VERSION) announceUpdate();
+  } catch {
+    // Keep running the cached application while the server is unavailable.
+  }
+}
+
+async function refreshFullApp() {
+  try {
+    await serviceWorkerRegistration?.update();
+    await updateServiceWorker(true);
+  } finally {
+    window.location.reload();
+  }
+}
 
 function consumeWorkspaceTicket() {
   const parameters = new URLSearchParams(window.location.hash.replace(/^#/, ''));
@@ -57,6 +108,7 @@ function App() {
   const [online, setOnline] = useState(navigator.onLine);
   const [installPrompt, setInstallPrompt] = useState<InstallPrompt>();
   const [ticketInput, setTicketInput] = useState('');
+  const [updateAvailable, setUpdateAvailable] = useState(updateIsAvailable);
 
   useEffect(() => {
     const runtime = new XoRuntime();
@@ -111,7 +163,24 @@ function App() {
   }, [state, report?.status.workspaceId]);
 
   useEffect(() => {
-    const onOnline = () => setOnline(true);
+    const onUpdate = () => setUpdateAvailable(true);
+    const onPageShow = () => void checkForUpdates();
+    window.addEventListener(UPDATE_EVENT, onUpdate);
+    window.addEventListener('pageshow', onPageShow);
+    void checkForUpdates();
+    const timer = window.setInterval(() => void checkForUpdates(), UPDATE_INTERVAL_MS);
+    return () => {
+      window.removeEventListener(UPDATE_EVENT, onUpdate);
+      window.removeEventListener('pageshow', onPageShow);
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onOnline = () => {
+      setOnline(true);
+      void checkForUpdates();
+    };
     const onOffline = () => setOnline(false);
     const onInstall = (event: Event) => {
       event.preventDefault();
@@ -181,6 +250,13 @@ function App() {
           </div>
         </header>
 
+        {updateAvailable ? (
+          <div className="update-banner" role="status">
+            <span>A newer xo release is available.</span>
+            <button onClick={() => void refreshFullApp()}><RefreshCw /> Refresh full app</button>
+          </div>
+        ) : null}
+
         <main>
           {hasWorkspace && report ? (
             <WorkspaceView
@@ -202,15 +278,17 @@ function App() {
               onJoin={() => void runWorkspace((runtime) => runtime.joinWorkspace(ticketInput))}
               installPrompt={installPrompt}
               onInstall={() => void install()}
+              onCheckForUpdates={() => void checkForUpdates()}
             />
           )}
         </main>
+        <footer className="app-footer">xo {APP_VERSION}</footer>
       </div>
     </div>
   );
 }
 
-function Onboarding({ state, report, error, busy, ticket, onTicket, onCreate, onJoin, installPrompt, onInstall }: {
+function Onboarding({ state, report, error, busy, ticket, onTicket, onCreate, onJoin, installPrompt, onInstall, onCheckForUpdates }: {
   state: RuntimeState;
   report?: RuntimeReport;
   error: string;
@@ -221,6 +299,7 @@ function Onboarding({ state, report, error, busy, ticket, onTicket, onCreate, on
   onJoin: () => void;
   installPrompt?: InstallPrompt;
   onInstall: () => void;
+  onCheckForUpdates: () => void;
 }) {
   return (
     <>
@@ -231,7 +310,7 @@ function Onboarding({ state, report, error, busy, ticket, onTicket, onCreate, on
           <p className="lede">Create a new Iroh document or join xo-syncd with a writable ticket. Docs, Blobs, Gossip, Steel, and recovery all run in this browser worker.</p>
           <div className="hero-actions">
             <button className="primary" disabled={busy || state !== 'ready'} onClick={onCreate}>{busy ? <LoaderCircle className="spin" /> : <Plus />} Create workspace</button>
-            {installPrompt ? <button className="secondary" onClick={onInstall}><Download /> Install xo</button> : <button className="secondary" onClick={() => void updateServiceWorker(true)}>Check for updates</button>}
+            {installPrompt ? <button className="secondary" onClick={onInstall}><Download /> Install xo</button> : <button className="secondary" onClick={onCheckForUpdates}>Check for updates</button>}
           </div>
         </div>
         <RuntimeCard state={state} report={report} error={error} />
@@ -323,7 +402,7 @@ function NavItem({ icon, label, active = false }: { icon: React.ReactNode; label
 }
 
 function RuntimeCard({ state, report, error }: { state: RuntimeState; report?: RuntimeReport; error: string }) {
-  return <article className={`runtime-card ${state}`}><div className="runtime-header"><span className="window-dots"><i /><i /><i /></span><code>xo-runtime.worker</code></div><div className="runtime-body">{state === 'starting' ? <LoaderCircle className="spin" /> : state === 'ready' ? <Check /> : <CircleAlert />}<div><strong>{state === 'starting' ? 'Starting Iroh runtime…' : state === 'ready' ? 'Runtime ready' : 'Runtime unavailable'}</strong><p>{state === 'ready' ? `xo-web ${report?.runtime.crate_version} · ${short(report?.status.endpointId)}` : state === 'error' ? error : 'Restoring encrypted identity and opening the relay'}</p></div></div><dl><div><dt>application server</dt><dd>none</dd></div><div><dt>persistence</dt><dd>{report?.indexedDb ? 'IndexedDB ready' : 'checking'}</dd></div><div><dt>Iroh transport</dt><dd>{report?.runtime.iroh ? 'relay-only E2EE' : 'starting'}</dd></div><div><dt>previous checkpoint</dt><dd>{report?.restoredAt ? 'restored' : 'new browser'}</dd></div></dl></article>;
+  return <article className={`runtime-card ${state}`}><div className="runtime-header"><span className="window-dots"><i /><i /><i /></span><code>xo-runtime.worker</code></div><div className="runtime-body">{state === 'starting' ? <LoaderCircle className="spin" /> : state === 'ready' ? <Check /> : <CircleAlert />}<div><strong>{state === 'starting' ? 'Starting Iroh runtime…' : state === 'ready' ? 'Runtime ready' : 'Runtime unavailable'}</strong><p>{state === 'ready' ? `xo-web ${report?.runtime.version} · ${short(report?.status.endpointId)}` : state === 'error' ? error : 'Restoring encrypted identity and opening the relay'}</p></div></div><dl><div><dt>application server</dt><dd>none</dd></div><div><dt>persistence</dt><dd>{report?.indexedDb ? 'IndexedDB ready' : 'checking'}</dd></div><div><dt>Iroh transport</dt><dd>{report?.runtime.iroh ? 'relay-only E2EE' : 'starting'}</dd></div><div><dt>previous checkpoint</dt><dd>{report?.restoredAt ? 'restored' : 'new browser'}</dd></div></dl></article>;
 }
 
 function StatusCard({ icon, title, description, ready }: { icon: React.ReactNode; title: string; description: string; ready: boolean }) {

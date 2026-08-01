@@ -29,9 +29,10 @@ The examples below assume those binaries have been copied somewhere in
 `PATH`.
 
 GitHub Actions builds release archives for Linux x86-64, Linux ARM64, macOS
-ARM64, and Windows x86-64. Pushing any tag creates the corresponding GitHub
-Release automatically with generated release notes, all four archives, and a
-`SHA256SUMS` file.
+ARM64, and Windows x86-64. Pushing a UTC timestamp tag creates the corresponding
+GitHub Release automatically with generated release notes, all four archives,
+the static PWA, and a `SHA256SUMS` file. The exact tag is embedded as the version
+reported by every binary and by the PWA.
 
 Create a release tag from a clean, fully committed checkout with:
 
@@ -57,7 +58,10 @@ uses no application service or application API.
 
 The current UI exposes the verified raw document snapshot so synchronization
 and recovery are testable end to end. Mapping those records into the complete
-xo note, view, revision, and conflict UI is the next milestone.
+xo note, view, revision, and conflict UI is the next milestone. The footer shows
+the embedded release tag. The PWA compares it with the uncached server version
+on load, after a cached page is restored, when connectivity returns, and every
+ten minutes. A changed deployment produces an explicit full-refresh banner.
 
 ### Pair a phone from the TUI
 

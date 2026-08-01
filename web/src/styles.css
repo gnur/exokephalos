@@ -60,7 +60,7 @@ nav { display: grid; gap: 5px; }
 .privacy-note { display: flex; gap: 10px; margin-top: 22px; padding: 13px; border: 1px solid var(--line); border-radius: 10px; color: #71869b; font-size: 0.72rem; line-height: 1.45; }
 .privacy-note svg { width: 16px; flex: none; color: var(--aqua); }
 
-.workspace { min-width: 0; }
+.workspace { min-width: 0; min-height: 100dvh; display: flex; flex-direction: column; }
 .topbar {
   height: 72px; display: flex; align-items: center; gap: 18px; padding: 0 34px;
   border-bottom: 1px solid var(--line); background: rgba(8, 17, 31, 0.72); backdrop-filter: blur(14px);
@@ -76,8 +76,19 @@ kbd { border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px; color
 .connection svg { width: 17px; }
 .connection.online svg { color: var(--aqua); }
 .connection.offline svg { color: var(--amber); }
+.update-banner {
+  display: flex; align-items: center; justify-content: center; gap: 18px; padding: 10px 18px;
+  border-bottom: 1px solid rgba(245, 190, 104, .3); color: #f3d39b;
+  background: rgba(245, 190, 104, .1); font-size: .78rem;
+}
+.update-banner button {
+  min-height: 34px; display: inline-flex; align-items: center; gap: 7px; border: 1px solid rgba(245, 190, 104, .36);
+  border-radius: 7px; padding: 0 12px; color: #ffe3b4; background: rgba(8, 17, 31, .5);
+}
+.update-banner svg { width: 15px; }
 
-main { width: min(1240px, 100%); margin: 0 auto; padding: clamp(30px, 5vw, 72px); }
+main { flex: 1; width: min(1240px, 100%); margin: 0 auto; padding: clamp(30px, 5vw, 72px); }
+.app-footer { padding: 16px 24px; border-top: 1px solid var(--line); color: #60768b; text-align: center; font: .64rem 'DM Mono', monospace; }
 .hero { min-height: 430px; display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(360px, .88fr); align-items: center; gap: clamp(35px, 7vw, 100px); border-bottom: 1px solid var(--line); padding-bottom: 66px; }
 .eyebrow { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; color: var(--aqua); font: 500 0.7rem 'DM Mono', monospace; letter-spacing: .12em; text-transform: uppercase; }
 .eyebrow svg { width: 14px; }
@@ -202,6 +213,8 @@ h2 { margin: 0; color: var(--bright); font-size: clamp(1.4rem, 2.3vw, 2rem); let
   .search { flex: 1; width: auto; }
   .search kbd { display: none; }
   .connection span { display: none; }
+  .update-banner { align-items: stretch; flex-direction: column; gap: 8px; }
+  .update-banner button { justify-content: center; }
   .hero { min-height: 0; padding-bottom: 44px; gap: 34px; }
   h1 { font-size: clamp(2.5rem, 14vw, 4rem); }
   .join-section { grid-template-columns: 1fr; padding: 42px 0; }

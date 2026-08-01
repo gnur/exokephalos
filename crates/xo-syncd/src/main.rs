@@ -17,7 +17,7 @@ use operator::{OperatorState, log_event};
 #[derive(Debug, Parser)]
 #[command(
     name = "xo-syncd",
-    version,
+    version = xo_core::version::VERSION,
     about = "Durable exokephalos replication peer"
 )]
 struct Cli {

@@ -23,7 +23,7 @@ fn start() {
 pub fn runtime_info() -> String {
     serde_json::json!({
         "api_version": 1,
-        "crate_version": env!("CARGO_PKG_VERSION"),
+        "version": env!("XO_BUILD_VERSION"),
         "steel": true,
         "iroh": true,
         "persistence": "indexeddb-recovery",
@@ -72,6 +72,7 @@ mod tests {
     fn runtime_contract_is_versioned() {
         let info: serde_json::Value = serde_json::from_str(&runtime_info()).unwrap();
         assert_eq!(info["api_version"], 1);
+        assert_eq!(info["version"], env!("XO_BUILD_VERSION"));
         assert_eq!(info["steel"], true);
         assert_eq!(info["iroh"], true);
     }

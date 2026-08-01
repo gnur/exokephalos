@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 
 const nativeTicket = process.env.XO_IROH_TICKET;
 
-test('creates a relay-backed Iroh document and recovers an offline write', async ({ page, context }) => {
+test('creates a relay-backed Iroh document and recovers an offline write', async ({ page, context, request }) => {
   const consoleErrors: string[] = [];
   page.on('console', (message) => {
     if (message.type() === 'error') consoleErrors.push(message.text());
@@ -11,6 +11,11 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   await page.goto('/');
   await expect(page.getByText('Runtime ready')).toBeVisible();
   await expect(page.getByText('relay-only E2EE')).toBeVisible();
+  const versionResponse = await request.get('/version.json');
+  const deployed = await versionResponse.json() as { version: string };
+  await expect(page.locator('.app-footer')).toHaveText(`xo ${deployed.version}`);
+  await expect(page.locator('.runtime-card')).toContainText(`xo-web ${deployed.version}`);
+  await expect(page.getByText('A newer xo release is available.')).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Create workspace' }).click();
   await expect(page.getByText('Workspace online.')).toBeVisible();
@@ -49,6 +54,48 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   await expect(page.getByText(/Cached entries and pending writes remain available offline/)).toBeVisible();
 
   expect(consoleErrors.filter((message) => !message.includes('net::ERR_INTERNET_DISCONNECTED'))).toEqual([]);
+});
+
+test('offers a full refresh when the deployed version changes', async ({ page }) => {
+  await page.route('**/version.json*', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ version: '20991231T235959Z' }),
+    });
+  });
+  await page.goto('/');
+  await expect(page.getByText('A newer xo release is available.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Refresh full app' })).toBeVisible();
+});
+
+test('checks the deployed version after a service-worker cached reload', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  await page.route('**/version.json*', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ version: '20991231T235959Z' }),
+    });
+  });
+  await page.reload();
+  await expect(page.getByText('A newer xo release is available.')).toBeVisible();
+});
+
+test('checks the deployed version every ten minutes', async ({ page, request }) => {
+  const current = await (await request.get('/version.json')).json() as { version: string };
+  let deployedVersion = current.version;
+  await page.route('**/version.json*', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ version: deployedVersion }),
+    });
+  });
+  await page.clock.install();
+  await page.goto('/');
+  await expect(page.getByText('A newer xo release is available.')).toHaveCount(0);
+  deployedVersion = '20991231T235959Z';
+  await page.clock.fastForward(10 * 60 * 1_000);
+  await expect(page.getByText('A newer xo release is available.')).toBeVisible();
 });
 
 test('converges two browser peers through a native Iroh document peer', async ({ browser }) => {

@@ -19,6 +19,7 @@ pub mod rotation;
 #[cfg(feature = "steel")]
 pub mod steel_runtime;
 pub mod sync_state;
+pub mod version;
 pub mod watcher;
 pub mod wikilink;
 #[cfg(feature = "iroh-sync")]

@@ -10,7 +10,11 @@ use xo_core::records::WorkspaceRecords;
 use xo_core::{ActorId, AssetId, CURRENT_SCHEMA, HlcClock, Note, NoteRevision};
 
 #[derive(Debug, Parser)]
-#[command(name = "xo-admin", version, about = "Workspace administration")]
+#[command(
+    name = "xo-admin",
+    version = xo_core::version::VERSION,
+    about = "Workspace administration"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

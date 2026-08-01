@@ -1,5 +1,6 @@
 use thiserror::Error;
 
+use crate::NoteId;
 use crate::domain::{Frontmatter, FrontmatterValue};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -64,6 +65,37 @@ pub fn tags(frontmatter: &Frontmatter) -> Vec<&str> {
             .collect(),
         _ => Vec::new(),
     }
+}
+
+#[must_use]
+pub fn required_frontmatter(mut frontmatter: Frontmatter, id: &str, created: &str) -> Frontmatter {
+    frontmatter.insert("id".into(), FrontmatterValue::String(id.into()));
+    frontmatter.insert("created".into(), FrontmatterValue::String(created.into()));
+    if !matches!(
+        frontmatter.get("tags"),
+        Some(FrontmatterValue::Sequence(_) | FrontmatterValue::String(_))
+    ) {
+        frontmatter.insert("tags".into(), FrontmatterValue::Sequence(vec![]));
+    }
+    if !matches!(frontmatter.get("title"), Some(FrontmatterValue::String(_))) {
+        frontmatter.insert("title".into(), FrontmatterValue::String("Untitled".into()));
+    }
+    if !matches!(frontmatter.get("type"), Some(FrontmatterValue::String(_))) {
+        frontmatter.insert("type".into(), FrontmatterValue::String("note".into()));
+    }
+    frontmatter
+}
+
+#[must_use]
+pub fn canonical_note_path(id: &NoteId, frontmatter: &Frontmatter) -> String {
+    let title = match frontmatter.get("title") {
+        Some(FrontmatterValue::String(title)) => title.as_str(),
+        _ => "untitled",
+    };
+    let slug = slugify(title);
+    let slug = if slug.is_empty() { "untitled" } else { &slug };
+    let prefix = id.as_str().chars().take(3).collect::<String>();
+    format!("{prefix}/{id}-{slug}.md")
 }
 
 #[must_use]

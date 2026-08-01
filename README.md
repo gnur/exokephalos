@@ -50,16 +50,19 @@ changes exist. Pushing the tag starts the GitHub Release workflow.
 `xo-web` is a static client-side application with a typed dedicated-worker RPC
 layer, sandboxed Steel, and direct browser Iroh Docs/Blobs/Gossip in Rust
 WebAssembly. It can create a writable document, join an existing writable
-ticket, synchronize through Iroh's end-to-end encrypted browser relay, publish
-entries offline, recover cached entries and pending writes after reload, and
-converge two browser contexts through a native `xo-syncd` peer. Endpoint and
+ticket, synchronize through Iroh's end-to-end encrypted browser relay, create
+and edit notes offline, recover cached records and pending revisions after reload,
+and converge two browser contexts through a native `xo-syncd` peer. Endpoint and
 author keys plus the writable capability are encrypted in IndexedDB. The PWA
 uses no application service or application API.
 
-The current UI exposes the verified raw document snapshot so synchronization
-and recovery are testable end to end. Mapping those records into the complete
-xo note, view, revision, and conflict UI is the next milestone. The footer shows
-the embedded release tag. The PWA compares it with the uncached server version
+The workspace UI loads replicated Steel view configuration, presents views and
+subviews, and supports Rust-evaluated search and tag filtering. Notes can be
+created, edited as frontmatter plus Markdown, deleted, restored, and inspected
+through their revision and conflict history. Rust/Wasm validates records,
+resolves heads, evaluates view predicates, and prepares immutable revision/head
+writes; React owns only presentation. A raw document explorer remains available
+for diagnostics. The footer shows the embedded release tag. The PWA compares it with the uncached server version
 on load, after a cached page is restored, when connectivity returns, and every
 ten minutes. A changed deployment produces an explicit full-refresh banner.
 

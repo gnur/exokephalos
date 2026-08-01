@@ -7,8 +7,19 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = []
+default = ["native"]
+native = [
+    "dep:aes-gcm",
+    "dep:argon2",
+    "dep:base64",
+    "dep:notify",
+    "dep:regex",
+    "dep:rusqlite",
+    "dep:tempfile",
+    "dep:zeroize",
+]
 iroh-sync = [
+    "native",
     "dep:futures-lite",
     "dep:iroh",
     "dep:iroh-blobs",
@@ -19,10 +30,10 @@ iroh-sync = [
 steel = ["dep:steel-core"]
 
 [dependencies]
-aes-gcm.workspace = true
+aes-gcm = { workspace = true, optional = true }
 anyhow.workspace = true
-argon2.workspace = true
-base64.workspace = true
+argon2 = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
 blake3.workspace = true
 ciborium.workspace = true
 futures-lite = { workspace = true, optional = true }
@@ -30,19 +41,19 @@ iroh = { workspace = true, optional = true }
 iroh-blobs = { workspace = true, optional = true }
 iroh-docs = { workspace = true, optional = true }
 iroh-gossip = { workspace = true, optional = true }
-notify.workspace = true
+notify = { workspace = true, optional = true }
 rand.workspace = true
-regex.workspace = true
-rusqlite.workspace = true
+regex = { workspace = true, optional = true }
+rusqlite = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 steel-core = { workspace = true, optional = true }
-tempfile.workspace = true
+tempfile = { workspace = true, optional = true }
 thiserror.workspace = true
 time.workspace = true
 tokio = { workspace = true, optional = true }
-zeroize.workspace = true
+zeroize = { workspace = true, optional = true }
 
 [lints]
 workspace = true

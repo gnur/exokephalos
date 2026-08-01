@@ -18,8 +18,8 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   await expect(page.getByText('A newer xo release is available.')).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Create workspace' }).click();
-  await expect(page.getByText('Workspace online.')).toBeVisible();
-  await expect(page.getByText('Iroh document connected')).toBeVisible();
+  await expect(page.locator('.notes-toolbar').getByRole('heading', { name: 'Notes' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'New note' })).toBeVisible();
   await page.getByRole('button', { name: 'Reveal ticket' }).click();
   const ticket = await page.locator('.ticket-output').inputValue();
   const serializedVault = await page.evaluate(async () => {
@@ -39,19 +39,32 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   });
   expect(serializedVault).not.toContain(ticket);
 
-  await page.getByLabel('Key').fill('web/playwright');
-  await page.getByLabel('UTF-8 value').fill('survives browser recovery');
-  await page.getByRole('button', { name: 'Commit to Iroh Docs' }).click();
-  await expect(page.locator('.entry-list').getByText('web/playwright')).toBeVisible();
-  await expect(page.locator('.entry-list').getByText('survives browser recovery')).toBeVisible();
+  await page.getByRole('button', { name: 'New note' }).click();
+  await page.getByLabel('Title', { exact: true }).fill('Web Playwright');
+  await page.getByLabel('Frontmatter and Markdown').fill('---\ntitle: Web Playwright\ntype: note\ntags: [browser, test]\n---\nsurvives browser recovery');
+  await page.getByRole('button', { name: 'Save note' }).click();
+  await expect(page.getByText('Web Playwright', { exact: true }).first()).toBeVisible();
+  await expect(page.locator('.markdown-preview')).toContainText('survives browser recovery');
+  await page.getByRole('button', { name: 'Edit' }).click();
+  await page.getByLabel('Frontmatter and Markdown').fill('---\ntitle: Web Playwright\ntype: note\ntags: [browser, edited]\n---\nedited and survives browser recovery');
+  await page.getByRole('button', { name: 'Save note' }).click();
+  await expect(page.locator('.markdown-preview')).toContainText('edited and survives browser recovery');
+  await page.getByRole('button', { name: 'All', exact: true }).click();
+  await expect(page.getByText('Web Playwright', { exact: true }).first()).toBeVisible();
+  await page.getByRole('button', { name: 'Notes', exact: true }).click();
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: 'Delete' }).click();
+  await page.getByText('Deleted notes (1)').click();
+  await page.getByRole('button', { name: 'Restore' }).click();
+  await expect(page.getByText('Web Playwright', { exact: true }).first()).toBeVisible();
 
   await page.evaluate(() => navigator.serviceWorker.ready);
   await context.setOffline(true);
   await page.reload();
-  await expect(page.getByText('Workspace online.')).toBeVisible();
-  await expect(page.locator('.entry-list').getByText('web/playwright')).toBeVisible();
-  await expect(page.locator('.entry-list').getByText('survives browser recovery')).toBeVisible();
-  await expect(page.getByText(/Cached entries and pending writes remain available offline/)).toBeVisible();
+  await expect(page.locator('.notes-toolbar').getByRole('heading', { name: 'Notes' })).toBeVisible();
+  await expect(page.getByText('Web Playwright', { exact: true }).first()).toBeVisible();
+  await expect(page.locator('.markdown-preview')).toContainText('edited and survives browser recovery');
+  await expect(page.getByText(/Cached notes and pending edits remain available offline/)).toBeVisible();
 
   expect(consoleErrors.filter((message) => !message.includes('net::ERR_INTERNET_DISCONNECTED'))).toEqual([]);
 });
@@ -104,7 +117,7 @@ test('converges two browser peers through a native Iroh document peer', async ({
   const secondContext = await browser.newContext();
   const first = await firstContext.newPage();
   const second = await secondContext.newPage();
-  const key = `web/convergence-${Date.now()}`;
+  const title = `Browser convergence ${Date.now()}`;
   const value = 'browser peers converged through native Iroh';
 
   try {
@@ -112,18 +125,18 @@ test('converges two browser peers through a native Iroh document peer', async ({
     await expect(first.getByText('Runtime ready')).toBeVisible();
     await first.getByLabel('Writable workspace ticket').fill(nativeTicket!);
     await first.getByRole('button', { name: 'Join and synchronize' }).click();
-    await expect(first.getByText('Workspace online.')).toBeVisible();
-    await first.getByLabel('Key').fill(key);
-    await first.getByLabel('UTF-8 value').fill(value);
-    await first.getByRole('button', { name: 'Commit to Iroh Docs' }).click();
-    await expect(first.locator('.entry-list').getByText(key)).toBeVisible();
+    await expect(first.getByRole('button', { name: 'New note' })).toBeVisible();
+    await first.getByRole('button', { name: 'New note' }).click();
+    await first.getByLabel('Title', { exact: true }).fill(title);
+    await first.getByLabel('Frontmatter and Markdown').fill(`---\ntitle: ${title}\ntype: note\ntags: [browser]\n---\n${value}`);
+    await first.getByRole('button', { name: 'Save note' }).click();
+    await expect(first.getByText(title, { exact: true }).first()).toBeVisible();
 
     await second.goto(`/#ticket=${encodeURIComponent(nativeTicket!)}`);
-    await expect(second.getByText('Workspace online.')).toBeVisible();
+    await expect(second.getByRole('button', { name: 'New note' })).toBeVisible();
     await expect(second).toHaveURL(/\/$/);
-    const replicated = second.locator('.entry-row').filter({ hasText: key });
-    await expect(replicated).toBeVisible({ timeout: 60_000 });
-    await expect(replicated).toContainText(value);
+    await expect(second.getByText(title, { exact: true }).first()).toBeVisible({ timeout: 60_000 });
+    await expect(second.locator('.markdown-preview')).toContainText(value);
   } finally {
     await firstContext.close();
     await secondContext.close();

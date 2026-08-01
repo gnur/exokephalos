@@ -72,6 +72,42 @@ impl Default for WorkspaceBehavior {
     }
 }
 
+/// Built-in views used until a workspace publishes its own Steel configuration.
+#[must_use]
+pub fn default_views() -> Vec<ViewDescriptor> {
+    vec![
+        ViewDescriptor {
+            id: "notes".into(),
+            name: "Notes".into(),
+            key: Some("n".into()),
+            show_tags: true,
+            title_field: "title".into(),
+            subtitle_field: None,
+            sort_field: Some("created".into()),
+            descending: true,
+            preview: None,
+            predicate: Predicate::FieldEquals {
+                field: "type".into(),
+                value: "note".into(),
+            },
+            subviews: vec![],
+        },
+        ViewDescriptor {
+            id: "all".into(),
+            name: "All".into(),
+            key: Some("0".into()),
+            show_tags: true,
+            title_field: "title".into(),
+            subtitle_field: Some("type".into()),
+            sort_field: Some("created".into()),
+            descending: true,
+            preview: None,
+            predicate: Predicate::Always,
+            subviews: vec![],
+        },
+    ]
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ViewDescriptor {
     pub id: String,

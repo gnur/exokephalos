@@ -19,6 +19,75 @@ export interface DocumentEntry {
   pending?: boolean;
 }
 
+export type FrontmatterValue = null | boolean | number | string | FrontmatterValue[] | { [key: string]: FrontmatterValue };
+
+export interface SubviewDescriptor {
+  id: string;
+  name: string;
+}
+
+export interface ViewDescriptor {
+  id: string;
+  name: string;
+  key?: string;
+  show_tags: boolean;
+  title_field: string;
+  subtitle_field?: string;
+  descending: boolean;
+  subviews: SubviewDescriptor[];
+}
+
+export interface WorkspaceBehavior {
+  default_view: string;
+  views: ViewDescriptor[];
+}
+
+export interface NoteConflict {
+  note_id: string;
+  winning_revision: string;
+  concurrent_revisions: string[];
+}
+
+export interface HistoryRevision {
+  id: string;
+  author: string;
+  physicalMs: number;
+  deleted: boolean;
+}
+
+export interface WorkspaceNote {
+  id: string;
+  frontmatter: Record<string, FrontmatterValue>;
+  body: string;
+  path: string;
+  markdown: string;
+  winningRevision: string;
+  conflict?: NoteConflict;
+  history: HistoryRevision[];
+}
+
+export interface WorkspaceSnapshot {
+  behavior: WorkspaceBehavior;
+  notes: WorkspaceNote[];
+  deleted: WorkspaceNote[];
+  conflicts: number;
+  diagnostics: string[];
+}
+
+export interface NoteQueryInput {
+  view: string;
+  subview?: string;
+  search: string;
+  tags: string[];
+}
+
+export interface NoteMutationInput {
+  operation: 'save' | 'delete' | 'restore';
+  noteId?: string;
+  title?: string;
+  markdown?: string;
+}
+
 export interface SyncStatus {
   endpointId: string;
   workspaceId?: string;
@@ -43,6 +112,8 @@ export interface RuntimeReport {
   ticket?: string;
   syncError?: string;
   pendingWrites: number;
+  workspace?: WorkspaceSnapshot;
+  mutatedNoteId?: string;
 }
 
 export type WorkerMethod =
@@ -51,6 +122,8 @@ export type WorkerMethod =
   | 'create-workspace'
   | 'join-workspace'
   | 'put-entry'
+  | 'query-notes'
+  | 'mutate-note'
   | 'refresh-sync'
   | 'share-ticket';
 

@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use xo_core::behavior::{
-    ActionDescriptor, ActionPlugin, Capability, Predicate, ViewDescriptor, WorkspaceBehavior,
+    ActionDescriptor, ActionPlugin, Capability, Predicate, WorkspaceBehavior, default_views,
 };
 use xo_core::iroh_node::{IrohNode, IrohWorkspace};
 use xo_core::projection::ProjectionState;
@@ -253,40 +253,6 @@ impl WorkspaceSession {
     pub async fn shutdown(self) -> Result<()> {
         self.node.shutdown().await
     }
-}
-
-fn default_views() -> Vec<ViewDescriptor> {
-    vec![
-        ViewDescriptor {
-            id: "notes".into(),
-            name: "Notes".into(),
-            key: Some("n".into()),
-            show_tags: true,
-            title_field: "title".into(),
-            subtitle_field: None,
-            sort_field: Some("created".into()),
-            descending: true,
-            preview: None,
-            predicate: Predicate::FieldEquals {
-                field: "type".into(),
-                value: "note".into(),
-            },
-            subviews: vec![],
-        },
-        ViewDescriptor {
-            id: "all".into(),
-            name: "All".into(),
-            key: Some("0".into()),
-            show_tags: true,
-            title_field: "title".into(),
-            subtitle_field: Some("type".into()),
-            sort_field: Some("created".into()),
-            descending: true,
-            preview: None,
-            predicate: Predicate::Always,
-            subviews: vec![],
-        },
-    ]
 }
 
 async fn select_workspace(

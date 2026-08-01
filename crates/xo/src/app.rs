@@ -616,22 +616,8 @@ fn shortest_unique_prefix(keys: &[String], index: usize) -> String {
     key.clone()
 }
 
-pub fn required_frontmatter(mut frontmatter: Frontmatter, id: &str, created: &str) -> Frontmatter {
-    frontmatter.insert("id".into(), FrontmatterValue::String(id.into()));
-    frontmatter.insert("created".into(), FrontmatterValue::String(created.into()));
-    if !matches!(
-        frontmatter.get("tags"),
-        Some(FrontmatterValue::Sequence(_) | FrontmatterValue::String(_))
-    ) {
-        frontmatter.insert("tags".into(), FrontmatterValue::Sequence(vec![]));
-    }
-    if !matches!(frontmatter.get("title"), Some(FrontmatterValue::String(_))) {
-        frontmatter.insert("title".into(), FrontmatterValue::String("Untitled".into()));
-    }
-    if !matches!(frontmatter.get("type"), Some(FrontmatterValue::String(_))) {
-        frontmatter.insert("type".into(), FrontmatterValue::String("note".into()));
-    }
-    frontmatter
+pub fn required_frontmatter(frontmatter: Frontmatter, id: &str, created: &str) -> Frontmatter {
+    xo_core::markdown::required_frontmatter(frontmatter, id, created)
 }
 
 fn note_tags(note: &Note) -> Vec<String> {

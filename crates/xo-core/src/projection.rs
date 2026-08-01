@@ -503,14 +503,7 @@ pub fn relative_path(
 
 #[must_use]
 pub fn canonical_note_path(id: &NoteId, frontmatter: &crate::domain::Frontmatter) -> String {
-    let title = match frontmatter.get("title") {
-        Some(FrontmatterValue::String(title)) => title.as_str(),
-        _ => "untitled",
-    };
-    let slug = markdown::slugify(title);
-    let slug = if slug.is_empty() { "untitled" } else { &slug };
-    let prefix = id.as_str().chars().take(3).collect::<String>();
-    format!("{prefix}/{id}-{slug}.md")
+    markdown::canonical_note_path(id, frontmatter)
 }
 
 /// Scan an import source without modifying it, assigning current-format IDs when absent.

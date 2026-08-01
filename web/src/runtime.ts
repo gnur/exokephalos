@@ -1,6 +1,9 @@
 import type {
+  NoteMutationInput,
+  NoteQueryInput,
   PutEntryInput,
   RuntimeReport,
+  WorkspaceNote,
   WorkerMethod,
   WorkerRequest,
   WorkerResponse,
@@ -49,6 +52,14 @@ export class XoRuntime {
 
   putEntry(input: PutEntryInput) {
     return this.#call<RuntimeReport>('put-entry', input);
+  }
+
+  queryNotes(input: NoteQueryInput) {
+    return this.#call<WorkspaceNote[]>('query-notes', input);
+  }
+
+  mutateNote(input: NoteMutationInput) {
+    return this.#call<RuntimeReport>('mutate-note', input);
   }
 
   refreshSync() {

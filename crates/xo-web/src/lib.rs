@@ -5,6 +5,7 @@
 //! be added behind the same worker-owned boundary.
 
 mod iroh_sync;
+mod workspace;
 
 use steel::rvals::SteelVal;
 use steel::steel_vm::engine::Engine;
@@ -52,6 +53,31 @@ fn run_steel_inner(source: &str) -> Result<String, String> {
         .last()
         .ok_or_else(|| "Steel source returned no value".to_owned())?;
     steel_value(value).ok_or_else(|| "Steel probe returned an unsupported value".to_owned())
+}
+
+/// Decode and resolve authoritative xo records into browser presentation data.
+#[wasm_bindgen]
+pub fn workspace_snapshot(entries_json: &str) -> Result<String, JsValue> {
+    workspace::snapshot_json(entries_json).map_err(|error| JsValue::from_str(&format!("{error:#}")))
+}
+
+/// Execute a configured view/subview/search/tag query in authoritative Rust.
+#[wasm_bindgen]
+pub fn query_workspace(snapshot_json: &str, query_json: &str) -> Result<String, JsValue> {
+    workspace::query_snapshot_json(snapshot_json, query_json)
+        .map_err(|error| JsValue::from_str(&format!("{error:#}")))
+}
+
+/// Prepare immutable revision/head writes for create, edit, delete, or restore.
+#[wasm_bindgen]
+pub fn prepare_note_mutation(
+    entries_json: &str,
+    author: &str,
+    input_json: &str,
+    now_ms: u64,
+) -> Result<String, JsValue> {
+    workspace::prepare_mutation_json(entries_json, author, input_json, now_ms)
+        .map_err(|error| JsValue::from_str(&format!("{error:#}")))
 }
 
 fn steel_value(value: &SteelVal) -> Option<String> {

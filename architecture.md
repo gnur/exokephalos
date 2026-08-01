@@ -1,160 +1,122 @@
 # xo Rust + Iroh architecture
 
-## Product Summary
+## Product summary
 
-xo is an offline-first personal knowledge system for Markdown notes with YAML frontmatter. Every native device maintains a readable Markdown projection while an Iroh Docs workspace is the authoritative replicated dataset.
+xo is an offline-first personal knowledge system for Markdown notes with YAML frontmatter. An Iroh Docs namespace is the authoritative replicated workspace. Native clients materialize its winning note and configuration revisions as readable files; `xo-web` resolves the same records directly in Rust/WebAssembly.
 
-Iroh supplies authenticated, end-to-end encrypted QUIC connections, preferring direct peers and falling back to relays. Iroh Docs provides eventually consistent multiwriter key-value replication; Iroh Blobs stores note and asset bytes, and Iroh Gossip provides live replication. [Iroh overview](https://docs.iroh.computer/), [Iroh Docs crate](https://docs.rs/iroh-docs/latest/iroh_docs/)
+Iroh provides authenticated end-to-end encrypted connections, direct connectivity for native peers, relay fallback, Docs replication, Blob transfer, and Gossip-assisted live synchronization. Browser peers are intentionally relay-only.
 
-## Product Capabilities
+Image attachments and a native iOS application are not in scope.
 
-### Knowledge model
+## Knowledge and behavior
 
-- Markdown documents with YAML frontmatter, stable lowercase IDs, wikilinks, tags, and arbitrary content types.
-- Recursive human-friendly folder organization with Markdown as a materialized local projection.
-- Template-based note creation with automatic IDs, slugs, dates, and times.
-- URL capture, webhook ingestion, image attachments, Goodreads import, Hardcover search, reading states, statistics, and encrypted notes.
-- Conventional Markdown import and export.
-
-### Workspace behavior
-
-Steel Scheme defines synchronized workspace behavior.
-
-- The root `xo.scm` file declares views, actions, templates, and defaults; modules live under `modules/` as `.scm` files.
-- Views define display names, shortcuts, predicates, sorting, title/subtitle fields, preview templates, tag visibility, and statistics templates.
-- Subviews add named filtering predicates.
-- Actions define a label, applicability predicate, granted capabilities, and a note transformation.
-- URL capture and readable-content conversion are delivered as a Steel action plugin. Network fetching and readability run through an explicitly granted, testable native host capability; Steel itself receives no ambient network access.
-- Scripts receive a flat note value with frontmatter fields, id, path, and body.
-- The host provides deterministic tag, date, ID, link, and bounded-query helpers.
-- Steel runs in a capability sandbox without filesystem, network, process, wall-clock, or secret access unless explicitly granted.
-
-[Steel](https://github.com/mattwparas/steel) is an embeddable Rust Scheme with modules, macros, immutable data structures, and Rust integration. Pin an exact pre-1.0 release behind a narrow host adapter.
+- Notes have current-format seven-character IDs, recursive YAML-compatible frontmatter, Markdown bodies, canonical projected paths, immutable revisions, per-author heads, and retained conflict history.
+- Native workspaces support conventional Markdown import/export, URL capture, Hardcover workflows, reading states, encrypted note bodies, wikilinks, and tags.
+- Replicated `xo.scm`, `modules/**/*.scm`, and `plugins/**/*.scm` define views, subviews, templates, actions, and explicit capability grants.
+- Predicates, sorting, searches, tags, and declarative effects execute through shared Rust behavior code.
+- Steel runs without ambient filesystem, process, socket, environment, secret, or dynamic-library access. Host capabilities are explicit and validated.
 
 ## Interfaces
 
-### TUI
+### `xo` TUI
 
-The TUI is the full-featured application.
+The native TUI provides:
 
-- View selection and shortcuts; built-in unfiltered All view; subview tabs.
-- Multi-select tag filtering, title search, Markdown preview, and pane navigation.
-- Create, edit, delete, and externally edit notes.
-- Fuzzy action picker, imports, exports, books, URL capture, webhooks, image attachments, diagnostics, and conflict resolution.
-- Sync state, durable-operation inspection, retry controls, and device management.
-- Optional LSP companion with wikilink/tag completion, preview, navigation, references, rename, diagnostics, semantic tokens, and code actions.
+- view and subview navigation, title search, conjunctive tag filters, sorting, note lists, and Markdown preview;
+- note creation, frontmatter/body editing, deletion, restoration, revision/conflict inspection, and encrypted-note unlocking;
+- generic action selection, URL capture, executable Steel plugins, import/export, diagnostics, retries, and device management;
+- server pairing and writable mobile onboarding through a fragment-based QR setup URL; and
+- filesystem projection plus optional `xo-lsp` editor integration.
 
-### PWA
+### `xo-web` PWA
 
-The PWA is an incidental-access client using Iroh WASM bindings and IndexedDB-backed local state.
+`xo-web` is a static, installable application. React owns presentation while a dedicated worker owns Rust/Wasm, Steel, Iroh, WebCrypto coordination, and IndexedDB recovery.
 
-- Browser Iroh identity, workspace tickets, QR-based TUI onboarding, offline cache, durable operations, sync status, reconnection, and conflict indication.
-- Browse views and subviews, search titles, filter tags, read sanitized Markdown, and view attachments.
-- Create quick/inbox notes; edit/delete notes; edit YAML frontmatter; attach images; capture URLs.
-- Encrypt and unlock note bodies in the browser.
-- Present safe declarative action and view descriptors.
-- Exclude Steel execution, arbitrary custom actions, bulk import/export, advanced book workflows, workspace configuration authoring, external-editor integration, and LSP features.
+- It creates or joins writable workspaces and synchronizes directly with native peers through relay-only Iroh Docs/Blobs/Gossip.
+- It loads and validates replicated Steel configuration, displays configured views and subviews, and runs view, search, sort, and tag queries in shared Rust behavior code.
+- It creates and edits frontmatter plus Markdown, deletes and restores notes, displays revision history and concurrent heads, and commits canonical immutable revision/head records prepared by Rust.
+- Cached records and pending writes survive offline reloads. A raw record explorer remains available for diagnostics.
+- The endpoint secret, author secret, and writable ticket are AES-GCM encrypted in IndexedDB with a non-extractable WebCrypto key. Cached entries and pending writes are separate and are currently not encrypted.
+- The service worker caches only the versioned application shell. The application checks uncached deployment metadata on load, cached restoration, reconnect, and every ten minutes before offering a full refresh.
+- Production nginx serves static assets only; there is no application API, sync gateway, writable server workspace, or server-side action executor.
 
-A browser feasibility spike validates Iroh WASM, Docs, Blobs, Gossip, IndexedDB persistence, background reconnect behavior, and relay fallback.
+Clearing browser storage destroys the browser identity and writable capability. The encrypted vault protects raw IndexedDB exports, not malicious same-origin JavaScript or XSS.
 
-### iOS application
+### `xo-syncd`
 
-The iOS app is SwiftUI backed by a Rust core through UniFFI or a thin C/Swift FFI layer.
+`xo-syncd` is an ordinary durable workspace peer, not an ordering authority.
 
-- Native Iroh endpoint and direct Docs, Blobs, and Gossip replication.
-- Encrypted application-container state and foreground/permitted background sync.
-- Inbox capture, reading, search, note editing, tags, wikilinks, attachments, book status, notifications, device identity, and conflict review.
-- Safe workspace descriptors rather than arbitrary Steel execution.
+- It provides an always-available Docs/Blobs replica and bootstrap participant.
+- Public health and authenticated operator status, metrics, and setup endpoints support operations without exposing workspace capabilities.
+- `xo-admin` handles invitations, ticket import, device retirement, namespace rotation, diagnostics, and verified backup/restore.
 
-### Headless central sync peer
+## Canonical records
 
-A Rust daemon with no end-user interface.
+Each workspace is one Iroh Docs namespace. Every endpoint has its own endpoint identity and Docs author identity. Writable invitations contain the namespace capability and peer addressing; read-only invitations cannot advance a head.
 
-- Durable Iroh Docs/Blobs replica and always-available bootstrap peer.
-- Health, metrics, encrypted backup/restore, and authenticated operator endpoints.
-- CLI/config administration, relay configuration, stale-device reporting, and conflict reporting.
-- No ordering authority: the peer is a durable participant in replicated workspace state.
+Current record keys include:
 
-## Canonical Storage and Sync Design
+```text
+note/<note-id>/revision/<revision-id>  -> canonical CBOR NoteRevision
+note/<note-id>/head/<author-id>        -> canonical CBOR Head
+asset/<asset-id>                       -> canonical CBOR AssetRecord
+asset-blob/<asset-id>                  -> verified asset bytes
+config/<path>/<revision-id>            -> canonical CBOR ConfigRevision
+config-blob/<revision-id>              -> verified Steel configuration bytes
+device/<endpoint-id>                   -> canonical CBOR DeviceRecord
+workspace/descriptor                   -> canonical CBOR WorkspaceDescriptor
+```
 
-### Workspace namespace
+A `NoteRevision` contains schema, note ID, complete frontmatter and body, materialized path, HLC, author ID, predecessor IDs, and deletion state. Its revision ID is the BLAKE3 hash of canonical CBOR bytes. A commit stores the immutable revision before advancing the local author's head.
 
-Each workspace is one Iroh Docs namespace. Invitations include a Docs ticket and a descriptor containing the workspace ID, namespace capability, bootstrap peers, relay/discovery configuration, schema version, and an optional encrypted workspace-key envelope.
+Resolution validates the revision graph, filters unacceptable records, orders candidate heads by HLC and revision identity, and retains non-ancestor heads as conflicts. Editing a conflicted note uses the winning and concurrent heads as predecessors, preserving history while producing a merged successor. Deletion and restoration are ordinary immutable revisions.
 
-Every device has a distinct Iroh endpoint identity and Docs author identity. Read-only invitations never contain a write capability.
+Configuration and asset metadata bind size and BLAKE3 identity to separately replicated bytes. Native clients materialize winning notes and configuration; watcher suppression prevents projection writes from becoming duplicate revisions.
 
-### Records
+## Rust components
 
-Use immutable revision blobs with compact Docs entries:
+### `xo-core`
 
-~~~
-note/<note-id>/<revision-id>       -> BLAKE3 hash of a NoteRevision blob
-note/<note-id>/head/<author-id>    -> author latest asserted revision
-asset/<asset-id>                   -> BLAKE3 hash, MIME, size
-config/<path>/<revision-id>        -> BLAKE3 hash of Steel configuration bytes
-tombstone/<target-id>/<author-id>  -> deletion revision
-device/<endpoint-id>               -> label, capabilities, last-seen metadata
-~~~
+Shared authoritative code includes:
 
-A NoteRevision contains full frontmatter, body, materialized path, HLC, author ID, predecessor revision IDs, and deletion state. The visible head is resolved by highest HLC, then actor ID. Deleted heads hide the note; non-winning concurrent revisions remain visible as history and conflicts.
+- IDs, HLCs, domain schemas, canonical CBOR identities, Markdown/YAML codecs, canonical paths, required frontmatter, and conflict resolution;
+- predicates, views, subviews, bounded queries, templates, declarative actions, capability checks, and Steel configuration parsing;
+- native record repositories, Iroh persistence, local indexes, backup/restore, projection, watchers, encryption, and synchronization state.
 
-Iroh Docs replicates revision references; xo owns content resolution and conflict presentation rather than attempting character-level Markdown merging.
+Native-only filesystem, SQLite, watcher, encryption, and persistent-Iroh modules are gated behind the `native` feature. `xo-web` disables that feature and reuses the browser-compatible domain, behavior, Markdown, HLC, ID, resolution, and Steel modules.
 
-### Blobs, Docs, and Markdown projection
+### `crates/xo-web`
 
-- Iroh Blobs holds revisions, attachments, Steel configuration, and large imports.
-- Iroh Docs holds compact references and replication metadata.
-- Native clients materialize winning heads into Markdown and Steel files.
-- Filesystem changes create immutable revision blobs and update the local device head.
-- Remote projection writes are suppressed by the watcher to avoid duplicate revisions.
-- Keys, caches, diagnostics, materialization hashes, and Blob cache state remain outside the exported workspace.
+The Wasm facade:
 
-Iroh Docs uses a storage abstraction. Native clients use persistent local storage; browser clients use a WASM-compatible IndexedDB store. [Iroh Docs storage model](https://docs.rs/iroh-docs/latest/iroh_docs/)
+- owns the relay-only in-memory browser Iroh endpoint;
+- validates signed record keys and values, configuration content identities, revision identities, and graphs;
+- resolves workspace snapshots and executes queries;
+- prepares canonical create/edit/delete/restore revision and head writes; and
+- exposes coarse JSON DTOs through `wasm-bindgen` to the dedicated worker.
 
-## Rust Components
+### Binaries
 
-### xo-core
+- `xo`: TUI and native workspace peer.
+- `xo-lsp`: editor companion.
+- `xo-syncd`: durable headless peer.
+- `xo-admin`: administration, backup, restore, invitations, and diagnostics.
 
-Shared domain and sync layer.
+## Security and operations
 
-- Markdown/YAML codec, schema validation, IDs, tags, wikilinks, encryption, imports/exports, and materialization.
-- Steel runtime host, module loader, view evaluation, action execution, templates, capability checks, and diagnostics.
-- Iroh Endpoint, Docs, Blobs, Gossip, tickets, identities, invitations, revocations, discovery, and sync diagnostics.
-- Revision resolution, tombstone handling, conflict detection, blob availability, and filesystem projection.
-- Stable async APIs for TUI, server, Swift bindings, WASM bindings, and LSP.
-
-### Supporting binaries
-
-- xo: TUI and local workspace peer.
-- xo-lsp: editor integration.
-- xo-syncd: headless replication peer.
-- xo-admin: invitations, device retirement, backup/restore, diagnostics, and relay configuration.
-
-## Security and Operations
-
-- Endpoint keys identify devices; Docs author keys identify writes; invitations distribute workspace capability.
-- Sensitive bytes are encrypted before entering Iroh Blobs, so peers and relays store or route ciphertext.
-- Signed revocation records retire devices without erasing historical revisions.
-- Backups include Docs metadata, verified Blob content, and materialized Markdown.
-- Metrics cover reachability, direct-versus-relay ratio, convergence, blob availability, disk use, conflicts, and stale devices.
-- Unknown newer workspace schemas open read-only.
-
-## Delivery Sequence
-
-1. Build xo-core with codecs, materialization, revision resolution, local index, and a two-native-peer Iroh proof of concept.
-2. Add the Steel host, sandbox, configuration schema, view evaluation, action execution, and diagnostics.
-3. Deliver the TUI and central peer with invitations, offline/direct sync, relay fallback, Blob transfer, and backups.
-4. Deliver LSP, imports/exports, books, URL/webhook workflows, attachments, and conflict resolution.
-5. Deliver the iOS app through Rust FFI and native P2P synchronization.
-6. Deliver the PWA after the Iroh WASM interoperability spike succeeds.
+- Iroh endpoint keys identify endpoints; Docs author keys identify writes; invitations distribute namespace capabilities.
+- Browser setup tickets use URL fragments so static HTTP requests and normal server logs do not receive the capability.
+- Native network host capabilities require HTTPS, public-address validation, pinned DNS, disabled proxies and redirects, restricted headers, and bounded time and response size.
+- Device retirement records establish author cutoffs without erasing accepted history.
+- Backups verify Docs metadata and Blob content before restoration.
+- Release timestamp tags are embedded in every binary and the PWA; CI verifies the reported version and static `version.json`.
 
 ## Validation
 
-- Concurrent edits, deletion, rename, and restore converge to the same visible heads while retaining conflict history.
-- Offline edits synchronize over direct peers and relay fallback.
-- Blobs verify by BLAKE3 hash and resume after interruption.
-- Markdown materialization round-trips without watcher loops or duplicate revisions.
-- TUI, iOS, and PWA interoperate on one namespace; browser tests verify IndexedDB persistence and reconnect behavior.
-- Steel scripts are capability-isolated and produce scoped diagnostics on failure.
-- Revoked devices cannot publish future heads.
-- Backup restore reproduces documents, blobs, Steel configuration, and the Markdown projection.
+Automated coverage includes:
+
+- canonical record encoding, graph validation, concurrent edits, deletion/restoration, device retirement, namespace rotation, and interrupted Blob recovery;
+- native projection round trips, watcher suppression, configuration parsing, capability isolation, and backup restore;
+- browser Rust tests for note mutation plus configured views/subviews;
+- Playwright tests for create/edit/delete/restore, view switching, offline cached recovery, encrypted ticket storage, deployment updates, and browser convergence through a real native `xo-syncd` peer; and
+- Rustfmt, Clippy with warnings denied, workspace tests, TypeScript checks, npm audit, production PWA builds, and multi-architecture release/container CI.

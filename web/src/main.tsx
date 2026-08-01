@@ -27,7 +27,14 @@ import {
   X,
 } from 'lucide-react';
 import { registerSW } from 'virtual:pwa-register';
-import type { DocumentEntry, RuntimeReport, RuntimeState } from './protocol';
+import type {
+  DocumentEntry,
+  NoteMutationInput,
+  NoteQueryInput,
+  RuntimeReport,
+  RuntimeState,
+  WorkspaceNote,
+} from './protocol';
 import { XoRuntime } from './runtime';
 import './styles.css';
 
@@ -109,6 +116,9 @@ function App() {
   const [installPrompt, setInstallPrompt] = useState<InstallPrompt>();
   const [ticketInput, setTicketInput] = useState('');
   const [updateAvailable, setUpdateAvailable] = useState(updateIsAvailable);
+  const [activeView, setActiveView] = useState('');
+  const [activeSubview, setActiveSubview] = useState<string>();
+  const [search, setSearch] = useState('');
 
   useEffect(() => {
     const runtime = new XoRuntime();
@@ -196,6 +206,18 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const behavior = report?.workspace?.behavior;
+    if (!behavior) return;
+    const view = behavior.views.find((candidate) => candidate.id === activeView);
+    if (!activeView || !view) {
+      setActiveView(behavior.default_view || behavior.views[0]?.id || 'all');
+      setActiveSubview(undefined);
+    } else if (activeSubview && !view.subviews.some((subview) => subview.id === activeSubview)) {
+      setActiveSubview(undefined);
+    }
+  }, [activeView, report?.workspace?.behavior]);
+
   async function install() {
     if (!installPrompt) return;
     await installPrompt.prompt();
@@ -205,13 +227,16 @@ function App() {
 
   async function runWorkspace(operation: (runtime: XoRuntime) => Promise<RuntimeReport>) {
     const runtime = runtimeRef.current;
-    if (!runtime) return;
+    if (!runtime) return undefined;
     setBusy(true);
     setError('');
     try {
-      setReport(await operation(runtime));
+      const next = await operation(runtime);
+      setReport(next);
+      return next;
     } catch (cause) {
       setError(errorMessage(cause));
+      return undefined;
     } finally {
       setBusy(false);
     }
@@ -227,9 +252,34 @@ function App() {
           <button className="icon-button close-menu" onClick={() => setMenuOpen(false)} aria-label="Close navigation"><X /></button>
         </div>
         <nav aria-label="Workspace">
-          <NavItem icon={<NotebookPen />} label="Document" active />
-          <NavItem icon={<BookOpen />} label="Books" />
-          <NavItem icon={<Inbox />} label="Inbox" />
+          {report?.workspace?.behavior.views.map((view) => (
+            <React.Fragment key={view.id}>
+              <NavItem
+                icon={view.id === 'books' ? <BookOpen /> : view.id === 'inbox' ? <Inbox /> : <NotebookPen />}
+                label={view.name || view.id}
+                active={activeView === view.id && !activeSubview}
+                onClick={() => {
+                  setActiveView(view.id);
+                  setActiveSubview(undefined);
+                  setMenuOpen(false);
+                }}
+              />
+              {view.subviews.map((subview) => (
+                <NavItem
+                  key={`${view.id}/${subview.id}`}
+                  icon={<span className="subview-mark" />}
+                  label={subview.name || subview.id}
+                  active={activeView === view.id && activeSubview === subview.id}
+                  nested
+                  onClick={() => {
+                    setActiveView(view.id);
+                    setActiveSubview(subview.id);
+                    setMenuOpen(false);
+                  }}
+                />
+              ))}
+            </React.Fragment>
+          )) ?? <NavItem icon={<NotebookPen />} label="Workspace" active />}
         </nav>
         <div className="sidebar-spacer" />
         <nav aria-label="Application">
@@ -243,7 +293,7 @@ function App() {
       <div className="workspace">
         <header className="topbar">
           <button className="icon-button menu-button" onClick={() => setMenuOpen(true)} aria-label="Open navigation"><Menu /></button>
-          <div className="search"><Search /><span>{hasWorkspace ? 'Search arrives with note projections' : 'Connect a workspace to begin'}</span><kbd>xo</kbd></div>
+          <div className="search"><Search />{hasWorkspace ? <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search notes" aria-label="Search notes" /> : <span>Connect a workspace to begin</span>}<kbd>xo</kbd></div>
           <div className={online ? 'connection online' : 'connection offline'}>
             {online ? <Cloud /> : <CloudOff />}
             <span>{online ? (hasWorkspace ? 'relay sync active' : 'browser online') : 'offline'}</span>
@@ -263,8 +313,13 @@ function App() {
               report={report}
               busy={busy}
               error={error}
+              activeView={activeView}
+              activeSubview={activeSubview}
+              search={search}
+              onSubview={setActiveSubview}
+              onQuery={(input) => runtimeRef.current?.queryNotes(input) ?? Promise.resolve([])}
+              onMutate={(input) => runWorkspace((runtime) => runtime.mutateNote(input))}
               onRefresh={() => void runWorkspace((runtime) => runtime.refreshSync())}
-              onPut={(key, value) => void runWorkspace((runtime) => runtime.putEntry({ key, value }))}
             />
           ) : (
             <Onboarding
@@ -337,56 +392,208 @@ function Onboarding({ state, report, error, busy, ticket, onTicket, onCreate, on
   );
 }
 
-function WorkspaceView({ report, busy, error, onRefresh, onPut }: {
+function WorkspaceView({ report, busy, error, activeView, activeSubview, search, onSubview, onQuery, onMutate, onRefresh }: {
   report: RuntimeReport;
   busy: boolean;
   error: string;
+  activeView: string;
+  activeSubview?: string;
+  search: string;
+  onSubview: (subview?: string) => void;
+  onQuery: (input: NoteQueryInput) => Promise<WorkspaceNote[]>;
+  onMutate: (input: NoteMutationInput) => Promise<RuntimeReport | undefined>;
   onRefresh: () => void;
-  onPut: (key: string, value: string) => void;
 }) {
-  const [key, setKey] = useState('web/demo');
-  const [value, setValue] = useState('Hello from xo-web');
+  const [notes, setNotes] = useState<WorkspaceNote[]>([]);
+  const [unfilteredNotes, setUnfilteredNotes] = useState<WorkspaceNote[]>([]);
+  const [selectedId, setSelectedId] = useState<string>();
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string>();
+  const [draft, setDraft] = useState('');
+  const [createTitle, setCreateTitle] = useState('');
+  const [queryError, setQueryError] = useState('');
   const [ticketVisible, setTicketVisible] = useState(false);
   const statusMessage = error || report.syncError;
+  const workspace = report.workspace;
+  const view = workspace?.behavior.views.find((candidate) => candidate.id === activeView);
+
+  useEffect(() => {
+    setSelectedTags([]);
+  }, [activeView, activeSubview]);
+
+  useEffect(() => {
+    if (!activeView) return;
+    let active = true;
+    const base: NoteQueryInput = { view: activeView, subview: activeSubview, search, tags: [] };
+    void Promise.all([
+      onQuery({ ...base, tags: selectedTags }),
+      onQuery(base),
+    ]).then(([next, unfiltered]) => {
+      if (!active) return;
+      setQueryError('');
+      setNotes(next);
+      setUnfilteredNotes(unfiltered);
+      setSelectedId((current) => next.some((note) => note.id === current) ? current : next[0]?.id);
+    }).catch((cause: unknown) => {
+      if (active) setQueryError(errorMessage(cause));
+    });
+    return () => { active = false; };
+  }, [activeView, activeSubview, search, selectedTags, report.entries, onQuery]);
+
+  const selected = notes.find((note) => note.id === selectedId);
+  const availableTags = [...new Set(unfilteredNotes.flatMap(noteTags))].sort();
+
+  function startCreate() {
+    setEditingId(undefined);
+    setCreateTitle('');
+    setDraft('---\ntitle: \ntype: note\ntags: []\n---\n');
+    setEditorOpen(true);
+  }
+
+  function startEdit(note: WorkspaceNote) {
+    setEditingId(note.id);
+    setCreateTitle(noteTitle(note, view?.title_field));
+    setDraft(note.markdown);
+    setEditorOpen(true);
+  }
+
+  async function saveDraft() {
+    const saved = await onMutate({
+      operation: 'save',
+      noteId: editingId,
+      title: createTitle,
+      markdown: draft,
+    });
+    if (saved) {
+      setEditorOpen(false);
+      setSelectedId(saved.mutatedNoteId);
+    }
+  }
+
+  async function remove(note: WorkspaceNote) {
+    if (!window.confirm(`Delete “${noteTitle(note, view?.title_field)}”?`)) return;
+    await onMutate({ operation: 'delete', noteId: note.id });
+  }
 
   return (
     <>
-      <section className="workspace-heading">
-        <div><p className="eyebrow"><Radio /> Iroh document connected</p><h1>Workspace <em>online.</em></h1><p className="workspace-id">{report.status.workspaceId}</p></div>
-        <button className="secondary" disabled={busy} onClick={onRefresh}><RefreshCw className={busy ? 'spin' : ''} /> Refresh sync</button>
-      </section>
-
-      {statusMessage ? <div className="warning"><CloudOff /> <span>{statusMessage}. Cached entries and pending writes remain available offline.</span></div> : null}
-      <section className="sync-grid">
-        <Metric label="Endpoint" value={short(report.status.endpointId)} />
-        <Metric label="Author" value={short(report.status.authorId)} />
-        <Metric label="Sync peers" value={String(report.status.peers)} />
-        <Metric label="Pending writes" value={String(report.pendingWrites)} />
-      </section>
-
-      <section className="document-layout">
-        <div className="entries-panel">
-          <div className="panel-heading"><div><p className="eyebrow">Document snapshot</p><h2>Document entries</h2></div><span>{report.entries.length}</span></div>
-          <div className="entry-list">
-            {report.entries.length ? report.entries.map((entry) => <EntryRow key={entry.keyBase64} entry={entry} />) : <div className="empty-state">No entries yet. Publish the first one from this browser.</div>}
-          </div>
+      <section className="notes-toolbar">
+        <div>
+          <p className="eyebrow"><Radio /> {view?.name || activeView || 'Workspace'}</p>
+          <h1>{view?.name || 'Notes'}</h1>
+          <p className="workspace-id">{report.status.workspaceId}</p>
         </div>
-        <aside className="write-panel">
-          <p className="eyebrow"><Plus /> Offline-capable write</p>
-          <h2>Publish an entry</h2>
-          <label>Key<input value={key} onChange={(event) => setKey(event.target.value)} /></label>
-          <label>UTF-8 value<textarea value={value} onChange={(event) => setValue(event.target.value)} /></label>
-          <button className="primary" disabled={busy || !key.trim()} onClick={() => onPut(key, value)}>{busy ? <LoaderCircle className="spin" /> : <Cloud />} Commit to Iroh Docs</button>
-        </aside>
+        <div className="toolbar-actions">
+          <button className="secondary" disabled={busy} onClick={onRefresh}><RefreshCw className={busy ? 'spin' : ''} /> Sync</button>
+          <button className="primary" disabled={busy} onClick={startCreate}><Plus /> New note</button>
+        </div>
       </section>
+
+      {view?.subviews.length ? (
+        <div className="subview-tabs" aria-label="Subviews">
+          <button className={!activeSubview ? 'active' : ''} onClick={() => onSubview(undefined)}>All</button>
+          {view.subviews.map((subview) => <button key={subview.id} className={activeSubview === subview.id ? 'active' : ''} onClick={() => onSubview(subview.id)}>{subview.name || subview.id}</button>)}
+        </div>
+      ) : null}
+
+      {statusMessage ? <div className="warning"><CloudOff /> <span>{statusMessage}. Cached notes and pending edits remain available offline.</span></div> : null}
+      {queryError ? <div className="warning"><CircleAlert /> <span>{queryError}</span></div> : null}
+      {workspace?.diagnostics.map((diagnostic) => <div className="warning" key={diagnostic}><CircleAlert /> <span>{diagnostic}</span></div>)}
+
+      <section className="sync-strip">
+        <Metric label="Notes" value={String(workspace?.notes.length ?? 0)} />
+        <Metric label="Conflicts" value={String(workspace?.conflicts ?? 0)} />
+        <Metric label="Peers" value={String(report.status.peers)} />
+        <Metric label="Pending" value={String(report.pendingWrites)} />
+      </section>
+
+      {view?.show_tags && availableTags.length ? (
+        <div className="tag-filter" aria-label="Filter by tags">
+          <span>Tags</span>
+          {availableTags.map((tag) => <button key={tag} className={selectedTags.includes(tag) ? 'active' : ''} onClick={() => setSelectedTags((current) => current.includes(tag) ? current.filter((value) => value !== tag) : [...current, tag])}>{tag}</button>)}
+          {selectedTags.length ? <button onClick={() => setSelectedTags([])}>Clear</button> : null}
+        </div>
+      ) : null}
+
+      <section className="note-layout">
+        <div className="note-list" aria-label="Notes">
+          <div className="panel-heading"><div><p className="eyebrow">Results</p><h2>{notes.length} notes</h2></div></div>
+          {notes.length ? notes.map((note) => (
+            <button key={note.id} className={selectedId === note.id ? 'note-list-item selected' : 'note-list-item'} onClick={() => setSelectedId(note.id)}>
+              <span><strong>{noteTitle(note, view?.title_field)}</strong><small>{noteField(note, view?.subtitle_field) || note.path}</small></span>
+              <span className="note-badges">{note.conflict ? <i>conflict</i> : null}{noteTags(note).map((tag) => <i key={tag}>{tag}</i>)}</span>
+            </button>
+          )) : <div className="empty-state">No notes match this view, subview, search, and tag filter.</div>}
+        </div>
+
+        <article className="note-preview">
+          {selected ? (
+            <>
+              <header>
+                <div><p className="eyebrow">{selected.id}</p><h2>{noteTitle(selected, view?.title_field)}</h2><p>{selected.path}</p></div>
+                <div className="preview-actions"><button className="secondary" onClick={() => startEdit(selected)}>Edit</button><button className="danger" onClick={() => void remove(selected)}>Delete</button></div>
+              </header>
+              {selected.conflict ? <div className="conflict-callout"><CircleAlert /><span>This note has {selected.conflict.concurrent_revisions.length} concurrent revision(s). Saving merges all current heads.</span></div> : null}
+              <dl className="frontmatter-grid">{Object.entries(selected.frontmatter).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{displayFrontmatter(value)}</dd></div>)}</dl>
+              <pre className="markdown-preview">{selected.body || 'This note has no body.'}</pre>
+              <details className="history-panel"><summary>Revision history ({selected.history.length})</summary>{selected.history.slice().reverse().map((revision) => <div key={revision.id}><code>{short(revision.id)}</code><span>{new Date(revision.physicalMs).toLocaleString()} · {short(revision.author)}{revision.deleted ? ' · deleted' : ''}</span></div>)}</details>
+            </>
+          ) : <div className="empty-state preview-empty">Select a note to read or edit it.</div>}
+        </article>
+      </section>
+
+      {workspace?.deleted.length ? (
+        <details className="deleted-panel"><summary>Deleted notes ({workspace.deleted.length})</summary>{workspace.deleted.map((note) => <div key={note.id}><span><strong>{noteTitle(note)}</strong><small>{note.id}</small></span><button className="secondary" onClick={() => void onMutate({ operation: 'restore', noteId: note.id })}>Restore</button></div>)}</details>
+      ) : null}
+
+      <details className="raw-panel">
+        <summary>Raw document entries ({report.entries.length})</summary>
+        <div className="entry-list">{report.entries.map((entry) => <EntryRow key={entry.keyBase64} entry={entry} />)}</div>
+      </details>
 
       <section className="ticket-panel">
         <div><p className="eyebrow"><KeyRound /> Writable capability</p><h2>Workspace ticket</h2><p>Use this ticket to connect xo-syncd or another peer. Treat it as a secret.</p></div>
         <div className="ticket-actions"><button className="secondary" onClick={() => setTicketVisible((visible) => !visible)}>{ticketVisible ? 'Hide' : 'Reveal'} ticket</button><button className="secondary" onClick={() => void navigator.clipboard.writeText(report.ticket ?? '')}><Copy /> Copy</button></div>
         {ticketVisible ? <textarea className="ticket-output" readOnly value={report.ticket ?? ''} /> : null}
       </section>
+
+      {editorOpen ? (
+        <div className="editor-backdrop" role="presentation">
+          <section className="note-editor" role="dialog" aria-modal="true" aria-labelledby="editor-title">
+            <header><div><p className="eyebrow">{editingId ? `Edit ${editingId}` : 'Create note'}</p><h2 id="editor-title">Markdown editor</h2></div><button className="icon-button" onClick={() => setEditorOpen(false)} aria-label="Close editor"><X /></button></header>
+            {error ? <div className="warning"><CircleAlert /><span>{error}</span></div> : null}
+            {!editingId ? <label>Title<input autoFocus value={createTitle} onChange={(event) => setCreateTitle(event.target.value)} placeholder="Note title" /></label> : null}
+            <label>Frontmatter and Markdown<textarea value={draft} onChange={(event) => setDraft(event.target.value)} spellCheck="true" /></label>
+            <footer><span>Edits create immutable xo revisions and synchronize through Iroh.</span><div><button className="secondary" onClick={() => setEditorOpen(false)}>Cancel</button><button className="primary" disabled={busy || (!editingId && !createTitle.trim())} onClick={() => void saveDraft()}>{busy ? <LoaderCircle className="spin" /> : <Cloud />} Save note</button></div></footer>
+          </section>
+        </div>
+      ) : null}
     </>
   );
+}
+
+function noteField(note: WorkspaceNote, field?: string) {
+  if (!field) return '';
+  const value = note.frontmatter[field];
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : '';
+}
+
+function noteTitle(note: WorkspaceNote, field = 'title') {
+  return noteField(note, field) || noteField(note, 'title') || 'Untitled';
+}
+
+function noteTags(note: WorkspaceNote) {
+  const tags = note.frontmatter.tags;
+  if (Array.isArray(tags)) return tags.filter((tag): tag is string => typeof tag === 'string');
+  if (typeof tags === 'string') return tags.split(',').map((tag) => tag.trim()).filter(Boolean);
+  return [];
+}
+
+function displayFrontmatter(value: unknown) {
+  if (value === null) return 'null';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
 }
 
 function EntryRow({ entry }: { entry: DocumentEntry }) {
@@ -397,8 +604,8 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;
 }
 
-function NavItem({ icon, label, active = false }: { icon: React.ReactNode; label: string; active?: boolean }) {
-  return <button className={active ? 'nav-item active' : 'nav-item'} disabled={!active}>{icon}<span>{label}</span>{!active ? <small>soon</small> : null}</button>;
+function NavItem({ icon, label, active = false, nested = false, onClick }: { icon: React.ReactNode; label: string; active?: boolean; nested?: boolean; onClick?: () => void }) {
+  return <button className={`${active ? 'nav-item active' : 'nav-item'}${nested ? ' nested' : ''}`} disabled={!onClick} onClick={onClick}>{icon}<span>{label}</span>{!onClick && !active ? <small>soon</small> : null}</button>;
 }
 
 function RuntimeCard({ state, report, error }: { state: RuntimeState; report?: RuntimeReport; error: string }) {

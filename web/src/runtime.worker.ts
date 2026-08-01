@@ -2,11 +2,16 @@
 
 import init, {
   IrohDocNode,
+  prepare_note_mutation,
+  query_workspace,
   run_steel,
   runtime_info,
+  workspace_snapshot,
 } from './generated/xo-web/xo_web.js';
 import type {
   DocumentEntry,
+  NoteMutationInput,
+  NoteQueryInput,
   PutEntryInput,
   RuntimeInfo,
   RuntimeReport,
@@ -14,6 +19,7 @@ import type {
   WorkerRequest,
   WorkerResponse,
   WorkspaceOutcome,
+  WorkspaceSnapshot,
 } from './protocol';
 
 const scope = self as DedicatedWorkerGlobalScope;
@@ -32,9 +38,18 @@ interface BrowserIdentity {
   ticket?: string;
 }
 
-interface PendingWrite extends PutEntryInput {
+interface PendingWrite {
   id: string;
+  key: string;
+  valueBase64?: string;
+  value?: string;
+  author?: string;
   createdAt: string;
+}
+
+interface PreparedMutation {
+  noteId: string;
+  writes: Array<{ key: string; valueBase64: string }>;
 }
 
 interface VaultStateRecord {
@@ -49,6 +64,7 @@ let node: IrohDocNode | undefined;
 let identity: BrowserIdentity | undefined;
 let restoredAt: string | undefined;
 let lastSyncError: string | undefined;
+let workspaceCache: { fingerprint: string; json: string; value: WorkspaceSnapshot } | undefined;
 
 function initializeWasm() {
   wasmReady ??= init().then(() => undefined);
@@ -206,16 +222,11 @@ function requireIdentity() {
 async function enqueueWrite(input: PutEntryInput) {
   const key = input.key.trim();
   if (!key) throw new Error('Document key is required');
-  const pending: PendingWrite = {
-    id: crypto.randomUUID(),
-    key,
-    value: input.value,
-    createdAt: new Date().toISOString(),
-  };
-  await putRecord(PENDING_STORE, pending);
-  await putRecord(ENTRY_STORE, optimisticEntry(pending));
+  const status = JSON.parse(await requireNode().statusJson()) as SyncStatus;
+  const bytes = new TextEncoder().encode(input.value);
+  await enqueuePreparedWrites([{ key, valueBase64: encodeBase64(bytes) }], status.authorId);
   try {
-    await requireNode().putText(pending.key, pending.value);
+    await publishPendingWrites();
     lastSyncError = undefined;
     await refreshEntryCache();
   } catch (cause) {
@@ -224,37 +235,68 @@ async function enqueueWrite(input: PutEntryInput) {
   return report();
 }
 
-async function publishPendingWrites() {
-  const pending = await allRecords<PendingWrite>(PENDING_STORE);
-  for (const write of pending.sort((left, right) => left.createdAt.localeCompare(right.createdAt))) {
-    try {
-      await requireNode().putText(write.key, write.value);
-    } catch (cause) {
-      lastSyncError = errorMessage(cause);
-      break;
-    }
+async function mutateNote(input: NoteMutationInput) {
+  const entries = await cachedEntries();
+  const status = JSON.parse(await requireNode().statusJson()) as SyncStatus;
+  const prepared = JSON.parse(prepare_note_mutation(
+    JSON.stringify(entries),
+    status.authorId,
+    JSON.stringify(input),
+    BigInt(Date.now()),
+  )) as PreparedMutation;
+  await enqueuePreparedWrites(prepared.writes, status.authorId);
+  try {
+    await publishPendingWrites();
+    await refreshEntryCache();
+    lastSyncError = undefined;
+  } catch (cause) {
+    lastSyncError = errorMessage(cause);
+  }
+  return { ...await report(), mutatedNoteId: prepared.noteId };
+}
+
+async function enqueuePreparedWrites(writes: PreparedMutation['writes'], author: string) {
+  const createdAt = new Date().toISOString();
+  for (const [index, write] of writes.entries()) {
+    const pending: PendingWrite = {
+      id: crypto.randomUUID(),
+      key: write.key,
+      valueBase64: write.valueBase64,
+      author,
+      createdAt: `${createdAt}/${String(index).padStart(4, '0')}`,
+    };
+    await putRecord(PENDING_STORE, pending);
+    await putRecord(ENTRY_STORE, optimisticEntry(pending));
   }
 }
 
-async function confirmPendingWrites() {
+async function publishPendingWrites() {
   const pending = await allRecords<PendingWrite>(PENDING_STORE);
-  for (const write of pending) await deleteRecord(PENDING_STORE, write.id);
+  for (const write of pending.sort((left, right) => left.createdAt.localeCompare(right.createdAt))) {
+    const valueBase64 = write.valueBase64 ?? encodeBase64(new TextEncoder().encode(write.value ?? ''));
+    await requireNode().putBase64(write.key, valueBase64);
+  }
+  return pending;
+}
+
+async function confirmPendingWrites(published: PendingWrite[]) {
+  for (const write of published) await deleteRecord(PENDING_STORE, write.id);
 }
 
 async function syncPendingWrites() {
   const pending = await allRecords<PendingWrite>(PENDING_STORE);
   if (!pending.length) return;
-  await publishPendingWrites();
+  const published = await publishPendingWrites();
   await requireNode().refreshSync();
-  await confirmPendingWrites();
+  await confirmPendingWrites(published);
   await refreshEntryCache();
 }
 
 async function refreshSync() {
   try {
-    await publishPendingWrites();
+    const published = await publishPendingWrites();
     await requireNode().refreshSync();
-    await confirmPendingWrites();
+    await confirmPendingWrites(published);
     await refreshEntryCache();
     lastSyncError = undefined;
   } catch (cause) {
@@ -276,7 +318,9 @@ async function cachedEntries() {
   const entries = (await allRecords<DocumentEntry & { id: string }>(ENTRY_STORE))
     .map(({ id: _, ...entry }) => entry);
   const byKey = new Map(entries.map((entry) => [entry.key, entry]));
-  for (const pending of await allRecords<PendingWrite>(PENDING_STORE)) {
+  const pendingWrites = await allRecords<PendingWrite>(PENDING_STORE);
+  pendingWrites.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  for (const pending of pendingWrites) {
     const { id: _, ...entry } = optimisticEntry(pending);
     byKey.set(entry.key, entry);
   }
@@ -285,30 +329,59 @@ async function cachedEntries() {
 
 async function report(): Promise<RuntimeReport> {
   const status = JSON.parse(await requireNode().statusJson()) as SyncStatus;
+  const entries = await cachedEntries();
+  const workspace = status.workspaceId ? resolvedWorkspace(entries) : undefined;
   return {
     runtime: JSON.parse(runtime_info()) as RuntimeInfo,
     indexedDb: true,
     steelResult: run_steel('(+ 20 22)'),
     restoredAt,
     status,
-    entries: await cachedEntries(),
+    entries,
     ticket: identity?.ticket,
     syncError: lastSyncError,
     pendingWrites: (await allRecords<PendingWrite>(PENDING_STORE)).length,
+    workspace: workspace?.value,
   };
+}
+
+async function queryNotes(input: NoteQueryInput) {
+  const workspace = resolvedWorkspace(await cachedEntries());
+  return JSON.parse(query_workspace(workspace.json, JSON.stringify(input)));
+}
+
+function resolvedWorkspace(entries: DocumentEntry[]) {
+  const fingerprint = entries.map((entry) =>
+    `${entry.keyBase64}:${entry.contentHash}:${entry.pending ? entry.valueBase64 : ''}`
+  ).join('|');
+  if (workspaceCache?.fingerprint === fingerprint) return workspaceCache;
+  const json = workspace_snapshot(JSON.stringify(entries));
+  workspaceCache = {
+    fingerprint,
+    json,
+    value: JSON.parse(json) as WorkspaceSnapshot,
+  };
+  return workspaceCache;
 }
 
 function optimisticEntry(write: PendingWrite): DocumentEntry & { id: string } {
   const keyBytes = new TextEncoder().encode(write.key);
-  const valueBytes = new TextEncoder().encode(write.value);
+  const valueBase64 = write.valueBase64 ?? encodeBase64(new TextEncoder().encode(write.value ?? ''));
+  const valueBytes = decodeBase64(valueBase64);
   const keyBase64 = encodeBase64(keyBytes);
+  let value: string | undefined;
+  try {
+    value = new TextDecoder('utf-8', { fatal: true }).decode(valueBytes);
+  } catch {
+    value = undefined;
+  }
   return {
     id: keyBase64,
     key: write.key,
     keyBase64,
-    value: write.value,
-    valueBase64: encodeBase64(valueBytes),
-    author: 'pending',
+    value,
+    valueBase64,
+    author: write.author ?? 'pending',
     contentHash: 'pending',
     contentLen: valueBytes.length,
     pending: true,
@@ -335,6 +408,12 @@ async function handle(request: WorkerRequest): Promise<unknown> {
     case 'put-entry':
       if (!isPutEntry(request.payload)) throw new Error('Invalid document entry');
       return enqueueWrite(request.payload);
+    case 'query-notes':
+      if (!isNoteQuery(request.payload)) throw new Error('Invalid note query');
+      return queryNotes(request.payload);
+    case 'mutate-note':
+      if (!isNoteMutation(request.payload)) throw new Error('Invalid note mutation');
+      return mutateNote(request.payload);
     case 'refresh-sync':
       return refreshSync();
     case 'share-ticket': {
@@ -349,6 +428,18 @@ function isPutEntry(value: unknown): value is PutEntryInput {
   return typeof value === 'object' && value !== null
     && typeof (value as PutEntryInput).key === 'string'
     && typeof (value as PutEntryInput).value === 'string';
+}
+
+function isNoteQuery(value: unknown): value is NoteQueryInput {
+  return typeof value === 'object' && value !== null
+    && typeof (value as NoteQueryInput).view === 'string'
+    && typeof (value as NoteQueryInput).search === 'string'
+    && Array.isArray((value as NoteQueryInput).tags);
+}
+
+function isNoteMutation(value: unknown): value is NoteMutationInput {
+  return typeof value === 'object' && value !== null
+    && ['save', 'delete', 'restore'].includes((value as NoteMutationInput).operation);
 }
 
 function encodeBase64(value: Uint8Array) {
@@ -366,15 +457,16 @@ function errorMessage(cause: unknown) {
 }
 
 scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
-  const request = event.data;
-  void handle(request).then(
-    (result) => {
-      const response: WorkerResponse = { id: request.id, ok: true, result };
-      scope.postMessage(response);
-    },
-    (cause: unknown) => {
-      const response: WorkerResponse = { id: request.id, ok: false, error: errorMessage(cause) };
-      scope.postMessage(response);
-    },
-  );
+  void respond(event.data);
 });
+
+async function respond(request: WorkerRequest) {
+  try {
+    const result = await handle(request);
+    const response: WorkerResponse = { id: request.id, ok: true, result };
+    scope.postMessage(response);
+  } catch (cause) {
+    const response: WorkerResponse = { id: request.id, ok: false, error: errorMessage(cause) };
+    scope.postMessage(response);
+  }
+}

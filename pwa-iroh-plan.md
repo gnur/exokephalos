@@ -75,23 +75,13 @@ application-specific Rust wrapper with `wasm-bindgen`, as recommended by the
 ### Iroh
 
 Iroh officially supports browser WebAssembly, and `iroh`, `iroh-docs`,
-`iroh-blobs`, and `iroh-gossip` contain browser-specific code paths. This does
-not mean the current `xo-core` feature graph is browser-ready.
+`iroh-blobs`, and `iroh-gossip` contain browser-specific code paths. `xo-core`
+now gates filesystem, SQLite, watcher, and native-Iroh modules behind its
+`native` feature, allowing `xo-web` to share domain, behavior, Markdown, HLC,
+ID, resolution, and Steel configuration code with native clients. The browser
+Iroh facade still disables native defaults and filesystem/RPC features.
 
-A direct check of the current tree with:
-
-```text
-cargo check -p xo-core --target wasm32-unknown-unknown \
-  --features iroh-sync --locked
-```
-
-fails because the workspace enables native defaults and Tokio's `net`,
-`signal`, and multithreaded runtime features, which pull in unsupported `mio`
-networking. Iroh's documentation specifically requires disabling its default
-features for browser builds. The Docs and Blobs defaults also enable native
-filesystem/RPC features.
-
-The initial spike must establish a browser-specific dependency graph with:
+The browser-specific dependency graph uses:
 
 - Iroh default features disabled;
 - Docs/Blobs filesystem and RPC features disabled;
@@ -304,24 +294,26 @@ Additional controls:
 
 ### Phase 1 — shared browser workspace core
 
-- Extract the projection-independent workspace service.
-- Add target-specific dependency features and browser task abstractions.
-- Implement Rust-generated note mutations, tombstones, revisions, and conflict
-  handling against the IndexedDB recovery layer.
-- Add worker RPC, structured errors, cancellation, and sync-status events.
-- Add native/Wasm parity tests for record encoding and conflict resolution.
+- [x] Share browser-compatible domain, behavior, Markdown, HLC, ID, and Steel configuration code from `xo-core`.
+- [x] Add target-specific dependency features for browser builds.
+- [x] Implement Rust-generated note revisions, heads, deletion/restoration, and conflict merging against the IndexedDB recovery layer.
+- [x] Add typed worker RPC for workspace snapshots, queries, and note mutations.
+- [x] Add native Rust tests for browser record encoding, editing, deletion, views, and subviews.
+- [ ] Add stable structured error codes, action cancellation, and subscription-driven sync events.
 
 ### Phase 2 — read-only PWA
 
-- Point views, subviews, search, tags, list, detail, and history at Wasm queries.
-- Load `xo.scm` and display configuration diagnostics.
-- Verify offline reload and installability on desktop and mobile browsers.
+- [x] Point views, subviews, search, tags, list, detail, and history at Wasm queries.
+- [x] Load `xo.scm` and display configuration diagnostics.
+- [x] Verify offline reload and installability in Chromium.
+- [ ] Extend installed/offline coverage to Firefox, WebKit, and physical mobile browsers.
 
 ### Phase 3 — editing and synchronization
 
-- Route create/edit/delete/restore through the Rust facade.
-- Add optimistic revision checks and conflict UI.
-- Expose Iroh status and peer diagnostics through worker events.
+- [x] Route create/edit/delete/restore through the Rust facade.
+- [x] Display concurrent revisions and merge all current heads on save.
+- [x] Expose Iroh status and peer diagnostics.
+- [ ] Add explicit expected-revision checks and an interactive conflict-resolution editor.
 
 ### Phase 4 — full Steel actions
 

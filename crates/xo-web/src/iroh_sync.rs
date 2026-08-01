@@ -195,6 +195,25 @@ impl IrohDocNode {
         Ok(hash.to_string())
     }
 
+    /// Publish arbitrary record bytes encoded as base64.
+    #[wasm_bindgen(js_name = putBase64)]
+    pub async fn put_base64(&self, key: String, value_base64: String) -> Result<String, JsError> {
+        if key.is_empty() {
+            return Err(JsError::new("document key is required"));
+        }
+        let value = BASE64.decode(value_base64).map_err(js_error)?;
+        if value.len() > MAX_ENTRY_BYTES {
+            return Err(JsError::new("document value exceeds 8 MiB"));
+        }
+        let hash = self
+            .document()
+            .map_err(js_error)?
+            .set_bytes(self.author, key.into_bytes(), value)
+            .await
+            .map_err(js_error)?;
+        Ok(hash.to_string())
+    }
+
     /// Return the latest value for each document key, including raw base64.
     #[wasm_bindgen(js_name = entriesJson)]
     pub async fn entries_json(&self) -> Result<String, JsError> {

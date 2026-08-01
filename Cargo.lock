@@ -7020,7 +7020,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64",
+ "blake3",
  "bytes",
+ "ciborium",
  "console_error_panic_hook",
  "futures-lite",
  "getrandom 0.3.4",
@@ -7033,8 +7035,10 @@ dependencies = [
  "serde",
  "serde_json",
  "steel-core",
+ "time",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "xo-core",
 ]
 
 [[package]]

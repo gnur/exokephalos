@@ -133,7 +133,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let old = directory.path().join("notes/old.md");
         let new = directory.path().join("notes/new.md");
-        let hidden = directory.path().join(".exo/state.md");
+        let hidden = directory.path().join(".xo/state.md");
         std::fs::create_dir_all(new.parent().unwrap()).unwrap();
         std::fs::write(&new, "new").unwrap();
         assert_eq!(
@@ -166,7 +166,7 @@ mod tests {
     fn watcher_includes_only_supported_steel_configuration_paths() {
         let directory = tempfile::tempdir().unwrap();
         let main = directory.path().join("xo.scm");
-        let unsupported_main = directory.path().join("exo.scm");
+        let unsupported_main = directory.path().join("unsupported.scm");
         let module = directory.path().join("modules/views/books.scm");
         let plugin = directory.path().join("plugins/hardcover.scm");
         let unrelated = directory.path().join("script.scm");

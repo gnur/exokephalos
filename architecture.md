@@ -1,8 +1,8 @@
-# exo-rs: Rust + Iroh Architecture
+# xo Rust + Iroh architecture
 
 ## Product Summary
 
-exo-rs is an offline-first personal knowledge system for Markdown notes with YAML frontmatter. Every native device maintains a readable Markdown projection while an Iroh Docs workspace is the authoritative replicated dataset.
+xo is an offline-first personal knowledge system for Markdown notes with YAML frontmatter. Every native device maintains a readable Markdown projection while an Iroh Docs workspace is the authoritative replicated dataset.
 
 Iroh supplies authenticated, end-to-end encrypted QUIC connections, preferring direct peers and falling back to relays. Iroh Docs provides eventually consistent multiwriter key-value replication; Iroh Blobs stores note and asset bytes, and Iroh Gossip provides live replication. [Iroh overview](https://docs.iroh.computer/), [Iroh Docs crate](https://docs.rs/iroh-docs/latest/iroh_docs/)
 
@@ -20,7 +20,7 @@ Iroh supplies authenticated, end-to-end encrypted QUIC connections, preferring d
 
 Steel Scheme defines synchronized workspace behavior.
 
-- The root exo.scm file declares views, actions, templates, and defaults; modules live under modules as .scm files.
+- The root `xo.scm` file declares views, actions, templates, and defaults; modules live under `modules/` as `.scm` files.
 - Views define display names, shortcuts, predicates, sorting, title/subtitle fields, preview templates, tag visibility, and statistics templates.
 - Subviews add named filtering predicates.
 - Actions define a label, applicability predicate, granted capabilities, and a note transformation.
@@ -55,7 +55,7 @@ The PWA is an incidental-access client using Iroh WASM bindings and IndexedDB-ba
 - Present safe declarative action and view descriptors.
 - Exclude Steel execution, arbitrary custom actions, bulk import/export, advanced book workflows, workspace configuration authoring, external-editor integration, and LSP features.
 
-A compatibility spike validates Iroh WASM, Docs, Blobs, Gossip, IndexedDB persistence, background reconnect behavior, and relay fallback against the selected dependency versions. [Iroh compatibility](https://docs.iroh.computer/compatibility)
+A browser feasibility spike validates Iroh WASM, Docs, Blobs, Gossip, IndexedDB persistence, background reconnect behavior, and relay fallback.
 
 ### iOS application
 
@@ -98,7 +98,7 @@ device/<endpoint-id>               -> label, capabilities, last-seen metadata
 
 A NoteRevision contains full frontmatter, body, materialized path, HLC, author ID, predecessor revision IDs, and deletion state. The visible head is resolved by highest HLC, then actor ID. Deleted heads hide the note; non-winning concurrent revisions remain visible as history and conflicts.
 
-Iroh Docs replicates revision references; exo-rs owns content resolution and conflict presentation rather than attempting character-level Markdown merging.
+Iroh Docs replicates revision references; xo owns content resolution and conflict presentation rather than attempting character-level Markdown merging.
 
 ### Blobs, Docs, and Markdown projection
 

@@ -150,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    fn slug_matches_legacy_rules() {
+    fn slug_is_normalized_and_bounded() {
         assert_eq!(slugify("  Héllo, Rust World!  "), "héllo-rust-world");
     }
 }

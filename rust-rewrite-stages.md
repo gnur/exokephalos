@@ -1,9 +1,7 @@
 # Rust Rewrite Implementation Stages
 
-This checklist tracks the greenfield Rust implementation roadmap. The Go
-codebase and its on-disk formats are non-normative: no source, configuration,
-ID, encryption, or behavior compatibility is required. A stage is complete
-only when every task and its exit gate are checked.
+This checklist tracks the authoritative Rust implementation roadmap. A stage
+is complete only when every task and its exit gate are checked.
 
 ## Current status
 
@@ -67,7 +65,7 @@ only when every task and its exit gate are checked.
 - [x] Perform atomic same-directory projection writes.
 - [x] Retain expected-write hashes for crash recovery and watcher suppression.
 - [x] Add a recursive debounced filesystem watcher.
-- [x] Ignore `.exo/` and other hidden local-only directories while scanning.
+- [x] Ignore `.xo/` and other hidden local-only directories while scanning.
 - [x] Suppress watcher events caused by remote materialization.
 - [x] Convert local creates, edits, deletes, and renames into immutable revisions.
 - [x] Diagnose duplicate IDs and malformed Markdown without silently rewriting them.
@@ -218,9 +216,8 @@ network and conversion behavior testable without ambient Steel access.
 
 ## Stage 8 — Offline-first PWA (next priority)
 
-The PWA is a first-class client, not a compatibility layer. Rust remains
-authoritative for records, revisions, conflicts, encryption, behavior, and
-synchronization. A dedicated Web Worker owns Rust, Steel, Iroh, and IndexedDB
+The PWA is a first-class client. Rust remains authoritative for records,
+revisions, conflicts, encryption, behavior, and synchronization. A dedicated Web Worker owns Rust, Steel, Iroh, and IndexedDB
 coordination; the UI thread owns only presentation and browser interaction.
 
 - [x] Establish the static React/PWA shell, nginx `xo-web` image, typed dedicated-worker RPC, encrypted IndexedDB recovery, and sandboxed Steel Wasm runtime.

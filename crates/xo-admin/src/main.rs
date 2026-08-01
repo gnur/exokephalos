@@ -18,11 +18,6 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Convert the documented exo.fnl subset into native xo.scm.
-    MigrateConfig {
-        source: PathBuf,
-        destination: PathBuf,
-    },
     /// Validate every Markdown file in an existing workspace without modifying it.
     AuditWorkspace { path: PathBuf },
     /// Import a Markdown workspace into a new native replicated workspace.
@@ -85,24 +80,6 @@ enum Command {
 #[allow(clippy::too_many_lines)]
 async fn main() -> Result<()> {
     match Cli::parse().command {
-        Command::MigrateConfig {
-            source,
-            destination,
-        } => {
-            let behavior = read_legacy_config(&source)?;
-            let output = migration_output(destination);
-            if output.exists() {
-                bail!("refusing to overwrite {}", output.display());
-            }
-            if let Some(parent) = output.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(
-                &output,
-                xo_core::steel_runtime::encode_config(&behavior, false),
-            )?;
-            println!("migrated={}", output.display());
-        }
         Command::AuditWorkspace { path } => {
             let mut valid = 0_u64;
             let mut invalid = 0_u64;
@@ -197,14 +174,6 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn migration_output(destination: PathBuf) -> PathBuf {
-    if destination.is_dir() || destination.extension().is_none() {
-        destination.join("xo.scm")
-    } else {
-        destination
-    }
-}
-
 async fn print_diagnostics(state_dir: &Path, workspace_id: &str) -> Result<()> {
     let node = IrohNode::persistent(state_dir).await?;
     let workspace = node
@@ -296,9 +265,9 @@ async fn rotate_namespace(state_dir: &Path, workspace_id: &str) -> Result<()> {
     println!("archived_workspace_id={}", rotation.archived_workspace_id);
     println!("workspace_id={}", rotation.workspace_id);
     println!("ticket={}", rotation.writable_ticket);
-    println!("migrated_notes={}", rotation.migrated_notes);
-    println!("migrated_assets={}", rotation.migrated_assets);
-    println!("migrated_configs={}", rotation.migrated_configs);
+    println!("copied_notes={}", rotation.copied_notes);
+    println!("copied_assets={}", rotation.copied_assets);
+    println!("copied_configs={}", rotation.copied_configs);
     for endpoint in rotation.reinvite_endpoints {
         println!("reinvite_endpoint={endpoint}");
     }
@@ -366,11 +335,6 @@ async fn import_workspace(source: &Path, state_dir: &Path) -> Result<ImportResul
         );
     }
     let source_assets = scan_assets(&source)?;
-    let migrated_config = source
-        .join("exo.fnl")
-        .exists()
-        .then(|| read_legacy_config(&source))
-        .transpose()?;
 
     let node = IrohNode::persistent(&state_dir).await?;
     let workspace = node.create_workspace().await?;
@@ -398,16 +362,6 @@ async fn import_workspace(source: &Path, state_dir: &Path) -> Result<ImportResul
             })
             .await?;
     }
-    if let Some(behavior) = migrated_config {
-        records
-            .put_config(
-                "xo.scm",
-                xo_core::steel_runtime::encode_config(&behavior, false).into_bytes(),
-                clock.next(wall_clock_ms),
-                BTreeSet::new(),
-            )
-            .await?;
-    }
     let mut imported_assets = Vec::new();
     for asset in source_assets {
         let record = records
@@ -429,59 +383,6 @@ async fn import_workspace(source: &Path, state_dir: &Path) -> Result<ImportResul
     };
     node.shutdown().await?;
     Ok(result)
-}
-
-fn read_legacy_config(source: &Path) -> Result<xo_core::behavior::WorkspaceBehavior> {
-    let (root, path) = if source.is_dir() {
-        (source, source.join("exo.fnl"))
-    } else {
-        (
-            source.parent().unwrap_or(Path::new(".")),
-            source.to_path_buf(),
-        )
-    };
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("read legacy configuration {}", path.display()))?;
-    let mut legacy_modules = Vec::new();
-    collect_legacy_modules(root, root, &mut legacy_modules)?;
-    legacy_modules.retain(|candidate| candidate != &path);
-    if !legacy_modules.is_empty() {
-        let details = legacy_modules
-            .iter()
-            .map(|candidate| {
-                candidate
-                    .strip_prefix(root)
-                    .unwrap_or(candidate)
-                    .display()
-                    .to_string()
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        bail!(
-            "unsupported legacy Fennel/Lua modules: {details}; migrate them explicitly to declarative modules/**/*.scm files"
-        );
-    }
-    xo_core::legacy_config::migrate_fennel(&text).map_err(anyhow::Error::from)
-}
-
-fn collect_legacy_modules(root: &Path, directory: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in std::fs::read_dir(directory)? {
-        let entry = entry?;
-        let path = entry.path();
-        if entry.file_type()?.is_dir() {
-            if !entry.file_name().to_string_lossy().starts_with('.') {
-                collect_legacy_modules(root, &path, output)?;
-            }
-        } else if path
-            .extension()
-            .and_then(|value| value.to_str())
-            .is_some_and(|value| value == "fnl" || value == "lua")
-        {
-            output.push(path);
-        }
-    }
-    let _ = root;
-    Ok(())
 }
 
 #[derive(Debug)]
@@ -663,7 +564,7 @@ fn audit(path: &std::path::Path, valid: &mut u64, invalid: &mut u64) -> std::io:
         let entry = entry?;
         let path = entry.path();
         if entry.file_type()?.is_dir() {
-            if entry.file_name() != ".exo" {
+            if entry.file_name() != ".xo" {
                 audit(&path, valid, invalid)?;
             }
         } else if path.extension().is_some_and(|extension| extension == "md") {
@@ -711,11 +612,11 @@ mod tests {
                 ),
                 (
                     "title".to_owned(),
-                    FrontmatterValue::String("Legacy".to_owned()),
+                    FrontmatterValue::String("Current note".to_owned()),
                 ),
             ]),
             body: "unchanged\n".to_owned(),
-            path: "notes/legacy.md".to_owned(),
+            path: "notes/current.md".to_owned(),
         };
         let source_path = source.join(&note.path);
         std::fs::create_dir_all(source_path.parent().context("note parent")?)?;
@@ -726,7 +627,7 @@ mod tests {
         let before = std::fs::read(source.join(&note.path))?;
         let asset_path = source.join("assets/images/cover.png");
         std::fs::create_dir_all(asset_path.parent().context("asset parent")?)?;
-        std::fs::write(&asset_path, b"legacy asset")?;
+        std::fs::write(&asset_path, b"asset bytes")?;
         let asset_before = std::fs::read(&asset_path)?;
 
         let imported = import_workspace(&source, &directory.path().join("native-state")).await?;
@@ -734,7 +635,7 @@ mod tests {
         assert_eq!(imported.assets, 1);
         assert_eq!(std::fs::read(source.join(&note.path))?, before);
         assert_eq!(std::fs::read(asset_path)?, asset_before);
-        assert!(!source.join(".exo").exists());
+        assert!(!source.join(".xo").exists());
         Ok(())
     }
 
@@ -743,11 +644,11 @@ mod tests {
         let _guard = IROH_TEST_LOCK.lock().await;
         let directory = tempfile::tempdir()?;
         assert!(
-            import_workspace(directory.path(), &directory.path().join(".exo/native"))
+            import_workspace(directory.path(), &directory.path().join(".xo/native"))
                 .await
                 .is_err()
         );
-        assert!(!directory.path().join(".exo").exists());
+        assert!(!directory.path().join(".xo").exists());
         Ok(())
     }
 
@@ -802,48 +703,6 @@ mod tests {
 
         target.shutdown().await?;
         source.shutdown().await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn example_workspace_imports_equivalent_versioned_steel_configuration() -> Result<()> {
-        let _guard = IROH_TEST_LOCK.lock().await;
-        let directory = tempfile::tempdir()?;
-        let source = Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../oldcodebase/example-repo"
-        ));
-        let state = directory.path().join("native");
-        let imported = import_workspace(source, &state).await?;
-        assert_eq!(imported.imported, 278);
-        let node = IrohNode::persistent(&state).await?;
-        let workspace = node
-            .open_workspace_str(&imported.workspace_id)
-            .await?
-            .context("imported workspace missing")?;
-        let configs = WorkspaceRecords::new(&workspace).list_configs().await?;
-        assert_eq!(configs.len(), 1);
-        assert_eq!(configs[0].record.path, "xo.scm");
-        let loaded = xo_core::steel_runtime::SteelWorkspace::load(
-            std::str::from_utf8(&configs[0].bytes)?,
-            &std::collections::BTreeMap::default(),
-            "fixed",
-        )?;
-        assert_eq!(loaded.views.len(), 5);
-        assert_eq!(loaded.actions.len(), 3);
-        node.shutdown().await?;
-        Ok(())
-    }
-
-    #[test]
-    fn migration_destination_directory_may_contain_a_dot() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let destination = directory.path().join("config.output");
-        std::fs::create_dir(&destination)?;
-        assert_eq!(
-            migration_output(destination.clone()),
-            destination.join("xo.scm")
-        );
         Ok(())
     }
 }

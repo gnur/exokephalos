@@ -481,7 +481,7 @@ mod tests {
         let node = IrohNode::persistent(directory.path().join("iroh")).await?;
         let workspace = node.create_workspace().await?;
         let records = WorkspaceRecords::new(&workspace);
-        let source = b"(workspace-config (query-limit 500))\n".to_vec();
+        let source = b"(workspace-config (schema 1) (query-limit 500))\n".to_vec();
         records
             .put_config(
                 "xo.scm",
@@ -501,7 +501,7 @@ mod tests {
         assert_eq!(report.config_materialization.materialized.len(), 1);
         let path = projection.root().join("xo.scm");
         assert_eq!(std::fs::read(&path)?, source);
-        let edited = b"(workspace-config (query-limit 10))\n".to_vec();
+        let edited = b"(workspace-config (schema 1) (query-limit 10))\n".to_vec();
         std::fs::write(&path, &edited)?;
         let applied = projection
             .apply_events(&[ProjectionEvent::Upsert(path)])

@@ -207,19 +207,9 @@ fn normalize_imported_note(note: &mut Note, default_type: &str) -> Result<()> {
         note.frontmatter.get("created"),
         Some(FrontmatterValue::String(value)) if !value.trim().is_empty()
     ) {
-        let created = note
-            .frontmatter
-            .get("added")
-            .and_then(|value| frontmatter_string(Some(value)))
-            .map(str::to_owned)
-            .map_or_else(
-                || {
-                    OffsetDateTime::now_utc()
-                        .format(&Rfc3339)
-                        .context("format import timestamp")
-                },
-                Ok,
-            )?;
+        let created = OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .context("format import timestamp")?;
         note.frontmatter
             .insert("created".to_owned(), FrontmatterValue::String(created));
     }

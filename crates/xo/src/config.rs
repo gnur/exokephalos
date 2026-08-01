@@ -9,7 +9,6 @@ pub const CONFIG_RELATIVE_PATH: &str = ".config/xo/config.scm";
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct XoConfig {
-    #[serde(default = "schema")]
     pub schema: u16,
     pub state_dir: PathBuf,
     #[serde(default)]

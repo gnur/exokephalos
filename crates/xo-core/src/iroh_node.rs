@@ -262,7 +262,7 @@ impl IrohWorkspace {
         let key = key.into();
         let value = value.into();
         let size = u64::try_from(value.len()).context("blob size exceeds u64")?;
-        let tag = format!("exo/{}/{}", self.id(), blake3::hash(&key).to_hex());
+        let tag = format!("xo/{}/{}", self.id(), blake3::hash(&key).to_hex());
         let hash_and_format = self
             .blobs
             .blobs()
@@ -424,7 +424,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn two_peers_sync_and_second_peer_survives_restart() -> Result<()> {
+    async fn two_peers_sync_and_second_peer_reconnects_after_restart() -> Result<()> {
         let _guard = IROH_TEST_LOCK.lock().await;
         let first_dir = tempfile::tempdir()?;
         let second_dir = tempfile::tempdir()?;
@@ -457,7 +457,7 @@ mod tests {
             reopened.get("note/test/revision/one").await?,
             Some(b"hello".to_vec())
         );
-        reopened.resume_sync().await?;
+        reopened.start_sync(&ticket).await?;
         workspace
             .put("note/test/revision/two", "after restart")
             .await?;

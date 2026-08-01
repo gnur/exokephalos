@@ -4,11 +4,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
-use time::format_description::well_known::Rfc3339;
-use time::macros::format_description;
-use time::{Date, OffsetDateTime};
+use time::OffsetDateTime;
 
 use crate::domain::{AssetRecord, FrontmatterValue, Note};
 use crate::{NoteId, id, markdown};
@@ -69,7 +66,7 @@ pub struct ExpectedWrites {
 }
 
 impl ExpectedWrites {
-    /// Load durable suppression state, normally from `.exo/expected-writes.json`.
+    /// Load durable suppression state, normally from `.xo/expected-writes.json`.
     pub fn open(state_path: impl AsRef<Path>) -> Result<Self, ProjectionError> {
         let state_path = state_path.as_ref().to_path_buf();
         let hashes = match std::fs::read(&state_path) {
@@ -165,7 +162,7 @@ impl ProjectionState {
     pub fn open(root: impl AsRef<Path>) -> Result<Self, ProjectionError> {
         std::fs::create_dir_all(root.as_ref())?;
         let root = root.as_ref().canonicalize()?;
-        let state_dir = root.join(".exo");
+        let state_dir = root.join(".xo");
         Ok(Self {
             manifest_path: state_dir.join("projection.json"),
             asset_manifest_path: state_dir.join("assets.json"),
@@ -516,10 +513,7 @@ pub fn canonical_note_path(id: &NoteId, frontmatter: &crate::domain::Frontmatter
     format!("{prefix}/{id}-{slug}.md")
 }
 
-/// Scan a legacy workspace, assigning relocation-stable IDs in memory when they are absent.
-///
-/// The source files are read only. Generated IDs follow the legacy importer contract: the
-/// first component encodes the note date and the remaining four characters come from SHA-256.
+/// Scan an import source without modifying it, assigning current-format IDs when absent.
 pub fn scan_for_import(root: impl AsRef<Path>) -> Result<ScanReport, ProjectionError> {
     scan_impl(root.as_ref(), true)
 }
@@ -576,7 +570,7 @@ fn scan_impl(root: &Path, generate_missing_ids: bool) -> Result<ScanReport, Proj
                 continue;
             }
             _ => {
-                let generated = deterministic_import_id(&frontmatter, &relative, &path)?;
+                let generated = id::generate(OffsetDateTime::now_utc());
                 frontmatter.insert("id".to_owned(), FrontmatterValue::String(generated.clone()));
                 generated
             }
@@ -598,39 +592,6 @@ fn scan_impl(root: &Path, generate_missing_ids: bool) -> Result<ScanReport, Proj
         });
     }
     Ok(report)
-}
-
-fn deterministic_import_id(
-    frontmatter: &crate::domain::Frontmatter,
-    relative: &str,
-    path: &Path,
-) -> Result<String, ProjectionError> {
-    let timestamp = ["created", "added"]
-        .into_iter()
-        .find_map(|key| match frontmatter.get(key) {
-            Some(FrontmatterValue::String(value)) => parse_timestamp(value),
-            _ => None,
-        })
-        .unwrap_or(path.metadata()?.modified()?.into());
-    let mut id = id::encode_base32(id::days_since_epoch(timestamp));
-    let digest = Sha256::digest(relative.as_bytes());
-    let mut seed = u64::from_be_bytes(digest[..8].try_into().expect("SHA-256 has eight bytes"));
-    for _ in 0..4 {
-        id.push(char::from(id::BASE32_CHARS[(seed % 32) as usize]));
-        seed /= 32;
-    }
-    if id.len() < 7 {
-        id = format!("{id:0>7}");
-    }
-    Ok(id)
-}
-
-fn parse_timestamp(value: &str) -> Option<OffsetDateTime> {
-    OffsetDateTime::parse(value, &Rfc3339).ok().or_else(|| {
-        Date::parse(value, format_description!("[year]-[month]-[day]"))
-            .ok()
-            .map(|date| date.midnight().assume_utc())
-    })
 }
 
 pub fn materialize(root: impl AsRef<Path>, note: &Note) -> Result<PathBuf, ProjectionError> {
@@ -727,7 +688,7 @@ fn safe_join(root: &Path, relative: &str) -> Result<PathBuf, ProjectionError> {
         || relative_path
             .components()
             .next()
-            .is_some_and(|component| component.as_os_str() == ".exo");
+            .is_some_and(|component| component.as_os_str() == ".xo");
     if invalid {
         Err(ProjectionError::InvalidPath(relative.to_owned()))
     } else {
@@ -801,8 +762,8 @@ mod tests {
         std::fs::create_dir_all(directory.path().join("notes")).unwrap();
         std::fs::write(directory.path().join("notes/one.md"), &content).unwrap();
         std::fs::write(directory.path().join("notes/two.md"), content).unwrap();
-        std::fs::create_dir_all(directory.path().join(".exo")).unwrap();
-        std::fs::write(directory.path().join(".exo/hidden.md"), "ignored").unwrap();
+        std::fs::create_dir_all(directory.path().join(".xo")).unwrap();
+        std::fs::write(directory.path().join(".xo/hidden.md"), "ignored").unwrap();
         let report = scan(directory.path()).unwrap();
         assert_eq!(report.notes.len(), 1);
         assert_eq!(report.diagnostics[0].code, "duplicate-id");
@@ -820,7 +781,7 @@ mod tests {
     #[test]
     fn expected_materialization_survives_restart_and_suppresses_one_event() {
         let directory = tempfile::tempdir().unwrap();
-        let state_path = directory.path().join(".exo/expected-writes.json");
+        let state_path = directory.path().join(".xo/expected-writes.json");
         let expected = ExpectedWrites::open(&state_path).unwrap();
         let destination = materialize_expected(
             directory.path(),
@@ -850,15 +811,13 @@ mod tests {
     }
 
     #[test]
-    fn legacy_import_assigns_a_stable_id_without_modifying_the_source() {
+    fn import_assigns_a_current_id_without_modifying_the_source() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("legacy.md");
-        let content = "---\nadded: 2020-01-02T00:00:00Z\ntitle: Legacy\n---\n\nbody\n";
+        let path = directory.path().join("note.md");
+        let content = "---\ntitle: Imported note\n---\n\nbody\n";
         std::fs::write(&path, content).unwrap();
-        let first = scan_for_import(directory.path()).unwrap();
-        let second = scan_for_import(directory.path()).unwrap();
-        assert_eq!(first, second);
-        assert!(id::is_valid(first.notes[0].id.as_str()));
+        let report = scan_for_import(directory.path()).unwrap();
+        assert!(id::is_valid(report.notes[0].id.as_str()));
         assert_eq!(std::fs::read_to_string(path).unwrap(), content);
     }
 

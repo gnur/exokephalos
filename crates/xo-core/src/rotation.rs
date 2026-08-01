@@ -15,9 +15,9 @@ pub struct RotationResult {
     pub workspace_id: String,
     pub writable_ticket: String,
     pub reinvite_endpoints: Vec<String>,
-    pub migrated_notes: usize,
-    pub migrated_assets: usize,
-    pub migrated_configs: usize,
+    pub copied_notes: usize,
+    pub copied_assets: usize,
+    pub copied_configs: usize,
 }
 
 /// Create a new namespace containing a checkpoint of all accepted visible state.
@@ -59,7 +59,7 @@ pub async fn rotate_workspace(
     let actor = ActorId::new(target.author_id().to_string());
     let mut clock = HlcClock::new(actor.clone());
     let mut logical_time = wall_clock_ms;
-    let mut migrated_notes = 0_usize;
+    let mut copied_notes = 0_usize;
     for resolved in snapshot.resolved {
         let Some(visible) = resolved.visible else {
             continue;
@@ -77,11 +77,11 @@ pub async fn rotate_workspace(
                 deleted: false,
             })
             .await?;
-        migrated_notes += 1;
+        copied_notes += 1;
         logical_time = logical_time.saturating_add(1);
     }
 
-    let migrated_assets = snapshot.assets.len();
+    let copied_assets = snapshot.assets.len();
     for asset in snapshot.assets {
         target_records
             .put_asset(
@@ -93,7 +93,7 @@ pub async fn rotate_workspace(
             .await?;
     }
 
-    let migrated_configs = snapshot.configs.len();
+    let copied_configs = snapshot.configs.len();
     for config in snapshot.configs {
         target_records
             .put_config(
@@ -129,9 +129,9 @@ pub async fn rotate_workspace(
         workspace_id: target.id().to_string(),
         writable_ticket,
         reinvite_endpoints,
-        migrated_notes,
-        migrated_assets,
-        migrated_configs,
+        copied_notes,
+        copied_assets,
+        copied_configs,
     })
 }
 
@@ -321,9 +321,9 @@ mod tests {
         );
         assert_eq!(
             (
-                rotation.migrated_notes,
-                rotation.migrated_assets,
-                rotation.migrated_configs
+                rotation.copied_notes,
+                rotation.copied_assets,
+                rotation.copied_configs
             ),
             (1, 1, 1)
         );

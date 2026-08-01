@@ -48,11 +48,11 @@ pub struct SteelWorkspace;
 
 impl SteelWorkspace {
     pub fn load(
-        exo_scm: &str,
+        xo_scm: &str,
         modules: &BTreeMap<String, String>,
         deterministic_now: &str,
     ) -> Result<WorkspaceBehavior, SteelConfigError> {
-        let mut behavior = evaluate(exo_scm, "workspace-config", deterministic_now)?;
+        let mut behavior = evaluate(xo_scm, "workspace-config", deterministic_now)?;
         for (path, source) in modules {
             if valid_module_path(path) {
                 let module = evaluate(source, "workspace-module", deterministic_now)?;
@@ -216,17 +216,17 @@ fn sandbox(now: &str) -> Engine {
                 .to_string()
             },
         )
-        .register_fn("exo-has-tag", |tags: String, tag: String| {
+        .register_fn("xo-has-tag", |tags: String, tag: String| {
             tags.split(',').map(str::trim).any(|value| value == tag)
         })
-        .register_fn("exo-add-tag", |tags: String, tag: String| {
+        .register_fn("xo-add-tag", |tags: String, tag: String| {
             update_tags(&tags, &tag, true)
         })
-        .register_fn("exo-remove-tag", |tags: String, tag: String| {
+        .register_fn("xo-remove-tag", |tags: String, tag: String| {
             update_tags(&tags, &tag, false)
         });
     let now = now.to_owned();
-    engine.register_fn("exo-now", move || now.clone());
+    engine.register_fn("xo-now", move || now.clone());
     engine
 }
 
@@ -386,7 +386,8 @@ fn workspace_behavior(
         constructor,
     )?;
     let mut behavior = WorkspaceBehavior {
-        schema: optional_u16(&fields, "schema")?.unwrap_or(crate::behavior::BEHAVIOR_SCHEMA),
+        schema: optional_u16(&fields, "schema")?
+            .ok_or_else(|| native_error("missing field schema"))?,
         default_view: optional_string(&fields, "default-view")?.unwrap_or_else(|| "all".to_owned()),
         query_limit: optional_usize(&fields, "query-limit")?
             .unwrap_or(crate::behavior::DEFAULT_QUERY_LIMIT),
@@ -1458,14 +1459,13 @@ mod tests {
         let loaded = SteelWorkspace::load(&source, &BTreeMap::new(), "fixed").unwrap();
         assert_eq!(loaded, behavior);
 
-        assert!(
-            SteelWorkspace::load(
-                "(workspace-config \"{\\\"query_limit\\\":42}\")",
-                &BTreeMap::new(),
-                "fixed"
-            )
-            .is_err()
-        );
+        for rejected in [
+            "(workspace-config (views))",
+            "(workspace-config (schema 0) (views))",
+            "(workspace-config \"{\\\"query_limit\\\":42}\")",
+        ] {
+            assert!(SteelWorkspace::load(rejected, &BTreeMap::new(), "fixed").is_err());
+        }
     }
 
     #[test]
@@ -1484,7 +1484,7 @@ mod tests {
             );
         }
         let mut engine = sandbox("fixed-time");
-        let value = engine.run("(exo-now)".to_owned()).unwrap();
+        let value = engine.run("(xo-now)".to_owned()).unwrap();
         assert!(
             matches!(value.last(), Some(SteelVal::StringV(value)) if value.as_str() == "fixed-time")
         );
@@ -1515,81 +1515,6 @@ mod tests {
             (workspace #f)
             (projection "."))"#;
         assert!(evaluate_xo_config(native_attack).is_err());
-    }
-
-    #[test]
-    fn migrated_example_has_equivalent_native_behavior() {
-        use crate::behavior::Query;
-        use crate::domain::FrontmatterValue;
-        let behavior = crate::legacy_config::migrate_fennel(include_str!(
-            "../../../oldcodebase/example-repo/exo.fnl"
-        ))
-        .unwrap();
-        let loaded =
-            SteelWorkspace::load(&encode_config(&behavior, false), &BTreeMap::new(), "fixed")
-                .unwrap();
-        let scan = crate::projection::scan_for_import(std::path::Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../oldcodebase/example-repo"
-        )))
-        .unwrap();
-        assert_eq!(scan.notes.len(), 278);
-        for view in &loaded.views {
-            let expected = scan
-                .notes
-                .iter()
-                .filter(|note| {
-                    let string = |field: &str| match note.frontmatter.get(field) {
-                        Some(FrontmatterValue::String(value)) => value.as_str(),
-                        _ => "",
-                    };
-                    let tags = match note.frontmatter.get("tags") {
-                        Some(FrontmatterValue::Sequence(values)) => values
-                            .iter()
-                            .filter_map(|value| {
-                                if let FrontmatterValue::String(value) = value {
-                                    Some(value.as_str())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect::<Vec<_>>(),
-                        _ => vec![],
-                    };
-                    match view.id.as_str() {
-                        "books" => ["read", "to-read", "reading", "stopped-reading"]
-                            .iter()
-                            .any(|tag| tags.contains(tag)),
-                        "docs" => string("type") == "doc",
-                        "notes" => {
-                            string("type") == "note"
-                                && !["read", "to-read", "reading", "stopped-reading"]
-                                    .iter()
-                                    .any(|tag| tags.contains(tag))
-                        }
-                        "secrets" => string("type") == "secret",
-                        "webhooks" => matches!(string("type"), "webhook" | "alert"),
-                        _ => false,
-                    }
-                })
-                .count();
-            let actual = loaded
-                .query(
-                    &scan.notes,
-                    &Query {
-                        view: view.id.clone(),
-                        ..Query::default()
-                    },
-                )
-                .unwrap()
-                .len();
-            assert_eq!(
-                actual,
-                expected.min(loaded.query_limit),
-                "view {} differs",
-                view.id
-            );
-        }
     }
 
     fn view(id: &str) -> ViewDescriptor {

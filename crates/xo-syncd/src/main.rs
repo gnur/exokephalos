@@ -22,7 +22,7 @@ use operator::{OperatorState, log_event};
 )]
 struct Cli {
     /// Directory containing local daemon state.
-    #[arg(long, default_value = ".exo/syncd")]
+    #[arg(long, default_value = ".xo/syncd")]
     state_dir: PathBuf,
     /// Address for health, metrics, and authenticated operator endpoints.
     #[arg(long, default_value = "127.0.0.1:9464")]

@@ -91,26 +91,14 @@ impl WorkspaceSession {
             }
         }
         let had_workspace_config = xo_main.is_some();
-        let (mut behavior, upgrade_prerelease_config) = match xo_main {
-            Some(source) => match xo_core::steel_runtime::SteelWorkspace::load(
+        let mut behavior = match xo_main {
+            Some(source) => xo_core::steel_runtime::SteelWorkspace::load(
                 &source,
                 &modules,
                 "1970-01-01T00:00:00Z",
-            ) {
-                Ok(behavior) => (behavior, false),
-                Err(error) => match modules
-                    .is_empty()
-                    .then_some(decode_prerelease_config(&source))
-                    .flatten()
-                {
-                    Some(behavior) => (behavior?, true),
-                    None => {
-                        return Err(error)
-                            .context("load replicated workspace configuration xo.scm");
-                    }
-                },
-            },
-            None => (WorkspaceBehavior::default(), false),
+            )
+            .context("load replicated workspace configuration xo.scm")?,
+            None => WorkspaceBehavior::default(),
         };
         let install_default_views = behavior.views.is_empty();
         if install_default_views {
@@ -135,7 +123,7 @@ impl WorkspaceSession {
                 BTreeSet::from([Capability::CreateNote, Capability::Network]),
             );
         }
-        if upgrade_prerelease_config || install_default_views || install_url_capture {
+        if install_default_views || install_url_capture {
             let predecessors = configs
                 .iter()
                 .find(|config| config.record.path == "xo.scm")
@@ -265,27 +253,6 @@ impl WorkspaceSession {
     pub async fn shutdown(self) -> Result<()> {
         self.node.shutdown().await
     }
-}
-
-fn decode_prerelease_config(source: &str) -> Option<Result<WorkspaceBehavior>> {
-    let encoded = source
-        .trim()
-        .strip_prefix("(workspace-config ")?
-        .strip_suffix(')')?;
-    let json = match serde_json::from_str::<String>(encoded) {
-        Ok(json) => json,
-        Err(error) => return Some(Err(error).context("decode prerelease workspace envelope")),
-    };
-    Some(
-        serde_json::from_str::<WorkspaceBehavior>(&json)
-            .context("decode prerelease workspace descriptor")
-            .and_then(|behavior| {
-                behavior
-                    .validate()
-                    .context("validate prerelease workspace descriptor")?;
-                Ok(behavior)
-            }),
-    )
 }
 
 fn default_views() -> Vec<ViewDescriptor> {
@@ -486,37 +453,6 @@ mod tests {
         );
         session.shutdown().await?;
         Ok(())
-    }
-
-    #[tokio::test]
-    async fn prerelease_json_workspace_config_is_upgraded_to_native_forms() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let state = directory.path().join("state");
-        let projection = directory.path().join("notes");
-        let mut session = WorkspaceSession::open(&state, None, None, projection.clone()).await?;
-        let old_behavior = WorkspaceBehavior {
-            default_view: "notes".into(),
-            views: default_views(),
-            ..WorkspaceBehavior::default()
-        };
-        let json = serde_json::to_string(&old_behavior)?;
-        let envelope = format!("(workspace-config {})", serde_json::to_string(&json)?);
-        WorkspaceRecords::new(&session.workspace)
-            .put_config(
-                "xo.scm",
-                envelope.into_bytes(),
-                session.clock.next(now_ms()?),
-                BTreeSet::new(),
-            )
-            .await?;
-
-        let behavior = session.behavior().await?;
-
-        assert_eq!(behavior, old_behavior);
-        let source = std::fs::read_to_string(projection.join("xo.scm"))?;
-        assert!(source.starts_with("(workspace-config\n  (schema 1)"));
-        assert!(!source.contains("(workspace-config \""));
-        session.shutdown().await
     }
 
     #[tokio::test]

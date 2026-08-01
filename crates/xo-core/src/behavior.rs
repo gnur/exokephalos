@@ -36,7 +36,6 @@ pub enum BehaviorError {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceBehavior {
-    #[serde(default = "behavior_schema")]
     pub schema: u16,
     #[serde(default = "default_view")]
     pub default_view: String,
@@ -52,9 +51,6 @@ pub struct WorkspaceBehavior {
     pub query_limit: usize,
 }
 
-const fn behavior_schema() -> u16 {
-    BEHAVIOR_SCHEMA
-}
 fn default_view() -> String {
     "all".to_owned()
 }

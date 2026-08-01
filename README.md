@@ -52,8 +52,8 @@ WebAssembly. It can create a writable document, join an existing writable
 ticket, synchronize through Iroh's end-to-end encrypted browser relay, publish
 entries offline, recover cached entries and pending writes after reload, and
 converge two browser contexts through a native `xo-syncd` peer. Endpoint and
-author keys plus the writable capability are encrypted in IndexedDB. No Go
-service or application API is used by the PWA.
+author keys plus the writable capability are encrypted in IndexedDB. The PWA
+uses no application service or application API.
 
 The current UI exposes the verified raw document snapshot so synchronization
 and recovery are testable end to end. Mapping those records into the complete
@@ -117,8 +117,7 @@ converge after they reconnect.
 ### Conflict detection and resolution
 
 Each note revision records its predecessor revisions. Normal sequential edits
-form a chain; an older head that is already an ancestor of a newer head is
-history, not a conflict. If two peers edit the same note without seeing each
+form a chain; an ancestor head is history, not a conflict. If two peers edit the same note without seeing each
 other's edit, both revisions remain heads and neither is an ancestor of the
 other. xo records that as a conflict.
 
@@ -241,10 +240,9 @@ run `xo-admin` and `xo-syncd` concurrently against the same state directory.
 
 ### Optional: seed a headless workspace first
 
-The TUI-first flow above does not need this step. For a headless-first setup or
-a one-time migration, `xo-admin import-workspace` can create the replicated
-workspace used by the server from an existing Markdown projection or an empty
-directory.
+The TUI-first flow above does not need this step. For a headless-first setup,
+`xo-admin import-workspace` can create the replicated workspace used by the
+server from a current Markdown projection or an empty directory.
 
 ```console
 mkdir -p /srv/xo-seed

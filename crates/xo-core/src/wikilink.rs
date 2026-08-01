@@ -51,7 +51,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reports_legacy_byte_ranges_and_lines() {
+    fn reports_byte_ranges_and_lines() {
         let links = parse("first [[abc]]\n[[second]]");
         assert_eq!(links[0].id, "abc");
         assert_eq!((links[0].line, links[0].start_column), (0, 6));

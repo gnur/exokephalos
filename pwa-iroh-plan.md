@@ -2,10 +2,9 @@
 
 ## Goal
 
-Build `xo-web` as the primary, greenfield browser application. The old Go/web
-codebase is non-normative and requires no API, storage, behavior, or UI
-compatibility. Production deployment consists only of versioned static assets;
-all workspace logic executes in the browser.
+Build `xo-web` as the primary browser application. Production deployment
+consists only of versioned static assets; all workspace logic executes in the
+browser.
 
 The application should:
 
@@ -206,34 +205,18 @@ separate disposable worker so cancellation can terminate the entire worker.
 
 ## Greenfield UI scope
 
-Useful design ideas may be reimplemented without retaining old APIs or data
-contracts:
+The browser UI includes:
 
-- React screen structure and responsive layout;
-- view/subview navigation;
-- item list, editor, Markdown preview, search, and tag filtering;
-- create/edit/delete interactions;
-- action menus and action error display;
-- PWA manifest, installability, and application-shell caching;
-- typography, icons, and Playwright coverage; and
-- IndexedDB as browser durability infrastructure.
+- responsive view and subview navigation;
+- item lists, editing, Markdown preview, search, and tag filtering;
+- create, edit, delete, and action interactions;
+- worker events derived from Iroh subscriptions;
+- local workspace unlock and peer diagnostics;
+- PWA manifest, installability, and application-shell caching; and
+- IndexedDB durability coordinated by Rust and the dedicated worker.
 
-Do not carry forward:
-
-| Old implementation | Replacement |
-| --- | --- |
-| Go `/api/app/*` CRUD | `xo-web` Wasm commands |
-| HTTP sync v2 push/pull | Browser Iroh endpoint |
-| `EventSource('/api/events')` | Worker events derived from Iroh subscriptions |
-| TypeScript HLC/operation generation | Shared Rust record/revision logic |
-| Dexie `syncOps` protocol | Rust record recovery queue |
-| Server `runAction` API | Local Steel Wasm execution |
-| Server login/password | Local workspace unlock |
-| Fennel/Lua config screens | Steel editor and diagnostics |
-| API-key/client admin | Current peer diagnostics |
-
-Browser libraries such as `react-dom`, Dexie, DOMPurify, `marked`, WebCrypto,
-and normal `fetch` remain useful. Keep Markdown sanitization and apply a
+Use browser libraries such as `react-dom`, DOMPurify, `marked`, WebCrypto, and
+normal `fetch` where appropriate. Keep Markdown sanitization and apply a
 restrictive Content Security Policy.
 
 ## Rust/Wasm facade
@@ -290,7 +273,7 @@ for portable recovery. Never place writable tickets, endpoint secrets, note
 keys, or plaintext encrypted-note keys in `localStorage`, URLs, analytics, or
 logs.
 
-The cache schema needs explicit migrations and crash tests. A local mutation is
+The cache schema needs strict validation and crash tests. A local mutation is
 successful only after its record and recovery metadata are durably committed to
 IndexedDB. Network publication may happen afterward.
 
@@ -351,7 +334,7 @@ Additional controls:
 
 - Add multi-browser Playwright coverage against a real `xo-syncd` peer.
 - Test Chromium, Firefox, and WebKit, including installed PWA behavior.
-- Test IndexedDB migration, quota exhaustion, eviction, crash recovery, and
+- Test IndexedDB validation, quota exhaustion, eviction, crash recovery, and
   corrupt checkpoints.
 - Audit CSP, Markdown rendering, secret handling, fetch permissions, and Steel
   host imports.
@@ -365,7 +348,7 @@ Add jobs for:
 - `cargo check --target wasm32-unknown-unknown` for `xo-web`;
 - `wasm-bindgen`/`wasm-pack` release build and bundle-size budget;
 - TypeScript typecheck, ESLint, and production Vite build;
-- unit tests for worker RPC and IndexedDB migrations;
+- unit tests for worker RPC and IndexedDB recovery;
 - Playwright Chromium/Firefox/WebKit offline tests; and
 - a networked browser ↔ `xo-syncd` ↔ native `xo-core` convergence test.
 

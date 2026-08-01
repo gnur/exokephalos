@@ -424,7 +424,7 @@ fn validate_relative_path(path: &str) -> Result<(), DomainError> {
         || parsed
             .components()
             .next()
-            .is_some_and(|component| component.as_os_str() == ".exo");
+            .is_some_and(|component| component.as_os_str() == ".xo");
     if invalid {
         Err(DomainError::InvalidPath(path.to_owned()))
     } else {

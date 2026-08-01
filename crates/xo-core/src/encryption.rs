@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-pub const PREFIX: &str = "exo-encrypted:v1:";
+pub const PREFIX: &str = "xo-encrypted:v1:";
 const MEMORY_KIB: u32 = 65_536;
 const ITERATIONS: u32 = 3;
 const LANES: u32 = 4;
@@ -156,7 +156,7 @@ fn derive_key(
 }
 
 fn aad(note_id: &str) -> Vec<u8> {
-    format!("exo-encrypted:v1\0{note_id}").into_bytes()
+    format!("xo-encrypted:v1\0{note_id}").into_bytes()
 }
 
 #[cfg(test)]

@@ -8,7 +8,6 @@ pub mod hlc;
 pub mod id;
 #[cfg(feature = "iroh-sync")]
 pub mod iroh_node;
-pub mod legacy_config;
 pub mod local_index;
 pub mod markdown;
 pub mod projection;

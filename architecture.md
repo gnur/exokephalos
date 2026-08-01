@@ -99,7 +99,7 @@ The Wasm facade:
 ### Binaries
 
 - `xo`: TUI and native workspace peer.
-- `xo-lsp`: editor companion.
+- `xo-lsp`: stdio editor companion with recursive projection loading, live Markdown/ID diagnostics, and wikilink/tag completion; it is currently read-only.
 - `xo-syncd`: durable headless peer.
 - `xo-admin`: administration, backup, restore, invitations, and diagnostics.
 

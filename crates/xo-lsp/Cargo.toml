@@ -8,7 +8,14 @@ repository.workspace = true
 
 [dependencies]
 clap.workspace = true
+tokio.workspace = true
+tower-lsp.workspace = true
 xo-core = { path = "../xo-core" }
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+url.workspace = true
 
 [lints]
 workspace = true

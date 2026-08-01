@@ -11,9 +11,9 @@ is complete only when every task and its exit gate are checked.
 - Stage 3 is complete: native peers converge across partitions and restarts, retain conflicts, and resume verified partial Blob transfers.
 - Stage 4 is complete: central-peer operations, backup/restore, signed retirement, and namespace rotation/reinvitation pass their security and recovery scenarios.
 - Stages 5 and 6 are complete: portable sandboxed Steel behavior and the persistent daily-use Ratatui client pass their offline, conflict, and convergence gates.
-- Stage 7 is in progress: import/export, capability-gated URL capture, reading states, and the executable Steel Hardcover plugin are complete; webhook, encrypted-note, Goodreads-plugin, and statistics workflows remain. Image attachments are out of scope.
-- Stage 8, the full offline-first PWA, is the next priority.
-- Stage 9 retains the deferred LSP work. There is no iOS application stage.
+- Stage 7 is in progress: import/export, capability-gated URL capture, reading states, and the executable Steel Hardcover plugin are complete; webhook, PWA encrypted-note, Goodreads-plugin, and statistics workflows remain. Image attachments are out of scope.
+- Stage 8 is in progress: the static offline-first PWA, direct relay-only browser Iroh, encrypted capability vault, Rust-authoritative views and note mutations, and native/browser convergence are implemented. Action UI, encrypted-note unlocking, interactive conflict resolution, stronger recovery validation, accessibility, and broader browser/mobile coverage remain.
+- Stage 9 is in progress: `xo-lsp` now implements the stdio lifecycle, workspace loading, live Markdown diagnostics, and basic wikilink/tag completion. Navigation, rename, richer diagnostics, semantic features, and watcher-safe edits remain. There is no iOS application stage.
 
 ## Stage 0 — Architecture proof
 
@@ -154,13 +154,13 @@ is complete only when every task and its exit gate are checked.
 - [x] Show sync state, durable operations, retry controls, missing blobs, and diagnostics.
 - [x] Add conflict history, conflict review, and device management.
 - [x] Add secure encrypted-note preview and temporary-file editing.
-- [x] Replace the footer with a four-line connection/key-hint header.
-- [x] Lay out header shortcuts in three columns and show tags, filtered notes, and preview in the three content panes.
-- [x] Add inline `/` filtering and a `g` goto menu with computed unique prefixes for views and subviews.
-- [x] Make the tag pane toggleable with `T` and show live faceted counts for the current view, title query, and selected tags.
+- [x] Use an uncluttered release-only header, configurable leader-key popup, and compact single-line footer.
+- [x] Show tags, filtered notes, and preview in the three content panes without persistent movement hints.
+- [x] Add inline `/` filtering and leader-driven view/subview navigation with computed unique prefixes.
+- [x] Make the tag pane leader-toggleable and show live faceted counts for the current view, title query, and selected tags.
 - [x] Bootstrap `xo.scm` with Notes and All views when no views exist.
 - [x] Guarantee `id`, `created`, `tags`, `title`, and `type` on newly created items.
-- [x] Show the serialized raw Markdown document in preview with lightweight syntax highlighting.
+- [x] Show the serialized Markdown document in the Preview pane with lightweight syntax highlighting.
 - [x] Prompt for a title before creation and open the complete new document in the external editor.
 - [x] Add a TUI-guided `xo-syncd` pairing flow with safe command generation, hidden tickets, server-output parsing, and durable peer connection.
 - [x] Add an authenticated browser setup page to `xo-syncd` and make workspace ID, ticket transfer, and the returned server ticket the primary TUI pairing flow.
@@ -173,14 +173,16 @@ is complete only when every task and its exit gate are checked.
 
 - `xo` opens directly in TUI mode. It reads `~/.config/xo/config.scm`; `xo config-init` prints the default document, while a fresh state directory creates a local workspace automatically. `--state-dir`, `--workspace`, and `--projection` override persistent defaults; the non-persistent `--ticket` option is used only to join an Iroh invitation.
 - `config_init_output_starts_a_fresh_xo_workspace` runs the real `xo config-init` command, loads its output through the startup configuration path, opens a fresh persisted session, and verifies the native Notes/All workspace configuration is projected.
-- `Tab`/`Shift-Tab` cycle between visible panes; Left/Right and `h`/`l` move spatially between them; Up/Down and `j`/`k` navigate the focused list; `Space`/`Enter` toggles a highlighted tag; `g` opens the view/subview menu and its displayed unique prefixes navigate directly; `/`, `T`, and `s` control title filtering, tag-pane visibility, and sorting.
-- `c` prompts for a title and opens the initialized item in `$EDITOR`; `Enter`/`e`, `d`, and `u` edit, delete, and restore; external editors run in a restored normal terminal; `a` opens the fuzzy action picker; `p` unlocks encrypted preview; `x`, `v`, and `y` open conflicts/history, devices, and sync details; `r` refreshes and `R` retries a durable operation.
+- `Tab`/`Shift-Tab` cycle between visible panes; Left/Right and `h`/`l` move spatially between them; Up/Down and `j`/`k` navigate the focused list; Enter toggles a highlighted tag; `/` controls title filtering. Movement keys remain available but are not shown as persistent hints.
+- The configurable leader defaults to Space. `t`, `v`, `a`, `m`, `j`, and `s` open tags, views/subviews, actions, mobile setup, server setup/status, and synchronization status. The popup also exposes conflicts, devices, refresh, reverse sort, and preview unlocking.
+- `c` prompts for a title and opens the initialized item in `$EDITOR`; `Enter`/`e`, `d`, and `u` edit, delete, and restore; external editors run in a restored normal terminal; `R` retries a durable operation.
 - `offline_tui_edit_reconnects_retains_conflict_and_converges` takes the primary peer offline, commits independent primary and central edits, reconnects, proves both peers retain the conflict, and verifies the immutable history converges.
 - `tui_pairing_invitation_connects_a_sync_peer` follows the TUI pairing APIs, imports the invitation into a server peer, returns its ticket, and proves a server write reaches the client.
 - `syncd_restart_converges_two_restarted_tui_clients_with_offline_conflict` launches the real `xo-syncd` binary, connects two independently persisted TUI sessions, restarts every participant, creates concurrent offline edits, and verifies both client histories plus the daemon's persisted conflict.
 - Pairing model/render tests cover the browser-first setup instructions, POSIX-safe fallback commands, complete-output and direct-ticket parsing, every wizard step, and default ticket redaction.
 - Operator tests cover the public setup form, authentication, URL-encoded fields, workspace/ticket mismatch rejection without import, writable-ticket import, live synchronization startup, and server-ticket return.
-- Ratatui `TestBackend` tests cover the four-line, three-column header; view/search/tag-filter-aware faceted counts; tag-pane visibility; valid note selection; inline filtering and prefix goto navigation; metadata-rich preview; actions; deletion/restore; and encrypted temporary-file editing. The editor regression test also covers editors that atomically replace the temporary file.
+- Ratatui `TestBackend` tests cover the release-only header, configurable leader footer and popup, view/search/tag-filter-aware faceted counts, tag-pane visibility, valid note selection, inline filtering and prefix navigation, metadata-rich Preview, actions, deletion/restore, and encrypted temporary-file editing. The editor regression test also covers editors that atomically replace the temporary file.
+- `tui_peer_receives_replicated_views_subviews_and_items` proves a second native TUI session receives replicated `xo.scm`, its view/subview descriptors, and matching notes, then evaluates the synchronized subview.
 
 ## Stage 7 — Content workflows
 
@@ -190,7 +192,8 @@ unless the PWA directly depends on them.
 - [x] Implement recursive Markdown import and conventional Markdown export.
 - [x] Implement URL capture and readable-content conversion as a capability-gated Steel action plugin, backed by a testable native host service rather than ambient Steel network access.
 - [ ] Add optional authenticated webhook ingestion to `xo-syncd`.
-- [ ] Complete encrypted-note user workflows.
+- [x] Complete encrypted-note preview and temporary-editor workflows in the native TUI.
+- [ ] Add encrypted-note unlocking and editing workflows to the PWA.
 - [ ] Implement Goodreads import as a capability-gated executable Steel plugin.
 - [x] Implement Hardcover search as a capability-gated executable Steel plugin.
 - [x] Implement `to-read` → `reading` → `read` state actions in Steel.
@@ -214,26 +217,32 @@ network and conversion behavior testable without ambient Steel access.
 
 - [ ] Every supported workflow has deterministic fixtures and produces ordinary replicated revisions or records.
 
-## Stage 8 — Offline-first PWA (next priority)
+## Stage 8 — Offline-first PWA
 
 The PWA is a first-class client. Rust remains authoritative for records,
 revisions, conflicts, encryption, behavior, and synchronization. A dedicated Web Worker owns Rust, Steel, Iroh, and IndexedDB
 coordination; the UI thread owns only presentation and browser interaction.
 
 - [x] Establish the static React/PWA shell, nginx `xo-web` image, typed dedicated-worker RPC, encrypted IndexedDB recovery, and sandboxed Steel Wasm runtime.
-- [ ] Split browser-safe `xo-core` features from native filesystem, process, RPC, and Tokio networking dependencies.
-- [ ] Add a `xo-web` Wasm crate with a small message-based API for workspace lifecycle, queries, mutations, events, sync status, conflicts, encryption, and executable Steel actions.
+- [x] Split browser-safe `xo-core` features from native filesystem, process, RPC, and Tokio networking dependencies.
+- [x] Add the `xo-web` Wasm crate and typed worker RPC for workspace lifecycle, authoritative queries and mutations, sync status, conflicts, and sandboxed Steel execution.
+- [ ] Add subscription-driven structured events, cancellation, explicit expected-revision checks, and complete executable-action integration to the worker API.
 - [x] Run an Iroh browser feasibility spike covering relay-only connectivity, Docs, Blobs, Gossip, native namespace interoperability, offline writes, and restart recovery.
 - [x] Use direct, end-to-end encrypted browser Iroh through the relay; retain `xo-syncd` only as an always-available native peer, with no browser sync gateway or server-side action execution.
-- [ ] Persist browser identity, encrypted capabilities, verified records, blobs, pending writes, tombstones, and trusted plugin hashes in IndexedDB.
-- [ ] Rebuild disposable indexes and UI projections from verified IndexedDB state after startup or interruption.
-- [ ] Run each arbitrary Steel action in a disposable sandboxed worker with explicit browser host capabilities, time/size limits, and termination support.
-- [ ] Provide capability-gated browser host services for fetch, secrets, note creation/mutation, clipboard, and notifications; expose no ambient network, filesystem, process, socket, or dylib access.
-- [ ] Build the installable React PWA for reading, search, capture, editing, tags, wikilinks, books, conflicts, devices, and synchronization diagnostics.
-- [ ] Keep the service worker limited to versioned application-shell caching; workspace durability belongs to IndexedDB and Rust recovery logic.
-- [ ] Support offline creation and edits, queued synchronization, relay reconnect, conflict review, and convergence with native peers and `xo-syncd`.
-- [ ] Add browser tests for interrupted writes, worker termination, plugin capability denial, encrypted-note handling, upgrades, offline restart, and native/browser convergence.
-- [ ] Add installability, accessibility, responsive-layout, and supported-browser checks.
+- [x] Persist the browser endpoint secret, author secret, and writable ticket in an AES-GCM IndexedDB vault backed by a non-extractable WebCrypto key; separately persist cached entries and ordered pending writes.
+- [ ] Complete verified IndexedDB persistence/recovery for blobs, tombstones, and trusted plugin hashes, and protect cached workspace content where required.
+- [x] Rebuild Rust-authoritative workspace snapshots and UI projections from cached verified document entries after startup or interruption.
+- [x] Run arbitrary Steel in fresh disposable workers with explicit capabilities, size/time limits, and termination support.
+- [ ] Complete capability-gated browser host services and UI for fetch, secrets, note creation/mutation, clipboard, and notifications.
+- [x] Build the installable responsive React PWA for views/subviews, reading, search, editing, tags, Markdown preview, revisions, conflicts, devices, and synchronization diagnostics.
+- [ ] Add PWA UI for action/plugin execution, encrypted-note unlocking, imports/exports, and workspace configuration authoring.
+- [x] Keep the service worker limited to versioned application-shell caching; workspace durability belongs to IndexedDB and Rust recovery logic.
+- [x] Support offline creation and edits, ordered pending-write replay, relay reconnect, cached restart, QR onboarding, deployment refresh prompts, and convergence with native peers and `xo-syncd`.
+- [ ] Add interactive conflict resolution, failed/expired onboarding recovery, and stronger interrupted-write recovery.
+- [x] Add Chromium browser tests for deployment upgrades, offline restart, encrypted ticket storage, note mutations, views/subviews, and native/browser convergence.
+- [ ] Add browser tests for worker termination, plugin capability denial, encrypted-note handling, storage clearing, invalid tickets, and interrupted writes.
+- [x] Add PWA installability metadata and responsive layouts.
+- [ ] Add automated accessibility checks plus Firefox, WebKit, installed-browser, and physical-mobile coverage.
 
 Image attachments and native-only OS integrations are explicitly out of scope.
 
@@ -241,15 +250,21 @@ Image attachments and native-only OS integrations are explicitly out of scope.
 
 - [ ] An installed PWA works offline, survives browser and worker restarts, runs capability-gated arbitrary Steel, reconnects through the available Iroh/`xo-syncd` transport, and converges with native peers without server-side action execution.
 
-## Stage 9 — LSP companion (deferred until after the PWA)
+## Stage 9 — LSP companion
 
 - [x] Reserve the `xo-lsp` binary crate.
-- [ ] Implement stdio LSP lifecycle and workspace loading.
-- [ ] Add wikilink and tag completion.
+- [x] Implement the stdio LSP initialize/initialized/shutdown/exit lifecycle and load recursive Markdown workspaces from editor roots or `--workspace`.
+- [x] Add basic wikilink note-ID and workspace-tag completion with UTF-16 position handling.
+- [x] Publish live diagnostics for malformed frontmatter, missing/invalid IDs, and duplicate IDs from disk and unsaved full-document changes.
 - [ ] Add hover, definitions, references, document links, and symbols.
 - [ ] Add rename across multiple Markdown files.
-- [ ] Add diagnostics, semantic tokens, inlay hints, and code actions.
+- [ ] Add reference/configuration diagnostics, semantic tokens, inlay hints, and code actions.
 - [ ] Route editor writes through the normal watcher and revision pipeline.
+
+### Stage 9 current test coverage
+
+- `stdio_lifecycle_loads_workspace_diagnoses_and_completes` launches the real binary, exchanges framed JSON-RPC lifecycle messages, verifies advertised capabilities, receives live diagnostics for an opened buffer, requests wikilink completion with a UTF-16 position, and exits cleanly.
+- Workspace-index tests cover recursive loading, hidden-directory exclusion, malformed/invalid note diagnostics, duplicate IDs, deterministic tag completion, wikilink completion, and UTF-16 cursor positions.
 
 **Exit gate**
 
@@ -257,11 +272,11 @@ Image attachments and native-only OS integrations are explicitly out of scope.
 
 ## Repository-wide verification
 
-- [ ] `cargo test --workspace --all-targets` passes consistently. The latest full run passed all new workflow and Steel-plugin tests but hit the existing flaky `two_peers_sync_and_second_peer_survives_restart` Iroh replication failure.
+- [ ] `cargo test --workspace --all-targets` passes consistently. Full local and CI runs pass, but the existing three-peer Iroh relay test can still require a CI retry.
 - [x] `cargo clippy --workspace --all-targets -- -D warnings` passes.
 - [x] `cargo fmt --all -- --check` passes.
 - [x] `git diff --check` passes.
-- [ ] Linux CI passes.
-- [ ] macOS CI passes.
-- [ ] Windows CI passes before declaring the TUI stable.
-- [ ] Browser/Wasm CI passes before declaring the PWA stable.
+- [x] Linux CI passes.
+- [x] macOS CI passes.
+- [x] Windows CI passes.
+- [x] Browser/Wasm CI passes, including production Wasm/PWA builds and native/browser Iroh convergence.

@@ -528,6 +528,16 @@ Output is grouped below `<type>/<year>/<month>/`, internal `id`, `type`, and
 `-1`, `-2`, and later suffixes. Encrypted note bodies retain their `id` because
 their ciphertext is bound to it.
 
+## Editor integration
+
+`xo-lsp` is a stdio Language Server for projected Markdown workspaces. Editors
+normally launch `xo-lsp` and provide a workspace folder during initialization;
+`xo-lsp --workspace ~/notes` is available for clients that do not provide one.
+The current server recursively indexes Markdown outside hidden directories,
+publishes diagnostics for malformed frontmatter and missing, invalid, or
+duplicate IDs, tracks unsaved full-document changes, and completes note IDs
+inside `[[...]]` plus tags from the workspace. It does not mutate files yet.
+
 ## Edit workspace behavior
 
 Workspace behavior is replicated and projected as `xo.scm`. A new workspace

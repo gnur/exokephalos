@@ -95,6 +95,29 @@ npm run build:wasm
 npm run build
 ```
 
+### Deploy xo-web to Cloudflare Pages
+
+Pushes to `main` deploy the already-tested `xo-web` artifact to an existing
+Cloudflare Pages project. Pull requests and tags never deploy, and the job stays
+skipped until `CLOUDFLARE_PAGES_PROJECT` is set. Configure these GitHub Actions
+repository settings before enabling the job:
+
+- secret `CLOUDFLARE_API_TOKEN`: a custom Cloudflare token scoped to the target
+  account with **Account → Cloudflare Pages → Edit**;
+- secret `CLOUDFLARE_ACCOUNT_ID`: the target Cloudflare account ID; and
+- variable `CLOUDFLARE_PAGES_PROJECT`: the existing Pages project name, not its
+  domain or `pages.dev` URL.
+
+The Pages project's production branch must be `main`. If Cloudflare Git
+integration is also connected, disable its automatic production builds under
+**Settings → Builds & deployments** to avoid two deployments per push. The job
+downloads the artifact produced by the browser/Wasm test job rather than
+rebuilding it, deploys with Wrangler, and verifies `/healthz` plus the uncached
+`/version.json`. `web/public/_headers` applies the nginx-equivalent security and
+cache headers when the static files are served by Pages. After configuring the
+settings, run the **Build** workflow manually on `main` for the first deployment
+or push another commit.
+
 Everything needed at runtime is written to `web/dist`. Any static host with SPA
 fallback can serve it. The supplied nginx image is named `xo-web`:
 

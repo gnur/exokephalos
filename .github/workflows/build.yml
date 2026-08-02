@@ -2,6 +2,7 @@ name: Build
 
 on:
   pull_request:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -227,6 +228,62 @@ jobs:
           name: xo-web
           path: xo-web.tar.gz
           if-no-files-found: error
+
+  deploy-pages:
+    name: Deploy xo-web to Cloudflare Pages
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      vars.CLOUDFLARE_PAGES_PROJECT != ''
+    needs: web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - name: Download tested xo-web artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: xo-web
+          path: pages-artifact
+
+      - name: Extract static PWA
+        run: |
+          mkdir pages-dist
+          tar -xzf pages-artifact/xo-web.tar.gz -C pages-dist
+          test -f pages-dist/index.html
+          test -f pages-dist/_headers
+          test -f pages-dist/version.json
+
+      - name: Validate Cloudflare Pages configuration
+        env:
+          CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
+        run: |
+          if [[ -z "${CLOUDFLARE_PAGES_PROJECT}" ]]; then
+            echo 'Set the CLOUDFLARE_PAGES_PROJECT repository variable.' >&2
+            exit 1
+          fi
+
+      - name: Deploy tested artifact
+        id: deploy
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          command: pages deploy pages-dist --project-name=${{ vars.CLOUDFLARE_PAGES_PROJECT }} --branch=main
+
+      - name: Smoke-test deployment
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment-url }}
+        run: |
+          test -n "${DEPLOYMENT_URL}"
+          curl --fail --show-error --silent \
+            --retry 5 --retry-all-errors --retry-delay 2 \
+            "${DEPLOYMENT_URL}/healthz" | grep -Fx 'ok'
+          curl --fail --show-error --silent --head \
+            "${DEPLOYMENT_URL}/version.json" | grep -i '^cache-control:.*no-store'
 
   binaries:
     name: Binaries (${{ matrix.target }})

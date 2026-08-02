@@ -217,6 +217,9 @@ pub enum ActionEffect {
         field: String,
         value: FrontmatterValue,
     },
+    SetFieldNow {
+        field: String,
+    },
     AppendBody {
         text: String,
     },
@@ -412,10 +415,10 @@ impl WorkspaceBehavior {
         Ok(action)
     }
 
-    pub fn apply_action(&self, note: &mut Note, id: &str) -> Result<(), BehaviorError> {
+    pub fn apply_action(&self, note: &mut Note, id: &str, now: &str) -> Result<(), BehaviorError> {
         let action = self.action(Some(note), id)?;
         for effect in &action.effects {
-            effect.apply(note);
+            effect.apply(note, now);
         }
         Ok(())
     }
@@ -436,7 +439,7 @@ impl Predicate {
 }
 
 impl ActionEffect {
-    fn apply(&self, note: &mut Note) {
+    fn apply(&self, note: &mut Note, now: &str) {
         match self {
             Self::AddTag { tag } => {
                 let mut values = tags(note);
@@ -450,6 +453,10 @@ impl ActionEffect {
             }
             Self::SetField { field, value } => {
                 note.frontmatter.insert(field.clone(), value.clone());
+            }
+            Self::SetFieldNow { field } => {
+                note.frontmatter
+                    .insert(field.clone(), FrontmatterValue::String(now.to_owned()));
             }
             Self::AppendBody { text } => note.body.push_str(text),
         }
@@ -641,13 +648,15 @@ mod tests {
         assert_eq!(found[0].id.as_str(), "a");
         let mut target = notes[1].clone();
         assert!(matches!(
-            behavior.apply_action(&mut target, "finish"),
+            behavior.apply_action(&mut target, "finish", "fixed"),
             Err(BehaviorError::CapabilityDenied { .. })
         ));
         behavior
             .capability_grants
             .insert("finish".into(), BTreeSet::from([Capability::MutateNote]));
-        behavior.apply_action(&mut target, "finish").unwrap();
+        behavior
+            .apply_action(&mut target, "finish", "fixed")
+            .unwrap();
         assert!(
             Predicate::HasTag {
                 tag: "finished".into()

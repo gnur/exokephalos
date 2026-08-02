@@ -3,11 +3,8 @@
 ;; data, and mutating actions require explicit capability grants.
 ;;
 ;; The former books/stats template has no current view-descriptor equivalent,
-;; so it is intentionally omitted. Dynamic (now) action values are also not a
-;; declarative effect yet; the reading actions preserve the tag transitions but
-;; do not write started/finished timestamps. If the bundled Hardcover plugin is
-;; installed, remove start-book and finish-book below because that plugin
-;; contributes actions with those same IDs.
+;; so it is intentionally omitted. The reading actions use the execution-time
+;; (now) value supplied by the host to write deterministic RFC 3339 timestamps.
 
 (workspace-config
   (schema 1)
@@ -128,14 +125,16 @@
       (predicate (has-tag "reading"))
       (effects
         (remove-tag "reading")
-        (add-tag "read")))
+        (add-tag "read")
+        (set-field "finished" (now))))
     (action
       (id "start-book")
       (description "Start reading this book")
       (predicate (has-tag "to-read"))
       (effects
         (remove-tag "to-read")
-        (add-tag "reading")))
+        (add-tag "reading")
+        (set-field "started" (now))))
     (action
       (id "mark-done")
       (description "Mark item as done")

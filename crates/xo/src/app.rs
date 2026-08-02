@@ -433,7 +433,9 @@ impl App {
             .iter_mut()
             .find(|note| note.id == note_id)
             .context("selected note disappeared")?;
-        self.behavior.apply_action(note, id)?;
+        let now = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)?;
+        self.behavior.apply_action(note, id, &now)?;
         Ok(note.clone())
     }
 
@@ -1293,7 +1295,12 @@ mod tests {
                 id: "done".into(),
                 description: "Mark done".into(),
                 predicate: Predicate::Always,
-                effects: vec![ActionEffect::AddTag { tag: "done".into() }],
+                effects: vec![
+                    ActionEffect::AddTag { tag: "done".into() },
+                    ActionEffect::SetFieldNow {
+                        field: "finished".into(),
+                    },
+                ],
                 plugin: None,
             }],
             ..WorkspaceBehavior::default()
@@ -1321,7 +1328,13 @@ mod tests {
         app.search = "fir".into();
         app.action_query = "dn".into();
         assert_eq!(app.matching_actions()[0].id, "done");
-        app.run_action("done").unwrap();
+        let changed = app.run_action("done").unwrap();
+        let finished = match changed.frontmatter.get("finished") {
+            Some(FrontmatterValue::String(value)) => value,
+            value => panic!("expected finished timestamp, got {value:?}"),
+        };
+        time::OffsetDateTime::parse(finished, &time::format_description::well_known::Rfc3339)
+            .unwrap();
         let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
         terminal.draw(|frame| render(frame, &app)).unwrap();
         let screen = terminal

@@ -3,7 +3,7 @@
 ;; normalization, and note construction remain here.
 
 (define (xo-plugin-manifest)
-  "{\"schema\":1,\"actions\":[{\"id\":\"hardcover-search\",\"description\":\"Search Hardcover\",\"prompt\":\"Book title or author\",\"entrypoint\":\"xo-plugin-run\",\"capabilities\":[\"create-note\",\"network\",\"read-secret\"]},{\"id\":\"start-book\",\"description\":\"Start reading this book\",\"predicate\":{\"op\":\"has-tag\",\"tag\":\"to-read\"},\"capabilities\":[\"mutate-note\"],\"effects\":[{\"effect\":\"remove-tag\",\"tag\":\"to-read\"},{\"effect\":\"add-tag\",\"tag\":\"reading\"}]},{\"id\":\"finish-book\",\"description\":\"Mark book as finished reading\",\"predicate\":{\"op\":\"has-tag\",\"tag\":\"reading\"},\"capabilities\":[\"mutate-note\"],\"effects\":[{\"effect\":\"remove-tag\",\"tag\":\"reading\"},{\"effect\":\"add-tag\",\"tag\":\"read\"}]}]}")
+  "{\"schema\":1,\"actions\":[{\"id\":\"hardcover-search\",\"description\":\"Search Hardcover\",\"prompt\":\"Book title or author\",\"entrypoint\":\"xo-plugin-run\",\"capabilities\":[\"create-note\",\"network\",\"read-secret\"]}]}")
 
 (define graphql-query
   "query SearchBooks($query: String!, $perPage: Int!, $page: Int!) { search(query: $query, query_type: \"Book\", per_page: $perPage, page: $page) { results } }")

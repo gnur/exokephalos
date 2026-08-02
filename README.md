@@ -600,8 +600,9 @@ starts with native declarative Steel similar to:
 
 Predicates support `always`, `field-equals`, `has-tag`, `not`, `all`, and
 `any`. Actions use declarative effects such as `add-tag`, `remove-tag`,
-`set-field`, and `append-body`; mutating actions require an explicit
-`mutate-note` capability grant. Optional lexical modules below
+`set-field`, and `append-body`; `(set-field "started" (now))` stores the
+host-supplied RFC 3339 execution timestamp without exposing an ambient clock.
+Mutating actions require an explicit `mutate-note` capability grant. Optional lexical modules below
 `modules/**/*.scm` use the same fields inside `(workspace-module ...)`.
 Executable sandboxed plugins live below `plugins/**/*.scm`; their
 `xo-plugin-manifest` function contributes actions and their action entrypoint
@@ -627,9 +628,8 @@ xo
 
 Press `Space`, then `a` and select **Search Hardcover**. The plugin prompts for a title or
 author, performs the GraphQL request, presents up to five choices, and creates
-an ordinary `type: book` note tagged `to-read`. It also contributes the pure
-Steel actions **Start reading this book** (`to-read` → `reading`) and **Mark
-book as finished reading** (`reading` → `read`).
+an ordinary `type: book` note tagged `to-read`. The plugin exposes only this
+search action; reading-state actions belong to workspace configuration.
 
 `plugins/hardcover.scm` contains the GraphQL request, JSON traversal, metadata
 normalization, result labels, and note fields. Rust provides only generic,
@@ -640,7 +640,8 @@ plugin requires `create-note`, `network`, and `read-secret`; Steel receives no
 filesystem, process, socket, or dylib access.
 
 `example-config.scm` is a complete multi-view example with nested predicates,
-subviews, sorting, tag transitions, and explicit mutation grants.
+subviews, sorting, explicit mutation grants, and reading actions that set
+`started` and `finished` to their host-supplied execution timestamp.
 
 The declarative workspace/module form remains restricted. Configuration is parsed through a
 strict boundary: arbitrary filesystem, environment, process, network, clock,

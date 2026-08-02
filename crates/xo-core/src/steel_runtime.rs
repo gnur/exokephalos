@@ -587,6 +587,11 @@ fn parse_effect(form: &NativeForm) -> Result<ActionEffect, SteelConfigError> {
         ("remove-tag", [tag]) => Ok(ActionEffect::RemoveTag {
             tag: native_string(tag, "remove-tag tag")?,
         }),
+        ("set-field", [field, value]) if matches!(native_call(value), Ok(("now", []))) => {
+            Ok(ActionEffect::SetFieldNow {
+                field: native_string(field, "set-field field")?,
+            })
+        }
         ("set-field", [field, value]) => Ok(ActionEffect::SetField {
             field: native_string(field, "set-field field")?,
             value: parse_frontmatter_value(value)?,
@@ -1243,6 +1248,9 @@ fn encode_effect(effect: &ActionEffect) -> String {
             steel_string(field),
             encode_frontmatter_value(value)
         ),
+        ActionEffect::SetFieldNow { field } => {
+            format!("(set-field {} (now))", steel_string(field))
+        }
         ActionEffect::AppendBody { text } => format!("(append-body {})", steel_string(text)),
     }
 }
@@ -1371,8 +1379,31 @@ mod tests {
             )
             .unwrap();
         assert_eq!(todo.len(), 1);
-        behavior.apply_action(&mut note, "mark-done").unwrap();
+        let now = "2026-01-02T03:04:05Z";
+        behavior.apply_action(&mut note, "mark-done", now).unwrap();
         assert!(Predicate::HasTag { tag: "done".into() }.matches(&note));
+
+        let mut book = crate::Note {
+            id: crate::NoteId::new("bcdefgh"),
+            frontmatter: BTreeMap::from([(
+                "tags".into(),
+                FrontmatterValue::Sequence(vec![FrontmatterValue::String("to-read".into())]),
+            )]),
+            body: String::new(),
+            path: "bcd/bcdefgh-book.md".into(),
+        };
+        behavior.apply_action(&mut book, "start-book", now).unwrap();
+        assert_eq!(
+            book.frontmatter.get("started"),
+            Some(&FrontmatterValue::String(now.into()))
+        );
+        behavior
+            .apply_action(&mut book, "finish-book", now)
+            .unwrap();
+        assert_eq!(
+            book.frontmatter.get("finished"),
+            Some(&FrontmatterValue::String(now.into()))
+        );
     }
 
     #[test]
@@ -1406,7 +1437,7 @@ mod tests {
     }
 
     #[test]
-    fn executable_plugin_manifest_adds_search_and_reading_actions() {
+    fn executable_plugin_manifest_adds_only_hardcover_search() {
         let behavior = SteelWorkspace::load(
             &encode_config(&WorkspaceBehavior::default(), false),
             &BTreeMap::from([(
@@ -1425,24 +1456,13 @@ mod tests {
             search.plugin,
             Some(ActionPlugin::Steel { ref path, .. }) if path == "plugins/hardcover.scm"
         ));
-        let mut note = crate::Note {
-            id: crate::NoteId::new("book001"),
-            frontmatter: BTreeMap::from([(
-                "tags".into(),
-                FrontmatterValue::Sequence(vec![FrontmatterValue::String("to-read".into())]),
-            )]),
-            body: String::new(),
-            path: "boo/book001-book.md".into(),
-        };
-        behavior.apply_action(&mut note, "start-book").unwrap();
+        assert_eq!(behavior.actions.len(), 1);
         assert!(
-            Predicate::HasTag {
-                tag: "reading".into()
-            }
-            .matches(&note)
+            behavior
+                .actions
+                .iter()
+                .all(|action| { action.id != "start-book" && action.id != "finish-book" })
         );
-        behavior.apply_action(&mut note, "finish-book").unwrap();
-        assert!(Predicate::HasTag { tag: "read".into() }.matches(&note));
     }
 
     #[test]
@@ -1512,6 +1532,9 @@ mod tests {
                             ),
                         ])),
                     },
+                    ActionEffect::SetFieldNow {
+                        field: "finished".into(),
+                    },
                     ActionEffect::AppendBody {
                         text: "\nFinished.\n".into(),
                     },
@@ -1540,7 +1563,10 @@ mod tests {
         assert!(!source.starts_with("(workspace-config \""));
         let loaded = SteelWorkspace::load(&source, &BTreeMap::new(), "fixed").unwrap();
         assert_eq!(loaded, behavior);
+    }
 
+    #[test]
+    fn native_workspace_config_rejects_incomplete_and_obsolete_forms() {
         for rejected in [
             "(workspace-config (views))",
             "(workspace-config (schema 0) (views))",

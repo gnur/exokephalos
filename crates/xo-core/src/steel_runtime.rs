@@ -1317,6 +1317,65 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
+    fn example_workspace_configuration_is_current_and_executable() {
+        let behavior = SteelWorkspace::load(
+            include_str!("../../../example-config.scm"),
+            &BTreeMap::new(),
+            "2026-01-02T03:04:05Z",
+        )
+        .unwrap();
+        assert_eq!(behavior.default_view, "notes");
+        assert_eq!(
+            behavior
+                .views
+                .iter()
+                .map(|view| view.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["notes", "books", "webhooks", "secrets"]
+        );
+        assert_eq!(
+            behavior.views[1]
+                .subviews
+                .iter()
+                .map(|subview| subview.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["all", "to-read", "reading", "read"]
+        );
+        assert_eq!(behavior.actions.len(), 3);
+        assert!(
+            behavior
+                .capability_grants
+                .values()
+                .all(|capabilities| capabilities.contains(&Capability::MutateNote))
+        );
+        let mut note = crate::Note {
+            id: crate::NoteId::new("abcdefg"),
+            frontmatter: BTreeMap::from([
+                ("type".into(), FrontmatterValue::String("note".into())),
+                (
+                    "tags".into(),
+                    FrontmatterValue::Sequence(vec![FrontmatterValue::String("todo".into())]),
+                ),
+            ]),
+            body: String::new(),
+            path: "abc/abcdefg-example.md".into(),
+        };
+        let todo = behavior
+            .query(
+                std::slice::from_ref(&note),
+                &crate::behavior::Query {
+                    view: "notes".into(),
+                    subview: Some("todo".into()),
+                    ..crate::behavior::Query::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(todo.len(), 1);
+        behavior.apply_action(&mut note, "mark-done").unwrap();
+        assert!(Predicate::HasTag { tag: "done".into() }.matches(&note));
+    }
+
+    #[test]
     fn loads_and_merges_native_modules() {
         let base = WorkspaceBehavior {
             views: vec![view("notes")],

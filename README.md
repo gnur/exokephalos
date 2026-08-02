@@ -639,6 +639,9 @@ redirect-free, time-bounded, header-restricted, and limited to 2 MiB. The
 plugin requires `create-note`, `network`, and `read-secret`; Steel receives no
 filesystem, process, socket, or dylib access.
 
+`example-config.scm` is a complete multi-view example with nested predicates,
+subviews, sorting, tag transitions, and explicit mutation grants.
+
 The declarative workspace/module form remains restricted. Configuration is parsed through a
 strict boundary: arbitrary filesystem, environment, process, network, clock,
 or evaluation expressions are rejected.

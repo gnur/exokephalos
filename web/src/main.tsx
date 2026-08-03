@@ -488,7 +488,8 @@ function WorkspaceView({ report, busy, error, activeView, activeSubview, search,
           <p className="workspace-id">{report.status.workspaceId}</p>
         </div>
         <div className="toolbar-actions">
-          <button className="secondary" disabled={busy} onClick={onRefresh}><RefreshCw className={busy ? 'spin' : ''} /> Sync</button>
+          <button className="secondary" disabled={busy} onClick={onRefresh}><Radio className={busy ? 'spin' : ''} /> Sync</button>
+          <button className="secondary" onClick={() => void refreshFullApp()}><RefreshCw /> Refresh app</button>
           <button className="primary" disabled={busy} onClick={startCreate}><Plus /> New note</button>
         </div>
       </section>

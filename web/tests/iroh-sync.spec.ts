@@ -53,6 +53,7 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   await page.getByLabel('Frontmatter and Markdown').fill('---\ntitle: Web Playwright\ntype: \ntags: [browser, test]\n---\nsurvives browser recovery');
   await page.getByRole('button', { name: 'Save note' }).click();
   await expect(page.getByText('Web Playwright', { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Refresh app' })).toBeVisible();
   await expect(page.locator('.markdown-preview')).toContainText('survives browser recovery');
   await expect(page.locator('.frontmatter-grid')).toContainText('type');
   await expect(page.locator('.frontmatter-grid')).toContainText('note');

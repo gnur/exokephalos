@@ -90,7 +90,7 @@ Native-only filesystem, SQLite, watcher, encryption, and persistent-Iroh modules
 
 The Wasm facade:
 
-- owns the relay-only in-memory browser Iroh endpoint;
+- owns the relay-only in-memory browser Iroh endpoint, canonicalizes discovered relay hostnames for strict WebKit TLS validation, and never tries to synchronize a new local workspace with its own endpoint;
 - validates signed record keys and values, configuration content identities, revision identities, and graphs;
 - resolves workspace snapshots and executes queries;
 - prepares canonical create/edit/delete/restore revision and head writes; and

@@ -239,10 +239,10 @@ coordination; the UI thread owns only presentation and browser interaction.
 - [x] Keep the service worker limited to versioned application-shell caching; workspace durability belongs to IndexedDB and Rust recovery logic.
 - [x] Support offline creation and edits, ordered pending-write replay, relay reconnect, cached restart, QR onboarding, deployment refresh prompts, and convergence with native peers and `xo-syncd`.
 - [ ] Add interactive conflict resolution, failed/expired onboarding recovery, and stronger interrupted-write recovery.
-- [x] Add Chromium browser tests for deployment upgrades, offline restart, encrypted ticket storage, note mutations, views/subviews, and native/browser convergence.
+- [x] Add Chromium browser tests for deployment upgrades, offline restart, encrypted ticket storage, note mutations, views/subviews, and native/browser convergence, plus focused Firefox and mobile WebKit tests for editing, layout, and native relay synchronization.
 - [ ] Add browser tests for worker termination, plugin capability denial, encrypted-note handling, storage clearing, invalid tickets, and interrupted writes.
 - [x] Add PWA installability metadata and responsive layouts.
-- [ ] Add automated accessibility checks plus Firefox, WebKit, installed-browser, and physical-mobile coverage.
+- [ ] Add automated accessibility checks plus installed-browser and physical-mobile coverage.
 
 Image attachments and native-only OS integrations are explicitly out of scope.
 

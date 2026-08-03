@@ -1,6 +1,14 @@
 import { expect, test } from '@playwright/test';
+import type { Page } from '@playwright/test';
 
 const nativeTicket = process.env.XO_IROH_TICKET;
+
+async function selectWorkspaceNavigation(page: Page, name: string) {
+  const button = page.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name, exact: true });
+  const menu = page.getByRole('button', { name: 'Open navigation' });
+  if (await menu.isVisible()) await menu.click();
+  await button.click();
+}
 
 test('creates a relay-backed Iroh document and recovers an offline write', async ({ page, context, request }) => {
   const consoleErrors: string[] = [];
@@ -52,9 +60,9 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   await page.getByLabel('Frontmatter and Markdown').fill('---\ntitle: Web Playwright\ntype: note\ntags: [browser, edited]\n---\nedited and survives browser recovery');
   await page.getByRole('button', { name: 'Save note' }).click();
   await expect(page.locator('.markdown-preview')).toContainText('edited and survives browser recovery');
-  await page.getByRole('button', { name: 'All', exact: true }).click();
+  await selectWorkspaceNavigation(page, 'All');
   await expect(page.getByText('Web Playwright', { exact: true }).first()).toBeVisible();
-  await page.getByRole('button', { name: 'Notes', exact: true }).click();
+  await selectWorkspaceNavigation(page, 'Notes');
   page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: 'Delete' }).click();
   await page.getByText('Deleted notes (1)').click();
@@ -71,6 +79,19 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   await expect(page.locator('.markdown-preview')).toContainText('edited and survives browser recovery');
 
   expect(consoleErrors.filter((message) => !message.includes('net::ERR_INTERNET_DISCONNECTED'))).toEqual([]);
+});
+
+test('creates a local item without attempting to synchronize with itself', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByText('Runtime ready')).toBeVisible();
+  await page.getByRole('button', { name: 'Create workspace' }).click();
+  await page.getByRole('button', { name: 'New note' }).click();
+  await page.getByLabel('Title', { exact: true }).fill('Local item');
+  await page.getByRole('button', { name: 'Save note' }).click();
+  await expect(page.getByText('Local item', { exact: true }).first()).toBeVisible();
+  await expect(page.locator('.frontmatter-grid')).toContainText('note');
+  await page.waitForTimeout(3_500);
+  await expect(page.getByText(/initial document sync failed/i)).toHaveCount(0);
 });
 
 test('prevents mobile focus zoom and horizontal page overflow', async ({ page }) => {
@@ -138,14 +159,16 @@ test('receives native items and replicated views and subviews', async ({ page })
   const workspaceNavigation = page.getByRole('navigation', { name: 'Workspace' });
   await expect(workspaceNavigation.getByRole('button', { name: 'Library' })).toBeVisible({ timeout: 60_000 });
   await expect(workspaceNavigation.getByRole('button', { name: 'Reading' })).toBeVisible();
-  await workspaceNavigation.getByRole('button', { name: 'Library' }).click();
+  await selectWorkspaceNavigation(page, 'Library');
   await expect(page.getByText('TUI Reading Fixture', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('TUI Finished Fixture', { exact: true }).first()).toBeVisible();
-  await workspaceNavigation.getByRole('button', { name: 'Reading' }).click();
+  await selectWorkspaceNavigation(page, 'Reading');
   await expect(page.getByText('TUI Reading Fixture', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('TUI Finished Fixture', { exact: true })).toHaveCount(0);
-  await workspaceNavigation.getByRole('button', { name: 'Notes' }).click();
-  await expect(page.getByText('Browser fixture', { exact: true }).first()).toBeVisible();
+  await selectWorkspaceNavigation(page, 'Notes');
+  const fixtureRow = page.locator('.note-list-item').filter({ hasText: 'Browser fixture' });
+  await expect(fixtureRow).toBeVisible();
+  await fixtureRow.click();
   await expect(page.locator('.markdown-preview')).toContainText('created by a native peer');
 });
 
@@ -164,7 +187,7 @@ test('converges two browser peers through a native Iroh document peer', async ({
     await first.getByLabel('Writable workspace ticket').fill(nativeTicket!);
     await first.getByRole('button', { name: 'Join and synchronize' }).click();
     await expect(first.getByRole('button', { name: 'New note' })).toBeVisible();
-    await first.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name: 'Notes' }).click();
+    await selectWorkspaceNavigation(first, 'Notes');
 
     await first.getByRole('button', { name: 'New note' }).click();
     await first.getByLabel('Title', { exact: true }).fill(title);
@@ -175,7 +198,7 @@ test('converges two browser peers through a native Iroh document peer', async ({
     await second.goto(`/#ticket=${encodeURIComponent(nativeTicket!)}`);
     await expect(second.getByRole('button', { name: 'New note' })).toBeVisible();
     await expect(second).toHaveURL(/\/$/);
-    await second.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name: 'Notes' }).click();
+    await selectWorkspaceNavigation(second, 'Notes');
     await expect(second.getByText(title, { exact: true }).first()).toBeVisible({ timeout: 60_000 });
     await expect(second.locator('.markdown-preview')).toContainText(value);
   } finally {

@@ -4,9 +4,13 @@ use anyhow::{Context, Result, bail};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use futures_lite::StreamExt;
+use iroh::address_lookup::{
+    AddressLookup, AddressLookupBuilder, AddressLookupBuilderError, EndpointInfo,
+    Error as AddressLookupError, Item as AddressLookupItem, PkarrPublisher, PkarrResolver,
+};
 use iroh::endpoint::presets;
 use iroh::protocol::Router;
-use iroh::{Endpoint, EndpointAddr, SecretKey};
+use iroh::{Endpoint, EndpointAddr, RelayMap, RelayMode, RelayUrl, SecretKey, TransportAddr};
 use iroh_blobs::api::Store as BlobStore;
 use iroh_blobs::store::mem::MemStore;
 use iroh_blobs::{ALPN as BLOBS_ALPN, BlobsProtocol};
@@ -67,6 +71,7 @@ pub struct IrohDocNode {
     document: Option<Doc>,
     ticket: Option<DocTicket>,
     sync_nodes: Vec<EndpointAddr>,
+    relay_map: RelayMap,
 }
 
 #[wasm_bindgen]
@@ -79,7 +84,11 @@ impl IrohDocNode {
     ) -> Result<IrohDocNode, JsError> {
         let endpoint_secret = fixed_secret(&endpoint_secret, "endpoint")?;
         let author_secret = fixed_secret(&author_secret, "author")?;
-        let endpoint = Endpoint::builder(presets::N0)
+        let relay_map = browser_relay_map().map_err(js_error)?;
+        let endpoint = Endpoint::builder(presets::Minimal)
+            .address_lookup(PkarrPublisher::n0_dns())
+            .address_lookup(NormalizedPkarrResolverBuilder(PkarrResolver::n0_dns()))
+            .relay_mode(RelayMode::Custom(relay_map.clone()))
             .secret_key(SecretKey::from_bytes(&endpoint_secret))
             .bind()
             .await
@@ -111,6 +120,7 @@ impl IrohDocNode {
             document: None,
             ticket: None,
             sync_nodes: Vec::new(),
+            relay_map,
         })
     }
 
@@ -133,7 +143,9 @@ impl IrohDocNode {
     /// The document remains open when the peer is temporarily unavailable.
     #[wasm_bindgen(js_name = joinWorkspace)]
     pub async fn join_workspace(&mut self, ticket: String) -> Result<String, JsError> {
-        let ticket = DocTicket::from_str(ticket.trim()).map_err(js_error)?;
+        let mut ticket = DocTicket::from_str(ticket.trim()).map_err(js_error)?;
+        normalize_browser_nodes(&mut ticket.nodes).map_err(js_error)?;
+        self.relay_map.extend(&relay_map_for_nodes(&ticket.nodes));
         if ticket.capability.secret_key().is_err() {
             return Err(JsError::new("xo-web requires a writable workspace ticket"));
         }
@@ -291,9 +303,6 @@ impl IrohDocNode {
     /// Create a fresh ticket containing the endpoint's current relay address.
     #[wasm_bindgen(js_name = shareTicket)]
     pub async fn share_ticket(&mut self) -> Result<String, JsError> {
-        time::timeout(SYNC_TIMEOUT, self.router.endpoint().online())
-            .await
-            .map_err(js_error)?;
         let mut ticket = self
             .document()
             .map_err(js_error)?
@@ -305,9 +314,93 @@ impl IrohDocNode {
             ticket.nodes.sort();
             ticket.nodes.dedup();
         }
+        normalize_browser_nodes(&mut ticket.nodes).map_err(js_error)?;
         self.ticket = Some(ticket.clone());
         Ok(ticket.to_string())
     }
+}
+
+#[derive(Debug)]
+struct NormalizedPkarrResolverBuilder(iroh::address_lookup::PkarrResolverBuilder);
+
+impl AddressLookupBuilder for NormalizedPkarrResolverBuilder {
+    fn into_address_lookup(
+        self,
+        endpoint: &Endpoint,
+    ) -> Result<impl AddressLookup, AddressLookupBuilderError> {
+        Ok(NormalizedPkarrResolver(
+            self.0.into_address_lookup(endpoint)?,
+        ))
+    }
+}
+
+#[derive(Debug)]
+struct NormalizedPkarrResolver<T>(T);
+
+impl<T: AddressLookup> AddressLookup for NormalizedPkarrResolver<T> {
+    fn resolve(
+        &self,
+        endpoint_id: iroh::EndpointId,
+    ) -> Option<n0_future::boxed::BoxStream<Result<AddressLookupItem, AddressLookupError>>> {
+        self.0.resolve(endpoint_id).map(|stream| {
+            Box::pin(stream.map(|item| item.map(normalize_lookup_item)))
+                as n0_future::boxed::BoxStream<Result<AddressLookupItem, AddressLookupError>>
+        })
+    }
+}
+
+fn normalize_lookup_item(item: AddressLookupItem) -> AddressLookupItem {
+    let provenance = item.provenance();
+    let last_updated = item.last_updated();
+    let mut address = item.to_endpoint_addr();
+    if normalize_browser_nodes(std::slice::from_mut(&mut address)).is_err() {
+        return item;
+    }
+    AddressLookupItem::new(EndpointInfo::from(address), provenance, last_updated)
+}
+
+fn normalize_browser_nodes(nodes: &mut [EndpointAddr]) -> Result<()> {
+    for node in nodes {
+        node.addrs = std::mem::take(&mut node.addrs)
+            .into_iter()
+            .map(|address| match address {
+                TransportAddr::Relay(relay) => {
+                    Ok(TransportAddr::Relay(normalize_relay_url(relay)?))
+                }
+                address => Ok(address),
+            })
+            .collect::<Result<_>>()?;
+    }
+    Ok(())
+}
+
+fn browser_relay_map() -> Result<RelayMap> {
+    let urls = RelayMode::Default
+        .relay_map()
+        .urls::<Vec<_>>()
+        .into_iter()
+        .map(normalize_relay_url)
+        .collect::<Result<Vec<_>>>()?;
+    Ok(RelayMode::custom(urls).relay_map())
+}
+
+fn relay_map_for_nodes(nodes: &[EndpointAddr]) -> RelayMap {
+    RelayMode::custom(
+        nodes
+            .iter()
+            .flat_map(|node| node.relay_urls().cloned())
+            .collect::<Vec<_>>(),
+    )
+    .relay_map()
+}
+
+fn normalize_relay_url(relay: RelayUrl) -> Result<RelayUrl> {
+    let mut url: url::Url = relay.into();
+    if let Some(host) = url.host_str().and_then(|host| host.strip_suffix('.')) {
+        let host = host.to_owned();
+        url.set_host(Some(&host))?;
+    }
+    Ok(url.into())
 }
 
 impl IrohDocNode {
@@ -353,4 +446,32 @@ fn json(value: &impl Serialize) -> Result<String> {
 
 fn js_error(error: impl Into<anyhow::Error>) -> JsError {
     JsError::new(&format!("{:#}", error.into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn browser_relay_hosts_drop_fully_qualified_trailing_dot() {
+        let endpoint = SecretKey::from_bytes(&[7; 32]).public();
+        let relay = "https://euc1-1.relay.n0.iroh-canary.iroh.link./"
+            .parse()
+            .unwrap();
+        let mut nodes = vec![EndpointAddr::new(endpoint).with_relay_url(relay)];
+
+        normalize_browser_nodes(&mut nodes).unwrap();
+
+        assert_eq!(
+            nodes[0].relay_urls().next().unwrap().host_str(),
+            Some("euc1-1.relay.n0.iroh-canary.iroh.link")
+        );
+        assert!(
+            browser_relay_map()
+                .unwrap()
+                .urls::<Vec<_>>()
+                .iter()
+                .all(|url| url.host_str().is_some_and(|host| !host.ends_with('.')))
+        );
+    }
 }

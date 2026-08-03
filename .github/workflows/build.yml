@@ -220,7 +220,7 @@ jobs:
           XO_IROH_TICKET="${ticket}" npm run test:e2e
           XO_IROH_TICKET="${ticket}" npx playwright test \
             --project=firefox --project=mobile-webkit \
-            --grep 'creates a relay-backed|prevents mobile|receives native items'
+            --grep 'creates a local item|prevents mobile|receives native items'
 
       - name: Package static PWA
         run: tar -C web/dist -czf xo-web.tar.gz .

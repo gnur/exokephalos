@@ -238,9 +238,7 @@ jobs:
       (github.ref == 'refs/heads/main' || github.ref_type == 'tag') &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       vars.CLOUDFLARE_PAGES_PROJECT != ''
-    needs:
-      - quality
-      - web
+    needs: web
     concurrency:
       group: cloudflare-pages-production
       cancel-in-progress: true

@@ -100,7 +100,7 @@ npm run build
 Pushes to `main` and Git tags deploy the already-tested `xo-web` artifact
 to the production branch of an existing Cloudflare Pages project. A tag embeds
 its tag name as the PWA version, so publishing a release updates production to
-that release after both quality and browser/Wasm jobs pass. Pull requests never
+that release after the browser/Wasm job passes. Pull requests never
 deploy, and the job stays skipped until `CLOUDFLARE_PAGES_PROJECT` is set.
 Configure these GitHub Actions repository settings before enabling the job:
 

@@ -486,8 +486,14 @@ xo --workspace '<WORKSPACE_ID>'
 ```
 
 The uncluttered TUI header shows only xo and the embedded release version.
-Press `Space`, then `s` for detailed synchronization state or `Space`, then `r`
-to refresh and retry synchronization.
+The TUI subscribes to Iroh document events and automatically reloads notes,
+conflicts, devices, replicated behavior, and the filesystem projection when
+local or remote content becomes available. Press `Space`, then `s` for detailed
+synchronization state or `Space`, then `r` for a manual refresh and retry.
+
+Create and edit commands open a secure temporary file whose name ends in
+`.xo.md`. Editors can associate that compound extension with `xo-lsp` while the
+ordinary projected notes retain their canonical `.md` names.
 
 ### TUI leader, navigation, and tag filtering
 

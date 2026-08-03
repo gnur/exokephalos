@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use xo_core::behavior::{
     ActionDescriptor, ActionPlugin, Capability, Predicate, WorkspaceBehavior, default_views,
 };
-use xo_core::iroh_node::{IrohNode, IrohWorkspace};
+use xo_core::iroh_node::{IrohNode, IrohWorkspace, WorkspaceEvent};
 use xo_core::projection::ProjectionState;
 use xo_core::records::{WorkspaceRecords, WorkspaceSnapshot};
 use xo_core::sync_state::{Connectivity, SyncStateStore};
@@ -214,6 +214,13 @@ impl WorkspaceSession {
             })
             .await
             .map_err(Into::into)
+    }
+
+    pub async fn subscribe(
+        &self,
+    ) -> Result<impl futures_lite::Stream<Item = Result<WorkspaceEvent>> + Send + Unpin + 'static>
+    {
+        self.workspace.subscribe().await
     }
 
     pub fn refresh_sync(&self) -> Result<()> {
@@ -530,6 +537,32 @@ mod tests {
         )?;
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].id.as_str(), "bkabcde");
+
+        let mut events = peer.subscribe().await?;
+        let mut live_note = reading_book();
+        live_note.id = NoteId::new("bkabcdf");
+        live_note.path = "books/bkabcdf.md".into();
+        live_note
+            .frontmatter
+            .insert("id".into(), FrontmatterValue::String("bkabcdf".into()));
+        source.save(&live_note).await?;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while let Some(event) = futures_lite::StreamExt::next(&mut events).await {
+                if event? == WorkspaceEvent::ContentChanged
+                    && peer.snapshot().await.is_ok_and(|snapshot| {
+                        snapshot
+                            .notes
+                            .iter()
+                            .any(|note| note.id.as_str() == "bkabcdf")
+                    })
+                {
+                    return Ok::<_, anyhow::Error>(());
+                }
+            }
+            anyhow::bail!("workspace event stream ended before the live update")
+        })
+        .await
+        .context("TUI peer did not receive a live workspace event")??;
         peer.shutdown().await?;
         source.shutdown().await
     }

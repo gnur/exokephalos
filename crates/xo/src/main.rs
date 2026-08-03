@@ -8,12 +8,14 @@ use app::{App, Mode, PairingStep, external_edit_with, render, required_frontmatt
 use base64::Engine as _;
 use clap::{Parser, Subcommand};
 use crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers,
+    DisableBracketedPaste, EnableBracketedPaste, Event, EventStream, KeyCode, KeyEventKind,
+    KeyModifiers,
 };
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+use futures_lite::{Stream, StreamExt};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use time::OffsetDateTime;
@@ -23,6 +25,7 @@ use xo::steel_plugin::{PluginChoice, execute as execute_steel_plugin};
 use xo::url_capture::{UrlCaptureService, captured_note};
 use xo_core::behavior::ActionPlugin;
 use xo_core::domain::{Frontmatter, FrontmatterValue};
+use xo_core::iroh_node::WorkspaceEvent;
 use xo_core::{Note, NoteId};
 use zeroize::Zeroizing;
 
@@ -191,6 +194,7 @@ async fn run_tui(
     leader_key: &str,
 ) -> Result<()> {
     let mut session = WorkspaceSession::open(state_dir, workspace, ticket, projection).await?;
+    let workspace_events = session.subscribe().await?;
     let behavior = session.behavior().await?;
     let snapshot = session.snapshot().await?;
     let mut app = App::new(behavior, snapshot.notes.clone());
@@ -205,7 +209,7 @@ async fn run_tui(
     execute!(stdout(), EnterAlternateScreen, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
-    let result = event_loop(&mut terminal, &mut app, &mut session).await;
+    let result = event_loop(&mut terminal, &mut app, &mut session, workspace_events).await;
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -222,6 +226,7 @@ async fn hydrate(
     session: &WorkspaceSession,
     snapshot: xo_core::records::WorkspaceSnapshot,
 ) -> Result<()> {
+    let selected_note = app.selected_note().map(|note| note.id.clone());
     app.notes = snapshot.notes;
     app.conflicts = snapshot
         .resolved
@@ -245,7 +250,31 @@ async fn hydrate(
     app.diagnostics = snapshot.diagnostics;
     app.operations = session.sync_state.ready()?;
     app.sync = Some(session.sync_state.status()?);
+    app.selected = selected_note
+        .and_then(|id| app.visible_notes().iter().position(|note| note.id == id))
+        .unwrap_or_else(|| app.selected_index().unwrap_or(0));
     Ok(())
+}
+
+async fn refresh_workspace(app: &mut App, session: &mut WorkspaceSession) -> Result<()> {
+    let behavior = session.behavior().await?;
+    let current_view_exists = behavior.views.iter().any(|view| view.id == app.active_view);
+    app.behavior = behavior;
+    if !current_view_exists {
+        let default_view = app.behavior.default_view.clone();
+        app.set_view(&default_view);
+    } else if let Some(subview) = &app.active_subview
+        && !app
+            .behavior
+            .views
+            .iter()
+            .find(|view| view.id == app.active_view)
+            .is_some_and(|view| view.subviews.iter().any(|item| item.id == *subview))
+    {
+        app.set_subview(None);
+    }
+    let snapshot = session.snapshot().await?;
+    hydrate(app, session, snapshot).await
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -285,10 +314,38 @@ async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     session: &mut WorkspaceSession,
+    mut workspace_events: impl Stream<Item = Result<WorkspaceEvent>> + Unpin,
 ) -> Result<()> {
+    let mut terminal_events = EventStream::new();
     loop {
         terminal.draw(|frame| render(frame, app))?;
-        let key = match event::read()? {
+        let event = tokio::select! {
+            terminal_event = terminal_events.next() => terminal_event
+                .context("terminal event stream ended")?
+                .context("read terminal event")?,
+            workspace_event = workspace_events.next() => {
+                match workspace_event {
+                    Some(Ok(WorkspaceEvent::ContentChanged)) => {
+                        match refresh_workspace(app, session).await {
+                            Ok(()) if app.message.starts_with("automatic workspace refresh failed:") => {
+                                app.message = "workspace updated".into();
+                            }
+                            Ok(()) => {}
+                            Err(error) => {
+                                app.message = format!("automatic workspace refresh failed: {error:#}");
+                            }
+                        }
+                    }
+                    Some(Ok(WorkspaceEvent::StatusChanged)) => {}
+                    Some(Err(error)) => {
+                        app.message = format!("workspace event stream failed: {error:#}");
+                    }
+                    None => anyhow::bail!("workspace event stream ended"),
+                }
+                continue;
+            }
+        };
+        let key = match event {
             Event::Key(key) => key,
             Event::Paste(value) => {
                 if app.mode == Mode::CaptureUrl {
@@ -359,8 +416,7 @@ async fn event_loop(
                 }
                 KeyCode::Char(value) if leader_command(value) == Some(LeaderCommand::Refresh) => {
                     session.refresh_sync()?;
-                    let snapshot = session.snapshot().await?;
-                    hydrate(app, session, snapshot).await?;
+                    refresh_workspace(app, session).await?;
                     app.message = "refreshed and retried synchronization".into();
                     app.mode = Mode::Normal;
                 }

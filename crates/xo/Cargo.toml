@@ -12,6 +12,7 @@ base64.workspace = true
 clap.workspace = true
 crossterm.workspace = true
 dom_smoothie.workspace = true
+futures-lite.workspace = true
 quick_html2md.workspace = true
 qrcode.workspace = true
 ratatui.workspace = true

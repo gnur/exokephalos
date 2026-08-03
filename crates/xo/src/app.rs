@@ -11,7 +11,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
-use tempfile::NamedTempFile;
+use tempfile::Builder as TempFileBuilder;
 use xo::steel_plugin::PluginChoice;
 use xo_core::behavior::{Query, WorkspaceBehavior};
 use xo_core::domain::{DeviceRecord, Frontmatter, FrontmatterValue};
@@ -644,7 +644,10 @@ fn note_tags(note: &Note) -> Vec<String> {
 }
 
 pub fn external_edit_with(program: &OsStr, args: &[&OsStr], initial: &[u8]) -> Result<Vec<u8>> {
-    let mut file = NamedTempFile::new().context("create secure editor file")?;
+    let mut file = TempFileBuilder::new()
+        .suffix(".xo.md")
+        .tempfile()
+        .context("create secure editor file")?;
     file.write_all(initial)?;
     file.flush()?;
     let status = Command::new(program)
@@ -1692,7 +1695,10 @@ mod tests {
     fn external_editor_may_atomically_replace_the_temporary_file() {
         let args = [
             OsStr::new("-c"),
-            OsStr::new("printf changed > \"$1.next\"; mv \"$1.next\" \"$1\""),
+            OsStr::new(
+                "case \"$1\" in *.xo.md) ;; *) exit 9;; esac; \
+                 printf changed > \"$1.next\"; mv \"$1.next\" \"$1\"",
+            ),
             OsStr::new("_"),
         ];
         let edited = external_edit_with(OsStr::new("sh"), &args, b"initial").unwrap();

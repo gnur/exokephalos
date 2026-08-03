@@ -24,9 +24,10 @@ The native TUI uses strict schema-3 command configuration; `leader-key` is one p
 
 - an uncluttered release-only header, a configurable leader-key popup for operational commands, and a compact footer for leader/search/edit/create/delete/restore/quit hints;
 - view and subview navigation, title search, conjunctive tag filters, sorting, note lists, and Markdown preview;
-- note creation, frontmatter/body editing, deletion, restoration, revision/conflict inspection, and encrypted-note unlocking;
+- note creation and frontmatter/body editing through secure `.xo.md` temporary files, deletion, restoration, revision/conflict inspection, and encrypted-note unlocking;
 - generic action selection, URL capture, executable Steel plugins, import/export, diagnostics, retries, and device management;
 - server pairing and writable mobile onboarding through a fragment-based QR setup URL; and
+- event-driven rehydration from Iroh document changes, including replicated behavior and filesystem projection; and
 - filesystem projection plus optional `xo-lsp` editor integration.
 
 ### `xo-web` PWA

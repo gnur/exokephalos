@@ -212,6 +212,12 @@ pub struct IrohWorkspace {
     author: AuthorId,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkspaceEvent {
+    ContentChanged,
+    StatusChanged,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SignedWorkspaceValue {
     pub key: Vec<u8>,
@@ -341,6 +347,37 @@ impl IrohWorkspace {
         }
         values.sort_by(|left, right| left.key.cmp(&right.key));
         Ok(values)
+    }
+
+    /// Subscribe to local and replicated document changes.
+    pub async fn subscribe(
+        &self,
+    ) -> Result<impl futures_lite::Stream<Item = Result<WorkspaceEvent>> + Send + Unpin + 'static>
+    {
+        use iroh_docs::sync::ContentStatus;
+
+        let events = self
+            .doc
+            .subscribe()
+            .await
+            .context("subscribe to workspace")?;
+        Ok(events.map(|event| {
+            let event = event.context("read workspace event")?;
+            let event = match event {
+                LiveEvent::InsertLocal { .. }
+                | LiveEvent::InsertRemote {
+                    content_status: ContentStatus::Complete,
+                    ..
+                }
+                | LiveEvent::ContentReady { .. }
+                | LiveEvent::PendingContentReady => WorkspaceEvent::ContentChanged,
+                LiveEvent::InsertRemote { .. }
+                | LiveEvent::NeighborUp(_)
+                | LiveEvent::NeighborDown(_)
+                | LiveEvent::SyncFinished(_) => WorkspaceEvent::StatusChanged,
+            };
+            Ok(event)
+        }))
     }
 
     pub async fn start_sync(&self, ticket: &str) -> Result<()> {

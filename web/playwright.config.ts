@@ -12,7 +12,11 @@ export default defineConfig({
     trace: 'retain-on-failure',
     ...devices['Desktop Chrome'],
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
+    { name: 'mobile-webkit', use: { ...devices['iPhone 13'] } },
+  ],
   webServer: {
     command: 'npm run preview -- --port 4173',
     url: 'http://127.0.0.1:4173/healthz',

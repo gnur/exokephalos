@@ -122,9 +122,9 @@ jobs:
           curl --fail --silent http://127.0.0.1:4173/manifest.webmanifest | grep -q '"name":"xo"'
           curl --fail --silent http://127.0.0.1:4173/version.json | grep -q "\"version\":\"${XO_VERSION}\""
 
-      - name: Install Chromium
+      - name: Install Chromium, Firefox, and WebKit
         working-directory: web
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium firefox webkit
 
       - name: Test browser Iroh convergence and offline recovery
         shell: bash

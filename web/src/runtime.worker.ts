@@ -288,7 +288,7 @@ async function syncPendingWrites() {
   if (!pending.length) return;
   const published = await publishPendingWrites();
   await requireNode().refreshSync();
-  await confirmPendingWrites(published);
+  if (await hasRemotePeers()) await confirmPendingWrites(published);
   await refreshEntryCache();
 }
 
@@ -296,13 +296,18 @@ async function refreshSync() {
   try {
     const published = await publishPendingWrites();
     await requireNode().refreshSync();
-    await confirmPendingWrites(published);
+    if (await hasRemotePeers()) await confirmPendingWrites(published);
     await refreshEntryCache();
     lastSyncError = undefined;
   } catch (cause) {
     lastSyncError = errorMessage(cause);
   }
   return report();
+}
+
+async function hasRemotePeers() {
+  const status = JSON.parse(await requireNode().statusJson()) as SyncStatus;
+  return status.peers > 0;
 }
 
 async function refreshEntryCache() {

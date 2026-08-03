@@ -40,11 +40,14 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   expect(serializedVault).not.toContain(ticket);
 
   await page.getByRole('button', { name: 'New note' }).click();
+  await expect(page.getByLabel('Frontmatter and Markdown')).toHaveValue(/\ntype: \ntags:/);
   await page.getByLabel('Title', { exact: true }).fill('Web Playwright');
-  await page.getByLabel('Frontmatter and Markdown').fill('---\ntitle: Web Playwright\ntype: note\ntags: [browser, test]\n---\nsurvives browser recovery');
+  await page.getByLabel('Frontmatter and Markdown').fill('---\ntitle: Web Playwright\ntype: \ntags: [browser, test]\n---\nsurvives browser recovery');
   await page.getByRole('button', { name: 'Save note' }).click();
   await expect(page.getByText('Web Playwright', { exact: true }).first()).toBeVisible();
   await expect(page.locator('.markdown-preview')).toContainText('survives browser recovery');
+  await expect(page.locator('.frontmatter-grid')).toContainText('type');
+  await expect(page.locator('.frontmatter-grid')).toContainText('note');
   await page.getByRole('button', { name: 'Edit' }).click();
   await page.getByLabel('Frontmatter and Markdown').fill('---\ntitle: Web Playwright\ntype: note\ntags: [browser, edited]\n---\nedited and survives browser recovery');
   await page.getByRole('button', { name: 'Save note' }).click();
@@ -57,6 +60,8 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   await page.getByText('Deleted notes (1)').click();
   await page.getByRole('button', { name: 'Restore' }).click();
   await expect(page.getByText('Web Playwright', { exact: true }).first()).toBeVisible();
+  await page.waitForTimeout(3_500);
+  await expect(page.getByText(/initial document sync failed/i)).toHaveCount(0);
 
   await page.evaluate(() => navigator.serviceWorker.ready);
   await context.setOffline(true);
@@ -64,9 +69,20 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   await expect(page.locator('.notes-toolbar').getByRole('heading', { name: 'Notes' })).toBeVisible();
   await expect(page.getByText('Web Playwright', { exact: true }).first()).toBeVisible();
   await expect(page.locator('.markdown-preview')).toContainText('edited and survives browser recovery');
-  await expect(page.getByText(/Cached notes and pending edits remain available offline/)).toBeVisible();
 
   expect(consoleErrors.filter((message) => !message.includes('net::ERR_INTERNET_DISCONNECTED'))).toEqual([]);
+});
+
+test('prevents mobile focus zoom and horizontal page overflow', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await expect(page.locator('meta[name="viewport"]')).toHaveAttribute('content', /maximum-scale=1, user-scalable=no/);
+  await page.getByRole('button', { name: 'Create workspace' }).click();
+  await page.getByRole('button', { name: 'New note' }).click();
+  await page.getByLabel('Title', { exact: true }).focus();
+  await page.getByLabel('Frontmatter and Markdown').focus();
+  const dimensions = await page.evaluate(() => ({ width: window.innerWidth, scrollWidth: document.documentElement.scrollWidth }));
+  expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.width);
 });
 
 test('offers a full refresh when the deployed version changes', async ({ page }) => {

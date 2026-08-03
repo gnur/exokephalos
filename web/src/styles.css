@@ -16,9 +16,8 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { min-height: 100%; margin: 0; }
+html, body, #root { width: 100%; max-width: 100%; min-height: 100%; margin: 0; overflow-x: hidden; }
 body {
-  min-width: 320px;
   background:
     radial-gradient(circle at 75% -10%, rgba(52, 129, 174, 0.18), transparent 35rem),
     var(--ink);
@@ -161,7 +160,7 @@ h2 { margin: 0; color: var(--bright); font-size: clamp(1.4rem, 2.3vw, 2rem); let
 .workspace-heading h1 { font-size: clamp(2.6rem, 5vw, 4.8rem); }
 .workspace-id { margin: 16px 0 0; color: #70869b; font: .68rem 'DM Mono', monospace; overflow-wrap: anywhere; }
 .workspace-heading .secondary svg, .ticket-actions svg { width: 16px; }
-.warning { display: flex; align-items: center; gap: 10px; margin-top: 22px; border: 1px solid rgba(245, 190, 104, .26); border-radius: 9px; padding: 12px 14px; color: #eac688; background: rgba(245, 190, 104, .06); font-size: .76rem; }
+.warning { min-width: 0; display: flex; align-items: center; gap: 10px; margin-top: 22px; border: 1px solid rgba(245, 190, 104, .26); border-radius: 9px; padding: 12px 14px; color: #eac688; background: rgba(245, 190, 104, .06); font-size: .76rem; overflow-wrap: anywhere; }
 .warning svg { width: 17px; flex: none; }
 .sync-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 28px 0; }
 .metric { display: grid; gap: 7px; padding: 16px; border: 1px solid var(--line); border-radius: 9px; background: rgba(12, 25, 41, .58); }
@@ -259,6 +258,7 @@ h2 { margin: 0; color: var(--bright); font-size: clamp(1.4rem, 2.3vw, 2rem); let
 }
 
 @media (max-width: 620px) {
+  input, textarea, .search input, .note-editor textarea { font-size: 16px; }
   main { padding: 34px 18px calc(40px + env(safe-area-inset-bottom)); }
   .topbar { height: 62px; }
   .search { flex: 1; width: auto; }

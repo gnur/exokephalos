@@ -6,7 +6,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use futures_lite::StreamExt;
 use iroh::endpoint::presets;
 use iroh::protocol::Router;
-use iroh::{Endpoint, SecretKey};
+use iroh::{Endpoint, EndpointAddr, SecretKey};
 use iroh_blobs::api::Store as BlobStore;
 use iroh_blobs::store::mem::MemStore;
 use iroh_blobs::{ALPN as BLOBS_ALPN, BlobsProtocol};
@@ -66,6 +66,7 @@ pub struct IrohDocNode {
     author: AuthorId,
     document: Option<Doc>,
     ticket: Option<DocTicket>,
+    sync_nodes: Vec<EndpointAddr>,
 }
 
 #[wasm_bindgen]
@@ -109,6 +110,7 @@ impl IrohDocNode {
             author: author_id,
             document: None,
             ticket: None,
+            sync_nodes: Vec::new(),
         })
     }
 
@@ -117,8 +119,8 @@ impl IrohDocNode {
     pub async fn create_workspace(&mut self) -> Result<String, JsError> {
         let document = self.docs.create().await.map_err(js_error)?;
         self.document = Some(document);
+        self.sync_nodes.clear();
         let ticket = self.share_ticket().await?;
-        self.ticket = Some(DocTicket::from_str(&ticket).map_err(js_error)?);
         json(&WorkspaceOutcome {
             workspace_id: self.document().map_err(js_error)?.id().to_string(),
             ticket,
@@ -141,17 +143,28 @@ impl IrohDocNode {
             .import_namespace(ticket.capability.clone())
             .await
             .map_err(js_error)?;
-        let mut events = document.subscribe().await.map_err(js_error)?;
-        let sync_start = document.start_sync(ticket.nodes.clone()).await;
+        let local_id = self.router.endpoint().id();
+        let remote_nodes = ticket
+            .nodes
+            .iter()
+            .filter(|node| node.id != local_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        self.sync_nodes.clone_from(&remote_nodes);
+        let sync_error = if remote_nodes.is_empty() {
+            None
+        } else {
+            let mut events = document.subscribe().await.map_err(js_error)?;
+            match document.start_sync(remote_nodes).await {
+                Ok(()) => wait_for_initial_sync(&mut events)
+                    .await
+                    .err()
+                    .map(|error| error.to_string()),
+                Err(error) => Some(error.to_string()),
+            }
+        };
         self.document = Some(document);
         self.ticket = Some(ticket.clone());
-        let sync_error = match sync_start {
-            Ok(()) => wait_for_initial_sync(&mut events)
-                .await
-                .err()
-                .map(|error| error.to_string()),
-            Err(error) => Some(error.to_string()),
-        };
         json(&WorkspaceOutcome {
             workspace_id: ticket.capability.id().to_string(),
             ticket: ticket.to_string(),
@@ -164,14 +177,16 @@ impl IrohDocNode {
     #[wasm_bindgen(js_name = refreshSync)]
     pub async fn refresh_sync(&self) -> Result<(), JsError> {
         let document = self.document().map_err(js_error)?;
-        let ticket = self
-            .ticket
+        self.ticket
             .as_ref()
             .context("no workspace ticket is loaded")
             .map_err(js_error)?;
+        if self.sync_nodes.is_empty() {
+            return Ok(());
+        }
         let mut events = document.subscribe().await.map_err(js_error)?;
         document
-            .start_sync(ticket.nodes.clone())
+            .start_sync(self.sync_nodes.clone())
             .await
             .map_err(js_error)?;
         wait_for_initial_sync(&mut events).await.map_err(js_error)
@@ -275,16 +290,22 @@ impl IrohDocNode {
 
     /// Create a fresh ticket containing the endpoint's current relay address.
     #[wasm_bindgen(js_name = shareTicket)]
-    pub async fn share_ticket(&self) -> Result<String, JsError> {
+    pub async fn share_ticket(&mut self) -> Result<String, JsError> {
         time::timeout(SYNC_TIMEOUT, self.router.endpoint().online())
             .await
             .map_err(js_error)?;
-        let ticket = self
+        let mut ticket = self
             .document()
             .map_err(js_error)?
             .share(ShareMode::Write, AddrInfoOptions::RelayAndAddresses)
             .await
             .map_err(js_error)?;
+        if let Some(existing) = &self.ticket {
+            ticket.nodes.extend(existing.nodes.iter().cloned());
+            ticket.nodes.sort();
+            ticket.nodes.dedup();
+        }
+        self.ticket = Some(ticket.clone());
         Ok(ticket.to_string())
     }
 }

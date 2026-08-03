@@ -158,7 +158,10 @@ function App() {
       running = true;
       try {
         const next = await runtimeRef.current.refreshSync();
-        if (active) setReport(next);
+        if (active) {
+          setReport(next);
+          if (!next.syncError) setError('');
+        }
       } catch (cause) {
         if (active) setError(errorMessage(cause));
       } finally {
@@ -296,7 +299,7 @@ function App() {
           <div className="search"><Search />{hasWorkspace ? <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search notes" aria-label="Search notes" /> : <span>Connect a workspace to begin</span>}<kbd>xo</kbd></div>
           <div className={online ? 'connection online' : 'connection offline'}>
             {online ? <Cloud /> : <CloudOff />}
-            <span>{online ? (hasWorkspace ? 'relay sync active' : 'browser online') : 'offline'}</span>
+            <span>{online ? (hasWorkspace ? (report?.status.peers ? 'relay sync active' : 'local workspace') : 'browser online') : 'offline'}</span>
           </div>
         </header>
 
@@ -447,7 +450,7 @@ function WorkspaceView({ report, busy, error, activeView, activeSubview, search,
   function startCreate() {
     setEditingId(undefined);
     setCreateTitle('');
-    setDraft('---\ntitle: \ntype: note\ntags: []\n---\n');
+    setDraft('---\ntitle: \ntype: \ntags: []\n---\n');
     setEditorOpen(true);
   }
 

@@ -75,9 +75,16 @@ pub fn prepare_note_mutation(
     author: &str,
     input_json: &str,
     now_ms: u64,
+    local_offset_seconds: i32,
 ) -> Result<String, JsValue> {
-    workspace::prepare_mutation_json(entries_json, author, input_json, now_ms)
-        .map_err(|error| JsValue::from_str(&format!("{error:#}")))
+    workspace::prepare_mutation_json(
+        entries_json,
+        author,
+        input_json,
+        now_ms,
+        local_offset_seconds,
+    )
+    .map_err(|error| JsValue::from_str(&format!("{error:#}")))
 }
 
 fn steel_value(value: &SteelVal) -> Option<String> {

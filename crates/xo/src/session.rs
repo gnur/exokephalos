@@ -95,7 +95,7 @@ impl WorkspaceSession {
             Some(source) => xo_core::steel_runtime::SteelWorkspace::load(
                 &source,
                 &modules,
-                "1970-01-01T00:00:00Z",
+                "1970-01-01T00:00:00+00:00",
             )
             .context("load replicated workspace configuration xo.scm")?,
             None => WorkspaceBehavior::default(),

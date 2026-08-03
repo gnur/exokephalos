@@ -24,6 +24,7 @@ pub mod rotation;
 pub mod steel_runtime;
 #[cfg(feature = "native")]
 pub mod sync_state;
+pub mod timestamp;
 pub mod version;
 #[cfg(feature = "native")]
 pub mod watcher;

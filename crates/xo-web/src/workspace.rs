@@ -171,13 +171,15 @@ pub fn prepare_mutation_json(
     author: &str,
     input_json: &str,
     now_ms: u64,
+    local_offset_seconds: i32,
 ) -> Result<String> {
     let entries: Vec<Entry> =
         serde_json::from_str(entries_json).context("decode document entries")?;
     let repository = Repository::load(&entries)?;
     let input: NoteMutation = serde_json::from_str(input_json).context("decode note mutation")?;
     let author = ActorId::new(author);
-    let (note_id, frontmatter, body, deleted) = mutation_contents(&repository, &input, now_ms)?;
+    let (note_id, frontmatter, body, deleted) =
+        mutation_contents(&repository, &input, now_ms, local_offset_seconds)?;
 
     let mut predecessors = BTreeSet::new();
     if let Some(current) = repository.resolve(&note_id)? {
@@ -245,6 +247,7 @@ fn mutation_contents(
     repository: &Repository,
     input: &NoteMutation,
     now_ms: u64,
+    local_offset_seconds: i32,
 ) -> Result<(NoteId, Frontmatter, String, bool)> {
     let note_id = input.note_id.as_deref().map(NoteId::new);
     let resolved = match note_id.as_ref() {
@@ -286,7 +289,9 @@ fn mutation_contents(
                 .unwrap_or(input.title.as_str())
                 .trim();
             frontmatter.insert("title".into(), FrontmatterValue::String(title.into()));
-            let created = instant.format(&time::format_description::well_known::Rfc3339)?;
+            let local_offset = time::UtcOffset::from_whole_seconds(local_offset_seconds)
+                .context("browser time zone offset is invalid")?;
+            let created = xo_core::timestamp::format(instant.to_offset(local_offset))?;
             let frontmatter =
                 xo_core::markdown::required_frontmatter(frontmatter, id.as_str(), &created);
             Ok((id, frontmatter, parsed.body, false))
@@ -448,7 +453,7 @@ fn load_behavior(
         }
     }
     let mut behavior = match main {
-        Some(source) => SteelWorkspace::load(&source, &modules, "1970-01-01T00:00:00Z")
+        Some(source) => SteelWorkspace::load(&source, &modules, "1970-01-01T00:00:00+00:00")
             .unwrap_or_else(|error| {
                 diagnostics.push(format!("workspace configuration: {error}"));
                 WorkspaceBehavior::default()
@@ -630,6 +635,7 @@ mod tests {
             author,
             r#"{"operation":"save","title":"Browser note","markdown":"---\ntitle: Browser note\ntype: note\ntags: [web]\n---\nFirst body"}"#,
             1_800_000_000_000,
+            19_800,
         ).unwrap()).unwrap();
         let note_id = created.note_id.clone();
         apply(&mut entries, created, author);
@@ -639,6 +645,12 @@ mod tests {
             serde_json::from_str(&snapshot_json(&encoded).unwrap()).unwrap();
         assert_eq!(snapshot["behavior"]["default_view"], "notes");
         assert_eq!(snapshot["notes"][0]["frontmatter"]["title"], "Browser note");
+        assert!(
+            snapshot["notes"][0]["frontmatter"]["created"]
+                .as_str()
+                .unwrap()
+                .ends_with("+05:30")
+        );
         let query = query_snapshot_json(
             &snapshot_json(&encoded).unwrap(),
             r#"{"view":"notes","search":"browser","tags":["web"]}"#,
@@ -664,6 +676,7 @@ mod tests {
                 })
                 .to_string(),
                 1_800_000_000_001,
+                0,
             )
             .unwrap(),
         )
@@ -681,6 +694,7 @@ mod tests {
                 author,
                 &serde_json::json!({ "operation": "delete", "noteId": note_id }).to_string(),
                 1_800_000_000_002,
+                0,
             )
             .unwrap(),
         )
@@ -702,6 +716,7 @@ mod tests {
                 author,
                 r#"{"operation":"save","title":"Rejected","markdown":"---\ntitle: Rejected\ntype: note\n---\n"}"#,
                 2_000,
+                0,
             )
             .unwrap(),
         )
@@ -782,6 +797,7 @@ mod tests {
                     })
                     .to_string(),
                     1_800_000_000_000,
+                    0,
                 )
                 .unwrap(),
             )

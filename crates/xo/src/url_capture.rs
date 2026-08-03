@@ -215,13 +215,12 @@ impl ReadableExtractor for NativeReadableExtractor {
     }
 }
 
-#[must_use]
-pub fn captured_note(page: CapturedPage, now: OffsetDateTime) -> Note {
+pub fn captured_note(page: CapturedPage, now: OffsetDateTime) -> Result<Note> {
     let id = NoteId::new(xo_core::id::generate(now));
     let mut frontmatter = Frontmatter::from([
         (
             "created".into(),
-            FrontmatterValue::String(now.date().to_string()),
+            FrontmatterValue::String(xo_core::timestamp::format(now)?),
         ),
         ("id".into(), FrontmatterValue::String(id.to_string())),
         ("source".into(), FrontmatterValue::String("url".into())),
@@ -235,12 +234,12 @@ pub fn captured_note(page: CapturedPage, now: OffsetDateTime) -> Note {
     insert_optional(&mut frontmatter, "published", page.published);
     insert_optional(&mut frontmatter, "image", page.image);
     insert_optional(&mut frontmatter, "excerpt", page.excerpt);
-    Note {
+    Ok(Note {
         path: canonical_note_path(&id, &frontmatter),
         id,
         frontmatter,
         body: page.body,
-    }
+    })
 }
 
 fn insert_optional(frontmatter: &mut Frontmatter, key: &str, value: Option<String>) {
@@ -255,9 +254,14 @@ fn nonempty(value: impl AsRef<str>) -> Option<String> {
 }
 
 fn normalize_published(value: String) -> String {
+    use time::UtcOffset;
     use time::format_description::well_known::Rfc3339;
 
-    OffsetDateTime::parse(&value, &Rfc3339).map_or(value, |instant| instant.date().to_string())
+    OffsetDateTime::parse(&value, &Rfc3339).map_or(value, |instant| {
+        let offset = UtcOffset::local_offset_at(instant).unwrap_or(instant.offset());
+        xo_core::timestamp::format(instant.to_offset(offset))
+            .unwrap_or_else(|_| instant.date().to_string())
+    })
 }
 
 fn validated_url(raw_url: &str) -> Result<Url> {
@@ -366,7 +370,7 @@ mod tests {
         assert!(captured.body.contains("https://example.com/more"));
 
         let instant = OffsetDateTime::from_unix_timestamp(1_741_046_400).unwrap();
-        let note = captured_note(captured, instant);
+        let note = captured_note(captured, instant).unwrap();
         assert!(xo_core::id::is_valid(note.id.as_str()));
         assert_eq!(
             note.frontmatter.get("source"),

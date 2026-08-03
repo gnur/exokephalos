@@ -29,8 +29,9 @@ The examples below assume those binaries have been copied somewhere in
 `PATH`.
 
 GitHub Actions builds release archives for Linux x86-64, Linux ARM64, macOS
-ARM64, and Windows x86-64. Pushing a UTC timestamp tag creates the corresponding
-GitHub Release automatically with generated release notes, all four archives,
+ARM64, and Windows x86-64. Pushing a local timestamp tag with an explicit UTC
+offset creates the corresponding GitHub Release automatically with generated
+release notes, all four archives,
 the static PWA, and a `SHA256SUMS` file. The exact tag is embedded as the version
 reported by every binary and by the PWA.
 
@@ -40,9 +41,9 @@ Create a release tag from a clean, fully committed checkout with:
 ./release.sh
 ```
 
-The script creates an annotated UTC tag in ISO 8601 basic format, such as
-`20260728T143012Z`, then asks whether it should push the tag to `origin`. The
-default answer is no. It refuses to tag while staged, unstaged, or untracked
+The script creates an annotated local timestamp tag with a numeric UTC offset
+in ISO 8601 basic format, such as `20260728T163012+0200`, then asks whether it
+should push the tag to `origin`. The default answer is no. It refuses to tag while staged, unstaged, or untracked
 changes exist. Pushing the tag starts the GitHub Release workflow.
 
 ## Run the xo-web PWA
@@ -538,7 +539,10 @@ and parses every Markdown file before committing the first revision, reports
 all malformed-document and duplicate-ID diagnostics, and rejects IDs or paths
 that collide with the active workspace. Files without complete frontmatter get
 stable IDs and the required `id`, `created`, `tags`, `title`, and `type` fields.
-The source tree is never modified.
+Generated timestamps use the system's local wall time with an explicit numeric
+UTC offset. During import, RFC 3339 UTC timestamps anywhere in frontmatter are
+converted to the equivalent instant in the system time zone, including the
+historically correct daylight-saving offset. The source tree is never modified.
 
 `xo export` writes winning workspace notes as conventional Markdown:
 
@@ -603,7 +607,8 @@ starts with native declarative Steel similar to:
 Predicates support `always`, `field-equals`, `has-tag`, `not`, `all`, and
 `any`. Actions use declarative effects such as `add-tag`, `remove-tag`,
 `set-field`, and `append-body`; `(set-field "started" (now))` stores the
-host-supplied RFC 3339 execution timestamp without exposing an ambient clock.
+host-supplied RFC 3339 execution timestamp in local wall time with an explicit
+numeric UTC offset, without exposing an ambient clock.
 Mutating actions require an explicit `mutate-note` capability grant. Optional lexical modules below
 `modules/**/*.scm` use the same fields inside `(workspace-module ...)`.
 Executable sandboxed plugins live below `plugins/**/*.scm`; their

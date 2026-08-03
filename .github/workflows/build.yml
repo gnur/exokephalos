@@ -513,8 +513,8 @@ jobs:
       - name: Validate timestamp release tag
         shell: bash
         run: |
-          if [[ ! "${GITHUB_REF_NAME}" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
-            echo "release tag must be a UTC timestamp such as 20260731T171136Z" >&2
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^[0-9]{8}T[0-9]{6}[+-][0-9]{4}$ ]]; then
+            echo "release tag must be a local timestamp with offset such as 20260731T191136+0200" >&2
             exit 1
           fi
 

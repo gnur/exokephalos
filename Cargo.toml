@@ -51,7 +51,7 @@ steel-core = "=0.8.2"
 subtle = "2.6.1"
 tempfile = "3.20.0"
 thiserror = "2.0.12"
-time = { version = "0.3.41", features = ["formatting", "macros", "parsing"] }
+time = { version = "0.3.41", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1.46.1", features = ["io-std", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tower-lsp = "0.20.0"
 url = "2.5.4"

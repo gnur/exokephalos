@@ -321,7 +321,7 @@ async fn import_workspace(source: &Path, state_dir: &Path) -> Result<ImportResul
     }
 
     // Finish all validation before creating native state so a rejected import has no side effects.
-    let report = xo_core::projection::scan_for_import(&source)?;
+    let mut report = xo_core::projection::scan_for_import(&source)?;
     if !report.diagnostics.is_empty() {
         let details = report
             .diagnostics
@@ -339,6 +339,10 @@ async fn import_workspace(source: &Path, state_dir: &Path) -> Result<ImportResul
             "source workspace has {} diagnostic(s); import aborted\n{details}",
             report.diagnostics.len()
         );
+    }
+    for note in &mut report.notes {
+        xo_core::timestamp::localize_utc_frontmatter(&mut note.frontmatter)
+            .context("determine system time zone for imported timestamps")?;
     }
     let source_assets = scan_assets(&source)?;
     let source_configs = scan_configs(&source)?;
@@ -463,8 +467,12 @@ fn scan_configs(source: &Path) -> Result<Vec<SourceConfig>> {
                 ))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
-        xo_core::steel_runtime::SteelWorkspace::load(&source, &modules, "1970-01-01T00:00:00Z")
-            .context("validate imported workspace configuration")?;
+        xo_core::steel_runtime::SteelWorkspace::load(
+            &source,
+            &modules,
+            "1970-01-01T00:00:00+00:00",
+        )
+        .context("validate imported workspace configuration")?;
     }
     Ok(configs)
 }
@@ -729,6 +737,10 @@ mod tests {
                 (
                     "title".to_owned(),
                     FrontmatterValue::String("Current note".to_owned()),
+                ),
+                (
+                    "created".to_owned(),
+                    FrontmatterValue::String("2026-01-02T03:04:05Z".to_owned()),
                 ),
             ]),
             body: "unchanged\n".to_owned(),

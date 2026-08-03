@@ -36,6 +36,7 @@ The native TUI uses strict schema-3 command configuration; `leader-key` is one p
 - It creates or joins writable workspaces and synchronizes directly with native peers through relay-only Iroh Docs/Blobs/Gossip.
 - It loads and validates replicated Steel configuration, displays configured views and subviews, and runs view, search, sort, and tag queries in shared Rust behavior code.
 - It creates and edits frontmatter plus Markdown, deletes and restores notes, displays revision history and concurrent heads, and commits canonical immutable revision/head records prepared by Rust.
+- Human-readable timestamps use local wall time with an explicit numeric UTC offset. Native imports recursively convert UTC RFC 3339 frontmatter timestamps to the system time zone while preserving the instant; browsers provide their local offset to Rust when preparing authoritative mutations.
 - Cached records and pending writes survive offline reloads. A raw record explorer remains available for diagnostics.
 - The endpoint secret, author secret, and writable ticket are AES-GCM encrypted in IndexedDB with a non-extractable WebCrypto key. Cached entries and pending writes are separate and are currently not encrypted.
 - The service worker caches only the versioned application shell. The application checks uncached deployment metadata on load, cached restoration, reconnect, and every ten minutes before offering a full refresh.
@@ -110,7 +111,7 @@ The Wasm facade:
 - Native network host capabilities require HTTPS, public-address validation, pinned DNS, disabled proxies and redirects, restricted headers, and bounded time and response size.
 - Device retirement records establish author cutoffs without erasing accepted history.
 - Backups verify Docs metadata and Blob content before restoration.
-- Release timestamp tags are embedded in every binary and the PWA; CI verifies the reported version and static `version.json`.
+- Local release timestamp tags include an explicit UTC offset and are embedded in every binary and the PWA; CI verifies the reported version and static `version.json`.
 
 ## Validation
 

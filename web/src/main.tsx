@@ -541,7 +541,7 @@ function WorkspaceView({ report, busy, error, activeView, activeSubview, search,
               {selected.conflict ? <div className="conflict-callout"><CircleAlert /><span>This note has {selected.conflict.concurrent_revisions.length} concurrent revision(s). Saving merges all current heads.</span></div> : null}
               <dl className="frontmatter-grid">{Object.entries(selected.frontmatter).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{displayFrontmatter(value)}</dd></div>)}</dl>
               <pre className="markdown-preview">{selected.body || 'This note has no body.'}</pre>
-              <details className="history-panel"><summary>Revision history ({selected.history.length})</summary>{selected.history.slice().reverse().map((revision) => <div key={revision.id}><code>{short(revision.id)}</code><span>{new Date(revision.physicalMs).toLocaleString()} · {short(revision.author)}{revision.deleted ? ' · deleted' : ''}</span></div>)}</details>
+              <details className="history-panel"><summary>Revision history ({selected.history.length})</summary>{selected.history.slice().reverse().map((revision) => <div key={revision.id}><code>{short(revision.id)}</code><span>{localTimestamp(revision.physicalMs)} · {short(revision.author)}{revision.deleted ? ' · deleted' : ''}</span></div>)}</details>
             </>
           ) : <div className="empty-state preview-empty">Select a note to read or edit it.</div>}
         </article>
@@ -575,6 +575,17 @@ function WorkspaceView({ report, busy, error, activeView, activeSubview, search,
       ) : null}
     </>
   );
+}
+
+function localTimestamp(milliseconds: number) {
+  const instant = new Date(milliseconds);
+  const offsetMinutes = -instant.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const absoluteOffset = Math.abs(offsetMinutes);
+  const pad = (value: number, width = 2) => String(value).padStart(width, '0');
+  return `${instant.getFullYear()}-${pad(instant.getMonth() + 1)}-${pad(instant.getDate())}`
+    + `T${pad(instant.getHours())}:${pad(instant.getMinutes())}:${pad(instant.getSeconds())}`
+    + `${sign}${pad(Math.floor(absoluteOffset / 60))}:${pad(absoluteOffset % 60)}`;
 }
 
 function noteField(note: WorkspaceNote, field?: string) {

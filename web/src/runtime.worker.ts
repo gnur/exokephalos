@@ -243,6 +243,7 @@ async function mutateNote(input: NoteMutationInput) {
     status.authorId,
     JSON.stringify(input),
     BigInt(Date.now()),
+    -new Date().getTimezoneOffset() * 60,
   )) as PreparedMutation;
   await enqueuePreparedWrites(prepared.writes, status.authorId);
   try {

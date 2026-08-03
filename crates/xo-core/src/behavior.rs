@@ -270,13 +270,12 @@ impl TemplateInputs {
         slug: impl Into<String>,
         values: BTreeMap<String, String>,
     ) -> Result<Self, time::error::Format> {
-        use time::format_description::well_known::Rfc3339;
         use time::macros::format_description;
         Ok(Self {
             date: instant
                 .date()
                 .format(format_description!("[year]-[month]-[day]"))?,
-            date_time: instant.format(&Rfc3339)?,
+            date_time: crate::timestamp::format(instant)?,
             year: instant.year().to_string(),
             month: format!("{:02}", u8::from(instant.month())),
             day: format!("{:02}", instant.day()),

@@ -3,8 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
+
 use xo_core::domain::FrontmatterValue;
 use xo_core::{Note, NoteId};
 
@@ -171,6 +170,8 @@ pub fn export_notes(
 }
 
 fn normalize_imported_note(note: &mut Note, default_type: &str) -> Result<()> {
+    xo_core::timestamp::localize_utc_frontmatter(&mut note.frontmatter)
+        .context("determine system time zone for imported timestamps")?;
     note.frontmatter.insert(
         "id".to_owned(),
         FrontmatterValue::String(note.id.to_string()),
@@ -207,9 +208,10 @@ fn normalize_imported_note(note: &mut Note, default_type: &str) -> Result<()> {
         note.frontmatter.get("created"),
         Some(FrontmatterValue::String(value)) if !value.trim().is_empty()
     ) {
-        let created = OffsetDateTime::now_utc()
-            .format(&Rfc3339)
-            .context("format import timestamp")?;
+        let created = xo_core::timestamp::format(
+            xo_core::timestamp::now_local().context("determine system time zone")?,
+        )
+        .context("format import timestamp")?;
         note.frontmatter
             .insert("created".to_owned(), FrontmatterValue::String(created));
     }
@@ -322,7 +324,7 @@ mod tests {
         let source = directory.path().join("source");
         std::fs::create_dir_all(source.join("nested"))?;
         let raw = "# Plain body\n";
-        let existing = "---\ntitle: Existing\nadded: 2024-03-02\n---\nBody\n";
+        let existing = "---\ntitle: Existing\ncreated: 2024-03-02T12:30:00Z\nfinished: 2024-03-03T09:15:00Z\n---\nBody\n";
         std::fs::write(source.join("plain.md"), raw)?;
         std::fs::write(source.join("nested/existing.md"), existing)?;
 
@@ -333,6 +335,32 @@ mod tests {
             for field in ["id", "created", "tags", "title", "type"] {
                 assert!(note.frontmatter.contains_key(field), "{field} missing");
             }
+        }
+        let imported = notes
+            .iter()
+            .find(|note| note_title(note) == "Existing")
+            .context("imported timestamp fixture")?;
+        for field in ["created", "finished"] {
+            let timestamp = frontmatter_string(imported.frontmatter.get(field))
+                .context("localized timestamp")?;
+            assert!(!timestamp.ends_with('Z'));
+            let localized = time::OffsetDateTime::parse(
+                timestamp,
+                &time::format_description::well_known::Rfc3339,
+            )?;
+            let original = time::OffsetDateTime::parse(
+                if field == "created" {
+                    "2024-03-02T12:30:00Z"
+                } else {
+                    "2024-03-03T09:15:00Z"
+                },
+                &time::format_description::well_known::Rfc3339,
+            )?;
+            assert_eq!(localized, original);
+            assert_eq!(
+                localized.offset(),
+                time::UtcOffset::local_offset_at(original)?
+            );
         }
         assert_eq!(std::fs::read_to_string(source.join("plain.md"))?, raw);
         assert_eq!(

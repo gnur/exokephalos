@@ -433,8 +433,7 @@ impl App {
             .iter_mut()
             .find(|note| note.id == note_id)
             .context("selected note disappeared")?;
-        let now = time::OffsetDateTime::now_utc()
-            .format(&time::format_description::well_known::Rfc3339)?;
+        let now = xo_core::timestamp::format(xo_core::timestamp::now_local()?)?;
         self.behavior.apply_action(note, id, &now)?;
         Ok(note.clone())
     }
@@ -1572,7 +1571,7 @@ mod tests {
         let frontmatter = required_frontmatter(
             Frontmatter::from([("title".into(), FrontmatterValue::String("Kept".into()))]),
             "note001",
-            "2026-07-22T10:00:00Z",
+            "2026-07-22T10:00:00+00:00",
         );
         for field in ["id", "created", "tags", "title", "type"] {
             assert!(frontmatter.contains_key(field));
@@ -1583,7 +1582,7 @@ mod tests {
         assert!(preview.starts_with("---\n"));
         assert!(preview.contains("title: Kept"));
         assert!(preview.contains("type: note"));
-        assert!(preview.contains("created: 2026-07-22T10:00:00Z"));
+        assert!(preview.contains("created: 2026-07-22T10:00:00+00:00"));
         assert!(preview.contains("Hello **world**"));
     }
 

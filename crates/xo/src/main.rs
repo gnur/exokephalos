@@ -860,11 +860,9 @@ async fn add_plugin_result(
         app.message = "plugin result is unavailable".into();
         return Ok(());
     };
-    let now = OffsetDateTime::now_utc();
+    let now = xo_core::timestamp::now_local()?;
     let id = NoteId::new(xo_core::id::generate(now));
-    let created = now
-        .format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_else(|_| now.date().to_string());
+    let created = xo_core::timestamp::format(now)?;
     note.frontmatter
         .insert("id".into(), FrontmatterValue::String(id.to_string()));
     note.frontmatter
@@ -887,13 +885,13 @@ async fn add_plugin_result(
 
 async fn capture_url(session: &mut WorkspaceSession, raw_url: &str) -> Result<Note> {
     let page = UrlCaptureService::default().capture(raw_url).await?;
-    let note = captured_note(page, OffsetDateTime::now_utc());
+    let note = captured_note(page, xo_core::timestamp::now_local()?)?;
     session.save(&note).await?;
     Ok(note)
 }
 
 async fn create_note(app: &mut App, session: &mut WorkspaceSession, title: &str) -> Result<()> {
-    let instant = OffsetDateTime::now_utc();
+    let instant = xo_core::timestamp::now_local()?;
     let mut note = new_note_draft(instant, title)?;
     let initial = xo_core::markdown::render(&note.frontmatter, &note.body)?;
     let editor = std::env::var_os("EDITOR").unwrap_or_else(|| "vi".into());
@@ -919,9 +917,7 @@ async fn create_note(app: &mut App, session: &mut WorkspaceSession, title: &str)
 }
 
 fn new_note_draft(instant: OffsetDateTime, title: &str) -> Result<Note> {
-    use time::format_description::well_known::Rfc3339;
-
-    let created = instant.format(&Rfc3339)?;
+    let created = xo_core::timestamp::format(instant)?;
     let id = xo_core::id::generate(instant);
     let mut frontmatter = Frontmatter::new();
     frontmatter.insert(

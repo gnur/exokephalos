@@ -1329,7 +1329,7 @@ mod tests {
         let behavior = SteelWorkspace::load(
             include_str!("../../../example-config.scm"),
             &BTreeMap::new(),
-            "2026-01-02T03:04:05Z",
+            "2026-01-02T03:04:05+00:00",
         )
         .unwrap();
         assert_eq!(behavior.default_view, "notes");
@@ -1379,7 +1379,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(todo.len(), 1);
-        let now = "2026-01-02T03:04:05Z";
+        let now = "2026-01-02T03:04:05+00:00";
         behavior.apply_action(&mut note, "mark-done", now).unwrap();
         assert!(Predicate::HasTag { tag: "done".into() }.matches(&note));
 
@@ -1429,7 +1429,7 @@ mod tests {
                 "modules/actions/main.scm".into(),
                 encode_config(&module, true),
             )]),
-            "2026-01-02T03:04:05Z",
+            "2026-01-02T03:04:05+00:00",
         )
         .unwrap();
         assert_eq!(loaded.views[0].id, "notes");

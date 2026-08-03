@@ -8,7 +8,7 @@
     "build:wasm": "cd ../crates/xo-web && wasm-pack build . --target web --release --out-dir ../../web/src/generated/xo-web",
     "dev": "npm run build:wasm && vite --host 0.0.0.0",
     "preview": "vite preview --host 0.0.0.0",
-    "test:e2e": "playwright test",
+    "test:e2e": "playwright test --project=chromium",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

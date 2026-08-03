@@ -24,7 +24,7 @@ The native TUI uses strict schema-3 command configuration; `leader-key` is one p
 
 - an uncluttered release-only header, a configurable leader-key popup for operational commands, and a compact footer for leader/search/edit/create/delete/restore/quit hints;
 - view and subview navigation, title search, conjunctive tag filters, sorting, note lists, and Markdown preview;
-- note creation and frontmatter/body editing through secure `.xo.md` temporary files, deletion, restoration, revision/conflict inspection, and encrypted-note unlocking;
+- plaintext note creation with `c`, encrypted-only-at-creation workflows with `C`, full-frontmatter/body editing through private `.xo.md` temporary files, deletion, restoration, revision/conflict inspection, and encrypted-note unlocking;
 - generic action selection, URL capture, executable Steel plugins, import/export, diagnostics, retries, and device management;
 - server pairing and writable mobile onboarding through a fragment-based QR setup URL; and
 - event-driven rehydration from Iroh document changes, including replicated behavior and filesystem projection; and
@@ -72,7 +72,7 @@ workspace/descriptor                   -> canonical CBOR WorkspaceDescriptor
 
 A `NoteRevision` contains schema, note ID, complete frontmatter and body, materialized path, HLC, author ID, predecessor IDs, and deletion state. Its revision ID is the BLAKE3 hash of canonical CBOR bytes. A commit stores the immutable revision before advancing the local author's head.
 
-Resolution validates the revision graph, filters unacceptable records, orders candidate heads by HLC and revision identity, and retains non-ancestor heads as conflicts. Editing a conflicted note uses the winning and concurrent heads as predecessors, preserving history while producing a merged successor. Deletion and restoration are ordinary immutable revisions.
+Resolution validates the revision graph, filters unacceptable records, orders candidate heads by HLC and revision identity, and retains non-ancestor heads as conflicts. Editing a conflicted note uses the winning and concurrent heads as predecessors, preserving history while producing a merged successor. Deletion and restoration are ordinary immutable revisions. Revision history is currently unbounded; safe garbage collection requires replicated checkpoints and active/retired peer accounting and is not yet implemented.
 
 Configuration and asset metadata bind size and BLAKE3 identity to separately replicated bytes. Native clients materialize winning notes and configuration; watcher suppression prevents projection writes from becoming duplicate revisions.
 

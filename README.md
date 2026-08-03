@@ -189,6 +189,15 @@ replicates, every peer deterministically stops reporting the conflict. xo does
 not attempt a line-by-line Markdown merge, so the user decides the final
 content.
 
+Revision history currently grows without a fixed limit and xo performs no
+revision garbage collection. This is safe for offline peers and conflict
+recovery, but a long-lived workspace with heavily edited notes will eventually
+need explicit compaction. Compaction must retain current heads and unresolved
+branches, establish a replicated checkpoint, and account for active or retired
+offline peers before deleting predecessor records and unreferenced blobs; a
+local "keep the last N revisions" deletion would break convergence and is not
+implemented.
+
 ## Recommended setup: TUI first, then xo-syncd
 
 The simplest setup starts with the first TUI as the workspace creator. Add the
@@ -491,9 +500,20 @@ conflicts, devices, replicated behavior, and the filesystem projection when
 local or remote content becomes available. Press `Space`, then `s` for detailed
 synchronization state or `Space`, then `r` for a manual refresh and retry.
 
-Create and edit commands open a secure temporary file whose name ends in
+Create and edit commands open a private temporary file whose name ends in
 `.xo.md`. Editors can associate that compound extension with `xo-lsp` while the
 ordinary projected notes retain their canonical `.md` names.
+
+Press `c` to create a plaintext note or `C` to create an encrypted note. New
+encrypted notes require a confirmed non-empty passphrase before the editor
+opens. The editor receives the complete frontmatter and plaintext body; xo
+restores the authoritative ID and creation timestamp, encrypts only the edited
+body, and commits the first revision only after encryption. Editing an existing
+encrypted note follows the same full-document workflow and re-encrypts it with a
+fresh salt and nonce. xo deliberately provides no conversion from an existing
+plaintext note to an encrypted note because plaintext revisions would remain in
+history. Editors may create their own swap, backup, or recovery files, so those
+features should be configured appropriately for `.xo.md` files.
 
 ### TUI leader, navigation, and tag filtering
 

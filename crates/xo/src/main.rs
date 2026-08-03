@@ -451,7 +451,7 @@ async fn event_loop(
                 }
                 _ => {}
             },
-            Mode::CreateTitle => match key.code {
+            Mode::CreateTitle | Mode::CreateEncryptedTitle => match key.code {
                 KeyCode::Esc => {
                     app.create_title.clear();
                     app.mode = Mode::Normal;
@@ -464,10 +464,15 @@ async fn event_loop(
                     if title.is_empty() {
                         app.message = "a title is required".into();
                     } else {
+                        let encrypted = app.mode == Mode::CreateEncryptedTitle;
                         app.create_title.clear();
                         app.mode = Mode::Normal;
                         suspend_tui(terminal)?;
-                        let create_result = create_note(app, session, &title).await;
+                        let create_result = if encrypted {
+                            create_encrypted_note(app, session, &title).await
+                        } else {
+                            create_note(app, session, &title).await
+                        };
                         resume_tui(terminal)?;
                         create_result?;
                     }
@@ -855,6 +860,10 @@ async fn event_loop(
                     app.create_title.clear();
                     app.mode = Mode::CreateTitle;
                 }
+                KeyCode::Char('C') => {
+                    app.create_title.clear();
+                    app.mode = Mode::CreateEncryptedTitle;
+                }
                 KeyCode::Char('e') | KeyCode::Enter => {
                     suspend_tui(terminal)?;
                     let edit_result = edit_note(app, session).await;
@@ -972,6 +981,54 @@ async fn create_note(app: &mut App, session: &mut WorkspaceSession, title: &str)
     Ok(())
 }
 
+async fn create_encrypted_note(
+    app: &mut App,
+    session: &mut WorkspaceSession,
+    title: &str,
+) -> Result<()> {
+    let passphrase = new_encryption_passphrase()?;
+    let instant = xo_core::timestamp::now_local()?;
+    let editor = std::env::var_os("EDITOR").unwrap_or_else(|| "vi".into());
+    let note = prepare_encrypted_note(instant, title, &passphrase, &editor, &[])?;
+    session.save(&note).await?;
+    app.search.clear();
+    app.selected_tags.clear();
+    app.set_view("all");
+    app.add_note(note.clone());
+    app.message = format!("created encrypted {}", note.id);
+    Ok(())
+}
+
+fn prepare_encrypted_note(
+    instant: OffsetDateTime,
+    title: &str,
+    passphrase: &str,
+    editor: &std::ffi::OsStr,
+    editor_args: &[&std::ffi::OsStr],
+) -> Result<Note> {
+    let mut note = new_note_draft(instant, title)?;
+    let document = Zeroizing::new(xo_core::markdown::render(&note.frontmatter, &note.body)?);
+    let edited = Zeroizing::new(external_edit_with(
+        editor,
+        editor_args,
+        document.as_bytes(),
+    )?);
+    let parsed = xo_core::markdown::parse(std::str::from_utf8(&edited)?)?;
+    let created = match note.frontmatter.get("created") {
+        Some(FrontmatterValue::String(value)) => value.clone(),
+        _ => unreachable!("new encrypted note drafts always have a creation timestamp"),
+    };
+    note.frontmatter = required_frontmatter(
+        parsed.frontmatter.unwrap_or_default(),
+        note.id.as_str(),
+        &created,
+    );
+    let plaintext = Zeroizing::new(parsed.body);
+    note.body = xo_core::encryption::encrypt(note.id.as_str(), passphrase, &plaintext)?;
+    note.path = xo_core::projection::canonical_note_path(&note.id, &note.frontmatter);
+    Ok(note)
+}
+
 fn new_note_draft(instant: OffsetDateTime, title: &str) -> Result<Note> {
     let created = xo_core::timestamp::format(instant)?;
     let id = xo_core::id::generate(instant);
@@ -1000,6 +1057,10 @@ async fn edit_note(app: &mut App, session: &mut WorkspaceSession) -> Result<()> 
         let document = xo_core::markdown::render(&note.frontmatter, &note.body)?;
         let bytes = external_edit_with(&editor, &[], document.as_bytes())?;
         let parsed = xo_core::markdown::parse(&String::from_utf8(bytes)?)?;
+        anyhow::ensure!(
+            !xo_core::encryption::is_encrypted(&parsed.body),
+            "existing plaintext notes cannot be converted to encrypted notes because their history remains plaintext"
+        );
         app.replace_selected(parsed.frontmatter.unwrap_or_default(), parsed.body)
             .context("selected note disappeared")?
     };
@@ -1020,6 +1081,17 @@ fn unlock(app: &mut App) -> Result<()> {
 }
 fn password(prompt: &str) -> Result<Zeroizing<String>> {
     Ok(Zeroizing::new(rpassword::prompt_password(prompt)?))
+}
+
+fn new_encryption_passphrase() -> Result<Zeroizing<String>> {
+    let passphrase = password("New passphrase: ")?;
+    anyhow::ensure!(!passphrase.is_empty(), "passphrase must not be empty");
+    let confirmation = password("Confirm passphrase: ")?;
+    anyhow::ensure!(
+        passphrase.as_str() == confirmation.as_str(),
+        "passphrases do not match"
+    );
+    Ok(passphrase)
 }
 
 fn suspend_tui(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
@@ -1162,6 +1234,40 @@ mod cli_tests {
         assert_eq!(
             cli.projection.as_deref(),
             Some(std::path::Path::new("/notes"))
+        );
+    }
+
+    #[test]
+    fn new_encrypted_note_never_creates_a_plaintext_revision() {
+        let instant = OffsetDateTime::from_unix_timestamp(1_750_000_000).unwrap();
+        let args = [
+            std::ffi::OsStr::new("-c"),
+            std::ffi::OsStr::new(
+                "grep -q '^title: Secret title$' \"$1\" || exit 8; \
+                 printf '%s' '---\nid: changed\ntitle: Edited secret\ntype: note\ntags: [private]\n---\nprivate body' > \"$1\"",
+            ),
+            std::ffi::OsStr::new("_"),
+        ];
+        let note = prepare_encrypted_note(
+            instant,
+            "Secret title",
+            "passphrase",
+            std::ffi::OsStr::new("sh"),
+            &args,
+        )
+        .unwrap();
+        assert!(xo_core::encryption::is_encrypted(&note.body));
+        assert_eq!(
+            xo_core::encryption::decrypt(note.id.as_str(), "passphrase", &note.body).unwrap(),
+            "private body"
+        );
+        assert_eq!(
+            note.frontmatter.get("id"),
+            Some(&FrontmatterValue::String(note.id.to_string()))
+        );
+        assert_eq!(
+            note.frontmatter.get("title"),
+            Some(&FrontmatterValue::String("Edited secret".into()))
         );
     }
 

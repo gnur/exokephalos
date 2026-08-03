@@ -34,6 +34,7 @@ pub enum Mode {
     Leader,
     Search,
     CreateTitle,
+    CreateEncryptedTitle,
     Goto,
     ActionPicker,
     CaptureUrl,
@@ -360,20 +361,15 @@ impl App {
             .unwrap_or(0);
     }
 
-    pub fn edit_selected(&mut self, body: String) -> Option<Note> {
-        let id = self.selected_note()?.id.clone();
-        let note = self.notes.iter_mut().find(|note| note.id == id)?;
-        note.body = body;
-        Some(note.clone())
-    }
-
     pub fn replace_selected(&mut self, frontmatter: Frontmatter, body: String) -> Option<Note> {
         let id = self.selected_note()?.id.clone();
         let note = self.notes.iter_mut().find(|note| note.id == id)?;
         note.frontmatter = frontmatter;
         note.body = body;
         note.path = xo_core::projection::canonical_note_path(&note.id, &note.frontmatter);
-        Some(note.clone())
+        let changed = note.clone();
+        self.decrypted_preview = None;
+        Some(changed)
     }
 
     pub fn delete_selected(&mut self) -> Option<Note> {
@@ -474,10 +470,21 @@ impl App {
             passphrase,
             &note.body,
         )?);
-        let edited = Zeroizing::new(external_edit_with(program, args, plaintext.as_bytes())?);
-        let encrypted =
-            encryption::encrypt(note.id.as_str(), passphrase, std::str::from_utf8(&edited)?)?;
-        self.edit_selected(encrypted)
+        let document = Zeroizing::new(xo_core::markdown::render(&note.frontmatter, &plaintext)?);
+        let edited = Zeroizing::new(external_edit_with(program, args, document.as_bytes())?);
+        let parsed = xo_core::markdown::parse(std::str::from_utf8(&edited)?)?;
+        let created = match note.frontmatter.get("created") {
+            Some(FrontmatterValue::String(value)) => value.clone(),
+            _ => anyhow::bail!("encrypted note has no creation timestamp"),
+        };
+        let frontmatter = required_frontmatter(
+            parsed.frontmatter.unwrap_or_default(),
+            note.id.as_str(),
+            &created,
+        );
+        let plaintext = Zeroizing::new(parsed.body);
+        let encrypted = encryption::encrypt(note.id.as_str(), passphrase, &plaintext)?;
+        self.replace_selected(frontmatter, encrypted)
             .context("selected note disappeared")
     }
 
@@ -744,6 +751,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         app.mode,
         Mode::Search
             | Mode::CreateTitle
+            | Mode::CreateEncryptedTitle
             | Mode::Goto
             | Mode::ActionPicker
             | Mode::CaptureUrl
@@ -788,7 +796,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         app.leader_key.to_string()
     };
     let mut footer = format!(
-        "[{leader}] menu · [/] search · [e/Enter] edit · [c] create · [d] delete · [u] restore · [q] quit"
+        "[{leader}] menu · [/] search · [e/Enter] edit · [c/C] create/encrypted · [d] delete · [u] restore · [q] quit"
     );
     if !app.message.is_empty() {
         footer.push_str(" · ");
@@ -806,6 +814,10 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             ),
             Mode::CreateTitle => (
                 "New item title · Enter create and edit · Esc cancel",
+                format!("Title: {}", app.create_title),
+            ),
+            Mode::CreateEncryptedTitle => (
+                "New encrypted item title · Enter create and edit · Esc cancel",
                 format!("Title: {}", app.create_title),
             ),
             Mode::Goto => {
@@ -1630,6 +1642,17 @@ mod tests {
             .collect::<String>();
         assert!(create_screen.contains("New item title"));
         assert!(create_screen.contains("Title: A new thought"));
+
+        app.mode = Mode::CreateEncryptedTitle;
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let encrypted_screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(encrypted_screen.contains("New encrypted item title"));
     }
 
     #[test]
@@ -1668,6 +1691,10 @@ mod tests {
     #[test]
     fn encrypted_preview_and_temp_edit_require_the_passphrase() {
         let mut app = fixture();
+        app.notes[0].frontmatter.insert(
+            "created".into(),
+            FrontmatterValue::String("2026-01-02T03:04:05+00:00".into()),
+        );
         app.notes[0].body = encryption::encrypt("note001", "correct", "secret").unwrap();
         assert!(app.preview(None).is_err());
         assert!(app.unlock_preview("wrong").is_err());
@@ -1679,15 +1706,27 @@ mod tests {
         );
         let args = [
             OsStr::new("-c"),
-            OsStr::new("printf changed > \"$1\""),
+            OsStr::new(
+                "printf '%s' '---\nid: replaced\ntitle: Changed encrypted title\ntype: note\ntags: []\n---\nchanged' > \"$1\"",
+            ),
             OsStr::new("_"),
         ];
         let note = app
             .edit_encrypted_with("correct", OsStr::new("sh"), &args)
             .unwrap();
+        assert!(app.decrypted_preview.is_none());
         assert_eq!(
             encryption::decrypt("note001", "correct", &note.body).unwrap(),
             "changed"
+        );
+        assert_eq!(note.id.as_str(), "note001");
+        assert_eq!(
+            note.frontmatter.get("id"),
+            Some(&FrontmatterValue::String("note001".into()))
+        );
+        assert_eq!(
+            note.frontmatter.get("title"),
+            Some(&FrontmatterValue::String("Changed encrypted title".into()))
         );
     }
 

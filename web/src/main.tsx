@@ -579,13 +579,9 @@ function WorkspaceView({ report, busy, error, activeView, activeSubview, search,
 
 function localTimestamp(milliseconds: number) {
   const instant = new Date(milliseconds);
-  const offsetMinutes = -instant.getTimezoneOffset();
-  const sign = offsetMinutes >= 0 ? '+' : '-';
-  const absoluteOffset = Math.abs(offsetMinutes);
-  const pad = (value: number, width = 2) => String(value).padStart(width, '0');
+  const pad = (value: number) => String(value).padStart(2, '0');
   return `${instant.getFullYear()}-${pad(instant.getMonth() + 1)}-${pad(instant.getDate())}`
-    + `T${pad(instant.getHours())}:${pad(instant.getMinutes())}:${pad(instant.getSeconds())}`
-    + `${sign}${pad(Math.floor(absoluteOffset / 60))}:${pad(absoluteOffset % 60)}`;
+    + `T${pad(instant.getHours())}:${pad(instant.getMinutes())}:${pad(instant.getSeconds())}`;
 }
 
 function noteField(note: WorkspaceNote, field?: string) {
@@ -606,9 +602,23 @@ function noteTags(note: WorkspaceNote) {
 }
 
 function displayFrontmatter(value: unknown) {
-  if (value === null) return 'null';
-  if (typeof value === 'object') return JSON.stringify(value);
-  return String(value);
+  const displayed = withoutDisplayedTimezone(value);
+  if (displayed === null) return 'null';
+  if (typeof displayed === 'object') return JSON.stringify(displayed);
+  return String(displayed);
+}
+
+function withoutDisplayedTimezone(value: unknown): unknown {
+  if (typeof value === 'string'
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
+    const milliseconds = Date.parse(value);
+    if (!Number.isNaN(milliseconds)) return localTimestamp(milliseconds);
+  }
+  if (Array.isArray(value)) return value.map(withoutDisplayedTimezone);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, withoutDisplayedTimezone(nested)]));
+  }
+  return value;
 }
 
 function EntryRow({ entry }: { entry: DocumentEntry }) {

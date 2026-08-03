@@ -16,7 +16,7 @@ if ! git diff --quiet ||
   exit 1
 fi
 
-release_tag="$(date +'%Y%m%dT%H%M%S%z')"
+release_tag="$(date -u +'%Y%m%dT%H%M%SZ')"
 if git show-ref --verify --quiet "refs/tags/${release_tag}"; then
   echo "error: tag ${release_tag} already exists" >&2
   exit 1

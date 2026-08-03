@@ -57,10 +57,11 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   await expect(page.locator('.markdown-preview')).toContainText('survives browser recovery');
   await expect(page.locator('.frontmatter-grid')).toContainText('type');
   await expect(page.locator('.frontmatter-grid')).toContainText('note');
-  await expect(page.locator('.frontmatter-grid div').filter({ hasText: 'created' }).locator('dd'))
-    .toHaveText(/[+-]\d{2}:\d{2}$/);
+  const displayedCreated = page.locator('.frontmatter-grid div').filter({ hasText: 'created' }).locator('dd');
+  await expect(displayedCreated).toHaveText(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/);
+  await expect(displayedCreated).not.toContainText(/[+-]\d{2}:\d{2}/);
   await page.getByText(/Revision history/).click();
-  await expect(page.locator('.history-panel')).toContainText(/[+-]\d{2}:\d{2}/);
+  await expect(page.locator('.history-panel')).not.toContainText(/[+-]\d{2}:\d{2}/);
   await page.getByRole('button', { name: 'Edit' }).click();
   await page.getByLabel('Frontmatter and Markdown').fill('---\ntitle: Web Playwright\ntype: note\ntags: [browser, edited]\n---\nedited and survives browser recovery');
   await page.getByRole('button', { name: 'Save note' }).click();

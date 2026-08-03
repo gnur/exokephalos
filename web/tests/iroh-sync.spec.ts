@@ -219,9 +219,11 @@ test('converges two browser peers through a native Iroh document peer', async ({
 
     await second.goto(`/#ticket=${encodeURIComponent(nativeTicket!)}`);
     await expect(second.getByRole('button', { name: 'New note' })).toBeVisible();
-    await expect(second).toHaveURL(/\/$/);
+    await expect(second).toHaveURL(/\/views\//);
+    expect(new URL(second.url()).hash).toBe('');
     await selectWorkspaceNavigation(second, 'Notes');
     await expect(second.getByText(title, { exact: true }).first()).toBeVisible({ timeout: 60_000 });
+    await second.getByText(title, { exact: true }).first().click();
     await expect(second.locator('.markdown-preview')).toContainText(value);
   } finally {
     await firstContext.close();

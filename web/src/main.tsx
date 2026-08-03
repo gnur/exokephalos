@@ -8,7 +8,6 @@ import {
   Cloud,
   CloudOff,
   Code2,
-  Copy,
   Database,
   Download,
   Inbox,
@@ -27,15 +26,9 @@ import {
   X,
 } from 'lucide-react';
 import { registerSW } from 'virtual:pwa-register';
-import type {
-  DocumentEntry,
-  NoteMutationInput,
-  NoteQueryInput,
-  RuntimeReport,
-  RuntimeState,
-  WorkspaceNote,
-} from './protocol';
+import type { RuntimeReport, RuntimeState } from './protocol';
 import { XoRuntime } from './runtime';
+import { WorkspaceExperience } from './workspace-ui';
 import './styles.css';
 
 type InstallPrompt = Event & {
@@ -97,6 +90,16 @@ async function applyUpdate() {
   }
 }
 
+function workspaceRouteState() {
+  const parts = window.location.pathname.split('/').filter(Boolean);
+  const parameters = new URLSearchParams(window.location.search);
+  return {
+    view: parts[0] === 'views' && parts[1] ? decodeURIComponent(parts[1]) : '',
+    subview: parameters.get('subview') || undefined,
+    search: parameters.get('q') || '',
+  };
+}
+
 function consumeWorkspaceTicket() {
   const parameters = new URLSearchParams(window.location.hash.replace(/^#/, ''));
   const ticket = parameters.get('ticket')?.trim();
@@ -107,6 +110,7 @@ function consumeWorkspaceTicket() {
 
 function App() {
   const runtimeRef = useRef<XoRuntime | undefined>(undefined);
+  const initialRoute = useRef(workspaceRouteState());
   const [state, setState] = useState<RuntimeState>('starting');
   const [report, setReport] = useState<RuntimeReport>();
   const [error, setError] = useState('');
@@ -116,9 +120,9 @@ function App() {
   const [installPrompt, setInstallPrompt] = useState<InstallPrompt>();
   const [ticketInput, setTicketInput] = useState('');
   const [updateAvailable, setUpdateAvailable] = useState(updateIsAvailable);
-  const [activeView, setActiveView] = useState('');
-  const [activeSubview, setActiveSubview] = useState<string>();
-  const [search, setSearch] = useState('');
+  const [activeView, setActiveView] = useState(initialRoute.current.view);
+  const [activeSubview, setActiveSubview] = useState<string | undefined>(initialRoute.current.subview);
+  const [search, setSearch] = useState(initialRoute.current.search);
 
   useEffect(() => {
     const runtime = new XoRuntime();
@@ -246,6 +250,29 @@ function App() {
   }
 
   const hasWorkspace = Boolean(report?.status.workspaceId);
+  if (hasWorkspace && report) {
+    return (
+      <WorkspaceExperience
+        report={report}
+        busy={busy}
+        error={error}
+        activeView={activeView}
+        activeSubview={activeSubview}
+        search={search}
+        updateAvailable={updateAvailable}
+        onView={(view) => {
+          setActiveView(view);
+          setActiveSubview(undefined);
+        }}
+        onSubview={setActiveSubview}
+        onSearch={setSearch}
+        onQuery={(input) => runtimeRef.current?.queryNotes(input) ?? Promise.resolve([])}
+        onMutate={(input) => runWorkspace((runtime) => runtime.mutateNote(input))}
+        onRefresh={() => void runWorkspace((runtime) => runtime.refreshSync())}
+        onUpdate={() => void applyUpdate()}
+      />
+    );
+  }
   return (
     <div className="app-shell">
       <aside className={menuOpen ? 'sidebar open' : 'sidebar'}>
@@ -311,34 +338,19 @@ function App() {
         ) : null}
 
         <main>
-          {hasWorkspace && report ? (
-            <WorkspaceView
-              report={report}
-              busy={busy}
-              error={error}
-              activeView={activeView}
-              activeSubview={activeSubview}
-              search={search}
-              onSubview={setActiveSubview}
-              onQuery={(input) => runtimeRef.current?.queryNotes(input) ?? Promise.resolve([])}
-              onMutate={(input) => runWorkspace((runtime) => runtime.mutateNote(input))}
-              onRefresh={() => void runWorkspace((runtime) => runtime.refreshSync())}
-            />
-          ) : (
-            <Onboarding
-              state={state}
-              report={report}
-              error={error}
-              busy={busy}
-              ticket={ticketInput}
-              onTicket={setTicketInput}
-              onCreate={() => void runWorkspace((runtime) => runtime.createWorkspace())}
-              onJoin={() => void runWorkspace((runtime) => runtime.joinWorkspace(ticketInput))}
-              installPrompt={installPrompt}
-              onInstall={() => void install()}
-              onCheckForUpdates={() => void checkForUpdates()}
-            />
-          )}
+          <Onboarding
+            state={state}
+            report={report}
+            error={error}
+            busy={busy}
+            ticket={ticketInput}
+            onTicket={setTicketInput}
+            onCreate={() => void runWorkspace((runtime) => runtime.createWorkspace())}
+            onJoin={() => void runWorkspace((runtime) => runtime.joinWorkspace(ticketInput))}
+            installPrompt={installPrompt}
+            onInstall={() => void install()}
+            onCheckForUpdates={() => void checkForUpdates()}
+          />
         </main>
         <footer className="app-footer">xo {APP_VERSION}</footer>
       </div>
@@ -393,239 +405,6 @@ function Onboarding({ state, report, error, busy, ticket, onTicket, onCreate, on
       </section>
     </>
   );
-}
-
-function WorkspaceView({ report, busy, error, activeView, activeSubview, search, onSubview, onQuery, onMutate, onRefresh }: {
-  report: RuntimeReport;
-  busy: boolean;
-  error: string;
-  activeView: string;
-  activeSubview?: string;
-  search: string;
-  onSubview: (subview?: string) => void;
-  onQuery: (input: NoteQueryInput) => Promise<WorkspaceNote[]>;
-  onMutate: (input: NoteMutationInput) => Promise<RuntimeReport | undefined>;
-  onRefresh: () => void;
-}) {
-  const [notes, setNotes] = useState<WorkspaceNote[]>([]);
-  const [unfilteredNotes, setUnfilteredNotes] = useState<WorkspaceNote[]>([]);
-  const [selectedId, setSelectedId] = useState<string>();
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [editorOpen, setEditorOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string>();
-  const [draft, setDraft] = useState('');
-  const [createTitle, setCreateTitle] = useState('');
-  const [queryError, setQueryError] = useState('');
-  const [ticketVisible, setTicketVisible] = useState(false);
-  const statusMessage = error || report.syncError;
-  const workspace = report.workspace;
-  const view = workspace?.behavior.views.find((candidate) => candidate.id === activeView);
-
-  useEffect(() => {
-    setSelectedTags([]);
-  }, [activeView, activeSubview]);
-
-  useEffect(() => {
-    if (!activeView) return;
-    let active = true;
-    const base: NoteQueryInput = { view: activeView, subview: activeSubview, search, tags: [] };
-    void Promise.all([
-      onQuery({ ...base, tags: selectedTags }),
-      onQuery(base),
-    ]).then(([next, unfiltered]) => {
-      if (!active) return;
-      setQueryError('');
-      setNotes(next);
-      setUnfilteredNotes(unfiltered);
-      setSelectedId((current) => next.some((note) => note.id === current) ? current : next[0]?.id);
-    }).catch((cause: unknown) => {
-      if (active) setQueryError(errorMessage(cause));
-    });
-    return () => { active = false; };
-  }, [activeView, activeSubview, search, selectedTags, report.entries, onQuery]);
-
-  const selected = notes.find((note) => note.id === selectedId);
-  const availableTags = [...new Set(unfilteredNotes.flatMap(noteTags))].sort();
-
-  function startCreate() {
-    setEditingId(undefined);
-    setCreateTitle('');
-    setDraft('---\ntitle: \ntype: \ntags: []\n---\n');
-    setEditorOpen(true);
-  }
-
-  function startEdit(note: WorkspaceNote) {
-    setEditingId(note.id);
-    setCreateTitle(noteTitle(note, view?.title_field));
-    setDraft(note.markdown);
-    setEditorOpen(true);
-  }
-
-  async function saveDraft() {
-    const saved = await onMutate({
-      operation: 'save',
-      noteId: editingId,
-      title: createTitle,
-      markdown: draft,
-    });
-    if (saved) {
-      setEditorOpen(false);
-      setSelectedId(saved.mutatedNoteId);
-    }
-  }
-
-  async function remove(note: WorkspaceNote) {
-    if (!window.confirm(`Delete “${noteTitle(note, view?.title_field)}”?`)) return;
-    await onMutate({ operation: 'delete', noteId: note.id });
-  }
-
-  return (
-    <>
-      <section className="notes-toolbar">
-        <div>
-          <p className="eyebrow"><Radio /> {view?.name || activeView || 'Workspace'}</p>
-          <h1>{view?.name || 'Notes'}</h1>
-          <p className="workspace-id">{report.status.workspaceId}</p>
-        </div>
-        <div className="toolbar-actions">
-          <button className="secondary" disabled={busy} onClick={onRefresh}><Radio className={busy ? 'spin' : ''} /> Sync</button>
-          <button className="primary" disabled={busy} onClick={startCreate}><Plus /> New note</button>
-        </div>
-      </section>
-
-      {view?.subviews.length ? (
-        <div className="subview-tabs" aria-label="Subviews">
-          <button className={!activeSubview ? 'active' : ''} onClick={() => onSubview(undefined)}>All</button>
-          {view.subviews.map((subview) => <button key={subview.id} className={activeSubview === subview.id ? 'active' : ''} onClick={() => onSubview(subview.id)}>{subview.name || subview.id}</button>)}
-        </div>
-      ) : null}
-
-      {statusMessage ? <div className="warning"><CloudOff /> <span>{statusMessage}. Cached notes and pending edits remain available offline.</span></div> : null}
-      {queryError ? <div className="warning"><CircleAlert /> <span>{queryError}</span></div> : null}
-      {workspace?.diagnostics.map((diagnostic) => <div className="warning" key={diagnostic}><CircleAlert /> <span>{diagnostic}</span></div>)}
-
-      <section className="sync-strip">
-        <Metric label="Notes" value={String(workspace?.notes.length ?? 0)} />
-        <Metric label="Conflicts" value={String(workspace?.conflicts ?? 0)} />
-        <Metric label="Peers" value={String(report.status.peers)} />
-        <Metric label="Pending" value={String(report.pendingWrites)} />
-      </section>
-
-      {view?.show_tags && availableTags.length ? (
-        <div className="tag-filter" aria-label="Filter by tags">
-          <span>Tags</span>
-          {availableTags.map((tag) => <button key={tag} className={selectedTags.includes(tag) ? 'active' : ''} onClick={() => setSelectedTags((current) => current.includes(tag) ? current.filter((value) => value !== tag) : [...current, tag])}>{tag}</button>)}
-          {selectedTags.length ? <button onClick={() => setSelectedTags([])}>Clear</button> : null}
-        </div>
-      ) : null}
-
-      <section className="note-layout">
-        <div className="note-list" aria-label="Notes">
-          <div className="panel-heading"><div><p className="eyebrow">Results</p><h2>{notes.length} notes</h2></div></div>
-          {notes.length ? notes.map((note) => (
-            <button key={note.id} className={selectedId === note.id ? 'note-list-item selected' : 'note-list-item'} onClick={() => setSelectedId(note.id)}>
-              <span><strong>{noteTitle(note, view?.title_field)}</strong><small>{noteField(note, view?.subtitle_field) || note.path}</small></span>
-              <span className="note-badges">{note.conflict ? <i>conflict</i> : null}{noteTags(note).map((tag) => <i key={tag}>{tag}</i>)}</span>
-            </button>
-          )) : <div className="empty-state">No notes match this view, subview, search, and tag filter.</div>}
-        </div>
-
-        <article className="note-preview">
-          {selected ? (
-            <>
-              <header>
-                <div><p className="eyebrow">{selected.id}</p><h2>{noteTitle(selected, view?.title_field)}</h2><p>{selected.path}</p></div>
-                <div className="preview-actions"><button className="secondary" onClick={() => startEdit(selected)}>Edit</button><button className="danger" onClick={() => void remove(selected)}>Delete</button></div>
-              </header>
-              {selected.conflict ? <div className="conflict-callout"><CircleAlert /><span>This note has {selected.conflict.concurrent_revisions.length} concurrent revision(s). Saving merges all current heads.</span></div> : null}
-              <dl className="frontmatter-grid">{Object.entries(selected.frontmatter).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{displayFrontmatter(value)}</dd></div>)}</dl>
-              <pre className="markdown-preview">{selected.body || 'This note has no body.'}</pre>
-              <details className="history-panel"><summary>Revision history ({selected.history.length})</summary>{selected.history.slice().reverse().map((revision) => <div key={revision.id}><code>{short(revision.id)}</code><span>{localTimestamp(revision.physicalMs)} · {short(revision.author)}{revision.deleted ? ' · deleted' : ''}</span></div>)}</details>
-            </>
-          ) : <div className="empty-state preview-empty">Select a note to read or edit it.</div>}
-        </article>
-      </section>
-
-      {workspace?.deleted.length ? (
-        <details className="deleted-panel"><summary>Deleted notes ({workspace.deleted.length})</summary>{workspace.deleted.map((note) => <div key={note.id}><span><strong>{noteTitle(note)}</strong><small>{note.id}</small></span><button className="secondary" onClick={() => void onMutate({ operation: 'restore', noteId: note.id })}>Restore</button></div>)}</details>
-      ) : null}
-
-      <details className="raw-panel">
-        <summary>Raw document entries ({report.entries.length})</summary>
-        <div className="entry-list">{report.entries.map((entry) => <EntryRow key={entry.keyBase64} entry={entry} />)}</div>
-      </details>
-
-      <section className="ticket-panel">
-        <div><p className="eyebrow"><KeyRound /> Writable capability</p><h2>Workspace ticket</h2><p>Use this ticket to connect xo-syncd or another peer. Treat it as a secret.</p></div>
-        <div className="ticket-actions"><button className="secondary" onClick={() => setTicketVisible((visible) => !visible)}>{ticketVisible ? 'Hide' : 'Reveal'} ticket</button><button className="secondary" onClick={() => void navigator.clipboard.writeText(report.ticket ?? '')}><Copy /> Copy</button></div>
-        {ticketVisible ? <textarea className="ticket-output" readOnly value={report.ticket ?? ''} /> : null}
-      </section>
-
-      {editorOpen ? (
-        <div className="editor-backdrop" role="presentation">
-          <section className="note-editor" role="dialog" aria-modal="true" aria-labelledby="editor-title">
-            <header><div><p className="eyebrow">{editingId ? `Edit ${editingId}` : 'Create note'}</p><h2 id="editor-title">Markdown editor</h2></div><button className="icon-button" onClick={() => setEditorOpen(false)} aria-label="Close editor"><X /></button></header>
-            {error ? <div className="warning"><CircleAlert /><span>{error}</span></div> : null}
-            {!editingId ? <label>Title<input autoFocus value={createTitle} onChange={(event) => setCreateTitle(event.target.value)} placeholder="Note title" /></label> : null}
-            <label>Frontmatter and Markdown<textarea value={draft} onChange={(event) => setDraft(event.target.value)} spellCheck="true" /></label>
-            <footer><span>Edits create immutable xo revisions and synchronize through Iroh.</span><div><button className="secondary" onClick={() => setEditorOpen(false)}>Cancel</button><button className="primary" disabled={busy || (!editingId && !createTitle.trim())} onClick={() => void saveDraft()}>{busy ? <LoaderCircle className="spin" /> : <Cloud />} Save note</button></div></footer>
-          </section>
-        </div>
-      ) : null}
-    </>
-  );
-}
-
-function localTimestamp(milliseconds: number) {
-  const instant = new Date(milliseconds);
-  const pad = (value: number) => String(value).padStart(2, '0');
-  return `${instant.getFullYear()}-${pad(instant.getMonth() + 1)}-${pad(instant.getDate())}`
-    + `T${pad(instant.getHours())}:${pad(instant.getMinutes())}:${pad(instant.getSeconds())}`;
-}
-
-function noteField(note: WorkspaceNote, field?: string) {
-  if (!field) return '';
-  const value = note.frontmatter[field];
-  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : '';
-}
-
-function noteTitle(note: WorkspaceNote, field = 'title') {
-  return noteField(note, field) || noteField(note, 'title') || 'Untitled';
-}
-
-function noteTags(note: WorkspaceNote) {
-  const tags = note.frontmatter.tags;
-  if (Array.isArray(tags)) return tags.filter((tag): tag is string => typeof tag === 'string');
-  if (typeof tags === 'string') return tags.split(',').map((tag) => tag.trim()).filter(Boolean);
-  return [];
-}
-
-function displayFrontmatter(value: unknown) {
-  const displayed = withoutDisplayedTimezone(value);
-  if (displayed === null) return 'null';
-  if (typeof displayed === 'object') return JSON.stringify(displayed);
-  return String(displayed);
-}
-
-function withoutDisplayedTimezone(value: unknown): unknown {
-  if (typeof value === 'string'
-    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
-    const milliseconds = Date.parse(value);
-    if (!Number.isNaN(milliseconds)) return localTimestamp(milliseconds);
-  }
-  if (Array.isArray(value)) return value.map(withoutDisplayedTimezone);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, withoutDisplayedTimezone(nested)]));
-  }
-  return value;
-}
-
-function EntryRow({ entry }: { entry: DocumentEntry }) {
-  return <article className="entry-row"><div><strong>{entry.key}</strong><span>{entry.value ?? `${entry.contentLen} binary bytes`}</span></div><div className="entry-meta"><code>{short(entry.author)}</code><span className={entry.pending ? 'pending' : 'replicated'}>{entry.pending ? 'pending' : 'replicated'}</span></div></article>;
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;
 }
 
 function NavItem({ icon, label, active = false, nested = false, onClick }: { icon: React.ReactNode; label: string; active?: boolean; nested?: boolean; onClick?: () => void }) {

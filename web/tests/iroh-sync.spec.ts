@@ -28,8 +28,12 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   await page.getByRole('button', { name: 'Create workspace' }).click();
   await expect(page.locator('.notes-toolbar').getByRole('heading', { name: 'Notes' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'New note' })).toBeVisible();
+  await expect(page.locator('.bottom-search')).toBeVisible();
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByRole('button', { name: 'Reveal ticket' }).click();
   const ticket = await page.locator('.ticket-output').inputValue();
+  await selectWorkspaceNavigation(page, 'Notes');
   const serializedVault = await page.evaluate(async () => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open('xo-web');
@@ -53,6 +57,7 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   await page.getByLabel('Frontmatter and Markdown').fill('---\ntitle: Web Playwright\ntype: \ntags: [browser, test]\n---\nsurvives browser recovery');
   await page.getByRole('button', { name: 'Save note' }).click();
   await expect(page.getByText('Web Playwright', { exact: true }).first()).toBeVisible();
+  await expect(page).toHaveURL(/\/views\/notes\//);
   await expect(page.getByRole('button', { name: 'Update', exact: true })).toHaveCount(0);
   await expect(page.locator('.markdown-preview')).toContainText('survives browser recovery');
   await expect(page.locator('.frontmatter-grid')).toContainText('type');
@@ -69,6 +74,7 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   await selectWorkspaceNavigation(page, 'All');
   await expect(page.getByText('Web Playwright', { exact: true }).first()).toBeVisible();
   await selectWorkspaceNavigation(page, 'Notes');
+  await page.getByText('Web Playwright', { exact: true }).first().click();
   page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: 'Delete' }).click();
   await page.getByText('Deleted notes (1)').click();
@@ -80,8 +86,8 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   await page.evaluate(() => navigator.serviceWorker.ready);
   await context.setOffline(true);
   await page.reload();
-  await expect(page.locator('.notes-toolbar').getByRole('heading', { name: 'Notes' })).toBeVisible();
   await expect(page.getByText('Web Playwright', { exact: true }).first()).toBeVisible();
+  await page.getByText('Web Playwright', { exact: true }).first().click();
   await expect(page.locator('.markdown-preview')).toContainText('edited and survives browser recovery');
 
   expect(consoleErrors.filter((message) => !message.includes('net::ERR_INTERNET_DISCONNECTED'))).toEqual([]);
@@ -171,6 +177,7 @@ test('receives native items and replicated views and subviews', async ({ page })
   await page.getByRole('button', { name: 'Join and synchronize' }).click();
   await expect(page.getByRole('button', { name: 'New note' })).toBeVisible();
 
+  await page.getByRole('button', { name: 'Open navigation' }).click();
   const workspaceNavigation = page.getByRole('navigation', { name: 'Workspace' });
   await expect(workspaceNavigation.getByRole('button', { name: 'Library' })).toBeVisible({ timeout: 60_000 });
   await expect(workspaceNavigation.getByRole('button', { name: 'Reading' })).toBeVisible();

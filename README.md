@@ -56,13 +56,16 @@ and converge two browser contexts through a native `xo-syncd` peer. Endpoint and
 author keys plus the writable capability are encrypted in IndexedDB. The PWA
 uses no application service or application API.
 
-The workspace UI loads replicated Steel view configuration, presents views and
-subviews, and supports Rust-evaluated search and tag filtering. Notes can be
+The workspace restores the original mobile-first interaction model from the Go
+web UI: sticky screen headers, dedicated item/tag/detail/editor panes,
+URL-backed navigation, a bottom search/menu/create bar, rendered Markdown, and
+compact settings. It loads replicated Steel view configuration, presents views
+and subviews, and supports Rust-evaluated search and tag filtering. Notes can be
 created, edited as frontmatter plus Markdown, deleted, restored, and inspected
 through their revision and conflict history. Rust/Wasm validates records,
 resolves heads, evaluates view predicates, and prepares immutable revision/head
 writes; React owns only presentation. A raw document explorer remains available
-for diagnostics. The footer shows the embedded release tag. The PWA compares it with the uncached server version
+for diagnostics. The header shows the embedded release tag. The PWA compares it with the uncached server version
 on load, after a cached page is restored, when connectivity returns, and every
 ten minutes. Only a changed deployment produces an explicit **Update** button.
 

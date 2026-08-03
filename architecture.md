@@ -35,7 +35,7 @@ The native TUI uses strict schema-3 command configuration; `leader-key` is one p
 `xo-web` is a static, installable application. React owns presentation while a dedicated worker owns Rust/Wasm, Steel, Iroh, WebCrypto coordination, and IndexedDB recovery.
 
 - It creates or joins writable workspaces and synchronizes directly with native peers through relay-only Iroh Docs/Blobs/Gossip.
-- It loads and validates replicated Steel configuration, displays configured views and subviews, and runs view, search, sort, and tag queries in shared Rust behavior code.
+- It restores the original mobile-first web interaction model: sticky screen headers, list/tag/detail/editor panes, URL-backed navigation, a bottom search/menu/create bar, and compact settings. It loads and validates replicated Steel configuration, displays configured views and subviews, and runs view, search, sort, and tag queries in shared Rust behavior code.
 - It creates and edits frontmatter plus Markdown, deletes and restores notes, displays revision history and concurrent heads, and commits canonical immutable revision/head records prepared by Rust.
 - Stored human-readable timestamps use local wall time with an explicit numeric UTC offset. Native imports recursively convert UTC RFC 3339 frontmatter timestamps to the system time zone while preserving the instant; browsers provide their local offset to Rust when preparing authoritative mutations. PWA presentation renders local timestamps without showing the stored offset.
 - Cached records and pending writes survive offline reloads. A raw record explorer remains available for diagnostics.

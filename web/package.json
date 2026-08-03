@@ -12,7 +12,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "dompurify": "^3.4.13",
     "lucide-react": "^1.28.0",
+    "marked": "^17.0.6",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

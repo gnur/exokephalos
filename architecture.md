@@ -39,7 +39,7 @@ The native TUI uses strict schema-3 command configuration; `leader-key` is one p
 - Stored human-readable timestamps use local wall time with an explicit numeric UTC offset. Native imports recursively convert UTC RFC 3339 frontmatter timestamps to the system time zone while preserving the instant; browsers provide their local offset to Rust when preparing authoritative mutations. PWA presentation renders local timestamps without showing the stored offset.
 - Cached records and pending writes survive offline reloads. A raw record explorer remains available for diagnostics.
 - The endpoint secret, author secret, and writable ticket are AES-GCM encrypted in IndexedDB with a non-extractable WebCrypto key. Cached entries and pending writes are separate and are currently not encrypted.
-- The service worker caches only the versioned application shell. The application checks uncached deployment metadata on load, cached restoration, reconnect, and every ten minutes before offering a full refresh.
+- The service worker caches only the versioned application shell. The application checks uncached deployment metadata on load, cached restoration, reconnect, and every ten minutes before offering an **Update** button only when the deployed version is newer.
 - Production nginx serves static assets only; there is no application API, sync gateway, writable server workspace, or server-side action executor.
 
 Clearing browser storage destroys the browser identity and writable capability. The encrypted vault protects raw IndexedDB exports, not malicious same-origin JavaScript or XSS.

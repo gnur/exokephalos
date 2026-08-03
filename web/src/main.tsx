@@ -88,7 +88,7 @@ async function checkForUpdates() {
   }
 }
 
-async function refreshFullApp() {
+async function applyUpdate() {
   try {
     await serviceWorkerRegistration?.update();
     await updateServiceWorker(true);
@@ -306,7 +306,7 @@ function App() {
         {updateAvailable ? (
           <div className="update-banner" role="status">
             <span>A newer xo release is available.</span>
-            <button onClick={() => void refreshFullApp()}><RefreshCw /> Refresh full app</button>
+            <button onClick={() => void applyUpdate()}><RefreshCw /> Update</button>
           </div>
         ) : null}
 
@@ -489,7 +489,6 @@ function WorkspaceView({ report, busy, error, activeView, activeSubview, search,
         </div>
         <div className="toolbar-actions">
           <button className="secondary" disabled={busy} onClick={onRefresh}><Radio className={busy ? 'spin' : ''} /> Sync</button>
-          <button className="secondary" onClick={() => void refreshFullApp()}><RefreshCw /> Refresh app</button>
           <button className="primary" disabled={busy} onClick={startCreate}><Plus /> New note</button>
         </div>
       </section>

@@ -64,7 +64,7 @@ resolves heads, evaluates view predicates, and prepares immutable revision/head
 writes; React owns only presentation. A raw document explorer remains available
 for diagnostics. The footer shows the embedded release tag. The PWA compares it with the uncached server version
 on load, after a cached page is restored, when connectivity returns, and every
-ten minutes. A changed deployment produces an explicit full-refresh banner.
+ten minutes. Only a changed deployment produces an explicit **Update** button.
 
 ### Pair a phone from the TUI
 

@@ -53,7 +53,7 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   await page.getByLabel('Frontmatter and Markdown').fill('---\ntitle: Web Playwright\ntype: \ntags: [browser, test]\n---\nsurvives browser recovery');
   await page.getByRole('button', { name: 'Save note' }).click();
   await expect(page.getByText('Web Playwright', { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Refresh app' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Update', exact: true })).toHaveCount(0);
   await expect(page.locator('.markdown-preview')).toContainText('survives browser recovery');
   await expect(page.locator('.frontmatter-grid')).toContainText('type');
   await expect(page.locator('.frontmatter-grid')).toContainText('note');
@@ -112,16 +112,25 @@ test('prevents mobile focus zoom and horizontal page overflow', async ({ page })
   expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.width);
 });
 
-test('offers a full refresh when the deployed version changes', async ({ page }) => {
+test('offers an update only when an existing workspace is running an outdated version', async ({ page }) => {
+  let deployedVersion: string | undefined;
   await page.route('**/version.json*', async (route) => {
     await route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ version: '20991231T235959Z' }),
+      body: JSON.stringify({ version: deployedVersion }),
     });
   });
   await page.goto('/');
+  await page.getByRole('button', { name: 'Create workspace' }).click();
+  await page.getByRole('button', { name: 'New note' }).click();
+  await page.getByLabel('Title', { exact: true }).fill('Update fixture');
+  await page.getByRole('button', { name: 'Save note' }).click();
+  await expect(page.getByRole('button', { name: 'Update', exact: true })).toHaveCount(0);
+
+  deployedVersion = '20991231T235959Z';
+  await page.evaluate(() => window.dispatchEvent(new Event('pageshow')));
   await expect(page.getByText('A newer xo release is available.')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Refresh full app' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Update', exact: true })).toBeVisible();
 });
 
 test('checks the deployed version after a service-worker cached reload', async ({ page }) => {

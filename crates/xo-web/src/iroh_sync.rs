@@ -128,6 +128,7 @@ impl IrohDocNode {
     #[wasm_bindgen(js_name = createWorkspace)]
     pub async fn create_workspace(&mut self) -> Result<String, JsError> {
         let document = self.docs.create().await.map_err(js_error)?;
+        spawn_browser_auto_sync(document.clone());
         self.document = Some(document);
         self.sync_nodes.clear();
         let ticket = self.share_ticket().await?;
@@ -175,6 +176,7 @@ impl IrohDocNode {
                 Err(error) => Some(error.to_string()),
             }
         };
+        spawn_browser_auto_sync(document.clone());
         self.document = Some(document);
         self.ticket = Some(ticket.clone());
         json(&WorkspaceOutcome {
@@ -429,6 +431,23 @@ where
     })
     .await
     .context("initial document sync timed out")?
+}
+
+fn spawn_browser_auto_sync(doc: Doc) {
+    n0_future::task::spawn(async move {
+        let Ok(events) = doc.subscribe().await else {
+            return;
+        };
+        futures_lite::pin!(events);
+        while let Some(event) = events.next().await {
+            let Ok(event) = event else {
+                break;
+            };
+            if let LiveEvent::NeighborUp(node_id) = event {
+                let _ = doc.start_sync(vec![iroh::EndpointAddr::new(node_id)]).await;
+            }
+        }
+    });
 }
 
 fn fixed_secret(value: &Uint8Array, name: &str) -> Result<[u8; 32], JsError> {

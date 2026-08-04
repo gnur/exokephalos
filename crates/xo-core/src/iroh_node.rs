@@ -197,12 +197,46 @@ impl IrohNode {
     }
 
     fn workspace(&self, doc: Doc) -> IrohWorkspace {
+        spawn_auto_sync(&doc);
         IrohWorkspace {
             doc,
             blobs: self.blobs.clone(),
             author: self.author,
         }
     }
+}
+
+fn spawn_auto_sync(doc: &Doc) {
+    let doc = doc.clone();
+    tokio::spawn(async move {
+        let Ok(events) = doc.subscribe().await else {
+            return;
+        };
+        futures_lite::pin!(events);
+        let mut known_peers = std::collections::HashSet::new();
+        while let Some(event) = events.next().await {
+            let Ok(event) = event else {
+                break;
+            };
+            match event {
+                LiveEvent::NeighborUp(node_id) => {
+                    known_peers.insert(node_id);
+                    let _ = doc.start_sync(vec![iroh::EndpointAddr::new(node_id)]).await;
+                }
+                LiveEvent::InsertRemote { .. } => {
+                    let peers = known_peers
+                        .iter()
+                        .copied()
+                        .map(iroh::EndpointAddr::new)
+                        .collect::<Vec<_>>();
+                    if !peers.is_empty() {
+                        let _ = doc.start_sync(peers).await;
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
 }
 
 #[derive(Clone, Debug)]
@@ -361,7 +395,8 @@ impl IrohWorkspace {
             .subscribe()
             .await
             .context("subscribe to workspace")?;
-        Ok(events.map(|event| {
+        let doc = self.doc.clone();
+        Ok(events.map(move |event| {
             let event = event.context("read workspace event")?;
             let event = match event {
                 LiveEvent::InsertLocal { .. }
@@ -371,8 +406,14 @@ impl IrohWorkspace {
                 }
                 | LiveEvent::ContentReady { .. }
                 | LiveEvent::PendingContentReady => WorkspaceEvent::ContentChanged,
+                LiveEvent::NeighborUp(node_id) => {
+                    let doc = doc.clone();
+                    tokio::spawn(async move {
+                        let _ = doc.start_sync(vec![iroh::EndpointAddr::new(node_id)]).await;
+                    });
+                    WorkspaceEvent::StatusChanged
+                }
                 LiveEvent::InsertRemote { .. }
-                | LiveEvent::NeighborUp(_)
                 | LiveEvent::NeighborDown(_)
                 | LiveEvent::SyncFinished(_) => WorkspaceEvent::StatusChanged,
             };

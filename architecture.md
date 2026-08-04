@@ -55,7 +55,7 @@ Clearing browser storage destroys the browser identity and writable capability. 
 
 ## Canonical records
 
-Each workspace is one Iroh Docs namespace. Every endpoint has its own endpoint identity and Docs author identity. Writable invitations contain the namespace capability and peer addressing; read-only invitations cannot advance a head.
+Each workspace is one Iroh Docs namespace. Every endpoint has its own endpoint identity and Docs author identity. Writable invitations contain the namespace capability and peer addressing; read-only invitations cannot advance a head. Peers convert Gossip swarm neighbor discovery (`LiveEvent::NeighborUp`) into direct set-reconciliation synchronization (`start_sync`), establishing automatic full-mesh P2P sync across all active peers without requiring a single central peer.
 
 Current record keys include:
 

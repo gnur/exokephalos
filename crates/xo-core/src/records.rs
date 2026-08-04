@@ -1142,23 +1142,24 @@ mod tests {
     async fn three_persisted_peers_converge_after_isolated_edits_and_restarts() -> anyhow::Result<()>
     {
         let _guard = crate::iroh_node::IROH_TEST_LOCK.lock().await;
+        let (relay_map, _relay_url, _relay_server) = iroh::test_utils::run_relay_server().await?;
         let a_dir = tempfile::tempdir()?;
         let b_dir = tempfile::tempdir()?;
         let c_dir = tempfile::tempdir()?;
-        let a = IrohNode::persistent(a_dir.path()).await?;
+        let a = IrohNode::persistent_with_relay_map(a_dir.path(), relay_map.clone()).await?;
         let workspace_a = a.create_workspace().await?;
         let workspace_id = workspace_a.id();
         let ticket = workspace_a.share(true).await?;
-        let b = IrohNode::persistent(b_dir.path()).await?;
+        let b = IrohNode::persistent_with_relay_map(b_dir.path(), relay_map.clone()).await?;
         b.import_workspace(&ticket).await?;
-        let c = IrohNode::persistent(c_dir.path()).await?;
+        let c = IrohNode::persistent_with_relay_map(c_dir.path(), relay_map.clone()).await?;
         c.import_workspace(&ticket).await?;
         c.shutdown().await?;
         b.shutdown().await?;
         a.shutdown().await?;
         drop((workspace_a, a, b, c));
 
-        let b = IrohNode::persistent(b_dir.path()).await?;
+        let b = IrohNode::persistent_with_relay_map(b_dir.path(), relay_map.clone()).await?;
         let workspace_b = b.open_workspace(workspace_id).await?.expect("workspace B");
         let records_b = WorkspaceRecords::new(&workspace_b);
         records_b
@@ -1167,7 +1168,7 @@ mod tests {
         b.shutdown().await?;
         drop((workspace_b, b));
 
-        let c = IrohNode::persistent(c_dir.path()).await?;
+        let c = IrohNode::persistent_with_relay_map(c_dir.path(), relay_map.clone()).await?;
         let workspace_c = c.open_workspace(workspace_id).await?.expect("workspace C");
         let records_c = WorkspaceRecords::new(&workspace_c);
         records_c
@@ -1176,22 +1177,22 @@ mod tests {
         c.shutdown().await?;
         drop((workspace_c, c));
 
-        let a = IrohNode::persistent(a_dir.path()).await?;
+        let a = IrohNode::persistent_with_relay_map(a_dir.path(), relay_map.clone()).await?;
         let workspace_a = a.open_workspace(workspace_id).await?.expect("workspace A");
-        let reconnect_ticket = workspace_a.share(true).await?;
-        let b = IrohNode::persistent(b_dir.path()).await?;
+        let b = IrohNode::persistent_with_relay_map(b_dir.path(), relay_map.clone()).await?;
         let workspace_b = b.open_workspace(workspace_id).await?.expect("workspace B");
-        let c = IrohNode::persistent(c_dir.path()).await?;
+        let c = IrohNode::persistent_with_relay_map(c_dir.path(), relay_map.clone()).await?;
         let workspace_c = c.open_workspace(workspace_id).await?.expect("workspace C");
 
-        workspace_b.start_sync(&reconnect_ticket).await?;
-        workspace_c.start_sync(&reconnect_ticket).await?;
-
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        let full_ticket = workspace_a.share(true).await?;
-        workspace_b.start_sync(&full_ticket).await?;
-        workspace_c.start_sync(&full_ticket).await?;
-        workspace_a.start_sync(&full_ticket).await?;
+        let ticket_a = workspace_a.share(true).await?;
+        let ticket_b = workspace_b.share(true).await?;
+        let ticket_c = workspace_c.share(true).await?;
+        workspace_b.start_sync(&ticket_a).await?;
+        workspace_c.start_sync(&ticket_a).await?;
+        workspace_a.start_sync(&ticket_b).await?;
+        workspace_c.start_sync(&ticket_b).await?;
+        workspace_a.start_sync(&ticket_c).await?;
+        workspace_b.start_sync(&ticket_c).await?;
 
         let (resolved_a, resolved_b, resolved_c) = tokio::try_join!(
             wait_for_conflict(WorkspaceRecords::new(&workspace_a)),

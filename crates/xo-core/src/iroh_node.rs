@@ -8,7 +8,8 @@ use anyhow::{Context, Result, bail};
 use futures_lite::StreamExt;
 use iroh::endpoint::presets;
 use iroh::protocol::Router;
-use iroh::{Endpoint, EndpointId, SecretKey};
+use iroh::tls::CaRootsConfig;
+use iroh::{Endpoint, EndpointId, RelayConfig, RelayMap, RelayUrl, SecretKey};
 use iroh_blobs::api::Store as BlobStore;
 use iroh_blobs::store::fs::FsStore;
 use iroh_blobs::{ALPN as BLOBS_ALPN, BlobsProtocol};
@@ -20,11 +21,22 @@ use iroh_docs::store::Query;
 use iroh_docs::{ALPN as DOCS_ALPN, AuthorId, DocTicket, NamespaceId};
 use iroh_gossip::ALPN as GOSSIP_ALPN;
 use iroh_gossip::net::Gossip;
+use iroh_relay::RelayQuicConfig;
 
 const ENDPOINT_KEY_FILE: &str = "endpoint.key";
 
 #[cfg(test)]
 pub(crate) static IROH_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[cfg(any(test, feature = "test-utils"))]
+static TEST_RELAY_MAP: std::sync::OnceLock<RelayMap> = std::sync::OnceLock::new();
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn set_test_relay_map(relay_map: RelayMap) -> Result<()> {
+    TEST_RELAY_MAP
+        .set(relay_map)
+        .map_err(|_| anyhow::anyhow!("test relay map was already configured"))
+}
 
 pub fn validate_writable_ticket(ticket: &str) -> Result<()> {
     let ticket = DocTicket::from_str(ticket).context("parse workspace ticket")?;
@@ -54,12 +66,51 @@ pub struct IrohNode {
 
 impl IrohNode {
     pub async fn persistent(state_dir: impl AsRef<Path>) -> Result<Self> {
+        Self::persistent_inner(state_dir, None).await
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub async fn persistent_with_relay_map(
+        state_dir: impl AsRef<Path>,
+        relay_map: RelayMap,
+    ) -> Result<Self> {
+        Self::persistent_inner(state_dir, Some(relay_map)).await
+    }
+
+    async fn persistent_inner(
+        state_dir: impl AsRef<Path>,
+        #[allow(unused_variables)] relay_map: Option<RelayMap>,
+    ) -> Result<Self> {
         let state_dir = state_dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&state_dir)
             .with_context(|| format!("create state directory {}", state_dir.display()))?;
         let secret_key = load_or_create_secret_key(&state_dir.join(ENDPOINT_KEY_FILE))?;
-        let endpoint = Endpoint::builder(presets::N0)
-            .secret_key(secret_key)
+        #[allow(unused_mut)]
+        let mut endpoint_builder = Endpoint::builder(presets::N0).secret_key(secret_key);
+        if let Ok(relay_url) = std::env::var("XO_TEST_RELAY_URL") {
+            let relay_url: RelayUrl = relay_url.parse().context("parse XO_TEST_RELAY_URL")?;
+            endpoint_builder = endpoint_builder.relay_mode(iroh::RelayMode::Custom(
+                RelayConfig::new(
+                    relay_url,
+                    std::env::var("XO_TEST_RELAY_QUIC_PORT")
+                        .ok()
+                        .and_then(|port| port.parse().ok())
+                        .map(RelayQuicConfig::new),
+                )
+                .into(),
+            ));
+            if std::env::var("XO_TEST_RELAY_INSECURE_TLS").as_deref() == Ok("1") {
+                endpoint_builder =
+                    endpoint_builder.ca_roots_config(CaRootsConfig::insecure_skip_verify());
+            }
+        }
+        #[cfg(any(test, feature = "test-utils"))]
+        if let Some(relay_map) = relay_map.or_else(|| TEST_RELAY_MAP.get().cloned()) {
+            endpoint_builder = endpoint_builder
+                .relay_mode(iroh::RelayMode::Custom(relay_map))
+                .ca_roots_config(CaRootsConfig::insecure_skip_verify());
+        }
+        let endpoint = endpoint_builder
             .bind()
             .await
             .context("bind Iroh endpoint")?;

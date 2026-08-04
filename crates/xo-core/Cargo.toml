@@ -22,12 +22,14 @@ iroh-sync = [
     "native",
     "dep:futures-lite",
     "dep:iroh",
+    "dep:iroh-relay",
     "dep:iroh-blobs",
     "dep:iroh-docs",
     "dep:iroh-gossip",
     "dep:tokio",
 ]
 steel = ["dep:steel-core"]
+test-utils = ["iroh-sync", "iroh/test-utils"]
 
 [dependencies]
 aes-gcm = { workspace = true, optional = true }
@@ -38,6 +40,7 @@ blake3.workspace = true
 ciborium.workspace = true
 futures-lite = { workspace = true, optional = true }
 iroh = { workspace = true, optional = true }
+iroh-relay = { workspace = true, optional = true }
 iroh-blobs = { workspace = true, optional = true }
 iroh-docs = { workspace = true, optional = true }
 iroh-gossip = { workspace = true, optional = true }
@@ -57,3 +60,7 @@ zeroize = { workspace = true, optional = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# Enables the in-process TLS relay fixture for Iroh synchronization tests.
+iroh = { workspace = true, features = ["test-utils"] }

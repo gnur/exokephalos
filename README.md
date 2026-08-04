@@ -55,6 +55,8 @@ curl -sSL https://xo.exokephalos.dev/install.sh | bash
 
 The installer detects your OS and CPU architecture (Linux x86-64/ARM64 or macOS Apple Silicon), fetches the latest release archive from GitHub, extracts the binaries to `~/.local/bin`, creates initial configuration at `~/.config/xo/config.scm`, and prompts you to configure `xo` and/or `xo-syncd` as a systemd user unit at `~/.config/systemd/user/xo-syncd.service` with state in `~/.local/share/xo`.
 
+Native multi-peer CI tests use an ephemeral in-process Iroh relay, while public N0 relay coverage remains an opt-in network test.
+
 To seed a new user `xo-syncd` directly from a TUI writable invitation, set `XO_SYNC_TICKET` before running the installer:
 
 ```console

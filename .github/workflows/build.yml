@@ -45,7 +45,7 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Run workspace tests
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked -- --skip three_persisted_peers_converge_after_isolated_edits_and_restarts
 
       - name: Run local relay-backed three-peer sync test
         run: cargo test -p xo-core --features test-utils --lib three_persisted_peers_converge_after_isolated_edits_and_restarts --locked

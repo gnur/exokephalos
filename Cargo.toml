@@ -32,7 +32,6 @@ http-body-util = "0.1.4"
 hyper = { version = "1.11.0", features = ["http1", "server"] }
 hyper-util = { version = "0.1.20", features = ["tokio"] }
 iroh = "=0.98.0"
-iroh-relay = "=0.98.0"
 iroh-blobs = "=0.100.0"
 iroh-docs = "=0.98.0"
 iroh-gossip = "=0.98.0"

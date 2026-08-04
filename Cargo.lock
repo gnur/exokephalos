@@ -7402,7 +7402,6 @@ dependencies = [
  "iroh-blobs",
  "iroh-docs",
  "iroh-gossip",
- "iroh-relay",
  "notify",
  "rand 0.9.5",
  "regex",

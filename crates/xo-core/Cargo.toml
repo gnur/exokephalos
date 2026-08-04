@@ -22,7 +22,6 @@ iroh-sync = [
     "native",
     "dep:futures-lite",
     "dep:iroh",
-    "dep:iroh-relay",
     "dep:iroh-blobs",
     "dep:iroh-docs",
     "dep:iroh-gossip",
@@ -40,7 +39,6 @@ blake3.workspace = true
 ciborium.workspace = true
 futures-lite = { workspace = true, optional = true }
 iroh = { workspace = true, optional = true }
-iroh-relay = { workspace = true, optional = true }
 iroh-blobs = { workspace = true, optional = true }
 iroh-docs = { workspace = true, optional = true }
 iroh-gossip = { workspace = true, optional = true }

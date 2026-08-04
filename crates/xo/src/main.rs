@@ -771,6 +771,19 @@ async fn event_loop(
                             }
                         }
                     }
+                    (Some(PairingStep::ServerCommand), KeyCode::Char('U')) => {
+                        if let Some(command) = app.user_syncd_command() {
+                            match copy_to_clipboard(terminal, &command) {
+                                Ok(()) => app.message = "user-unit installer command copied".into(),
+                                Err(error) => {
+                                    if let Some(pairing) = &mut app.pairing {
+                                        pairing.error =
+                                            format!("could not copy installer command: {error}");
+                                    }
+                                }
+                            }
+                        }
+                    }
                     (Some(PairingStep::ServerCommand), KeyCode::Enter) => {
                         if let Some(pairing) = &mut app.pairing {
                             pairing.step = PairingStep::ServerOutput;

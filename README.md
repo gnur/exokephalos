@@ -55,6 +55,14 @@ curl -sSL https://xo.exokephalos.dev/install.sh | bash
 
 The installer detects your OS and CPU architecture (Linux x86-64/ARM64 or macOS Apple Silicon), fetches the latest release archive from GitHub, extracts the binaries to `~/.local/bin`, creates initial configuration at `~/.config/xo/config.scm`, and prompts you to configure `xo` and/or `xo-syncd` as a systemd user unit at `~/.config/systemd/user/xo-syncd.service` with state in `~/.local/share/xo`.
 
+To seed a new user `xo-syncd` directly from a TUI writable invitation, set `XO_SYNC_TICKET` before running the installer:
+
+```console
+curl -fsSL https://xo.exokephalos.dev/install.sh | XO_SYNC_TICKET='<writable-ticket>' bash
+```
+
+The installer imports that ticket into the user daemon state before enabling the service. The TUI pairing screen also displays this command after revealing the ticket; press `U` there to copy it. Tickets are secrets and should not be placed in shell history.
+
 ## Run the xo-web PWA
 
 `xo-web` is a static client-side application with a typed dedicated-worker RPC

@@ -545,6 +545,11 @@ impl App {
         )))
     }
 
+    pub fn user_syncd_command(&self) -> Option<Zeroizing<String>> {
+        let ticket = self.pairing.as_ref()?.invitation.as_deref()?;
+        Some(Zeroizing::new(user_syncd_install_command(ticket)))
+    }
+
     pub fn pairing_invitation(&self) -> Option<Zeroizing<String>> {
         Some(Zeroizing::new(
             self.pairing.as_ref()?.invitation.as_deref()?.to_owned(),
@@ -580,6 +585,13 @@ pub fn server_pairing_commands(state_dir: &str, ticket: &str) -> String {
     format!(
         "sudo systemctl stop xo-syncd\nsudo -u xo xo-admin import-ticket {} {}\nsudo systemctl start xo-syncd",
         shell_quote(state_dir),
+        shell_quote(ticket)
+    )
+}
+
+pub fn user_syncd_install_command(ticket: &str) -> String {
+    format!(
+        "curl -fsSL https://xo.exokephalos.dev/install.sh | XO_SYNC_TICKET={} bash",
         shell_quote(ticket)
     )
 }
@@ -1229,6 +1241,14 @@ fn render_pairing(frame: &mut Frame<'_>, app: &App, area: ratatui::layout::Rect)
             } else {
                 Zeroizing::new("<writable ticket hidden>".to_owned())
             };
+            let installer_command = if pairing.reveal_ticket {
+                app.user_syncd_command().map_or_else(
+                    || "<installer command unavailable>".to_owned(),
+                    |value| value.to_string(),
+                )
+            } else {
+                "<show ticket with F2 to reveal installer command>".to_owned()
+            };
             format!(
                 "Step 2 of 3 — Add this workspace to the server\n\n\
                  Open http://127.0.0.1:9464/setup on the server. If xo-syncd is remote, \
@@ -1236,13 +1256,15 @@ fn render_pairing(frame: &mut Frame<'_>, app: &App, area: ratatui::layout::Rect)
                  Workspace ID: {}\n\
                  Operator token: {}/operator.token\n\
                  Writable ticket: {}\n\n\
+                 User-unit installer: {}\n\n\
                  Enter those values in the setup page. It returns a server ticket.\n\n\
-                 c: copy ticket · C: copy CLI fallback · F2: show/hide ticket · \
-                 Enter: paste server ticket · Esc: cancel\n\n\
+                 c: copy ticket · C: copy CLI fallback · U: copy user-unit installer · \
+                 F2: show/hide ticket · Enter: paste server ticket · Esc: cancel\n\n\
                  The invitation is a writable capability. Keep it private.{error}",
                 app.workspace_id,
                 pairing.state_dir,
-                invitation.as_str()
+                invitation.as_str(),
+                installer_command
             )
         }
         PairingStep::ServerOutput => {
@@ -1489,7 +1511,12 @@ mod tests {
         assert!(command_screen.contains("http://127.0.0.1:9464/setup"));
         assert!(command_screen.contains("Workspace ID: workspace123"));
         assert!(command_screen.contains("/var/lib/xo-syncd/operator.token"));
+        assert!(command_screen.contains("user-unit installer"));
         assert!(command_screen.contains("<writable ticket hidden>"));
+        assert_eq!(
+            user_syncd_install_command("ticket'with-sensitive-content"),
+            "curl -fsSL https://xo.exokephalos.dev/install.sh | XO_SYNC_TICKET='ticket'\"'\"'with-sensitive-content' bash"
+        );
         assert!(!command_screen.contains("xo-admin import-ticket"));
         assert!(!command_screen.contains("client-secret-ticket"));
 

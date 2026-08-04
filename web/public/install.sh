@@ -6,6 +6,7 @@ REPO="${XO_REPO:-gnur/exokephalos}"
 INSTALL_DIR="${XO_INSTALL_DIR:-${HOME}/.local/bin}"
 CONFIG_DIR="${HOME}/.config/xo"
 STATE_DIR="${HOME}/.local/share/xo"
+SYNC_TICKET="${XO_SYNC_TICKET:-}"
 SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
 
 log() {
@@ -141,14 +142,27 @@ ask_installation_mode() {
   echo "  4) Skip configuration (binaries installed only)" >&2
   echo "" >&2
 
-  local choice
-  choice="$(prompt_choice "Select option (1-4)" "1")"
+  local choice default_choice="1"
+  if [[ -n "${SYNC_TICKET}" ]]; then
+    default_choice="2"
+  fi
+  choice="$(prompt_choice "Select option (1-4)" "${default_choice}")"
   case "${choice}" in
     1) echo "xo" ;;
     2) echo "syncd" ;;
     3) echo "both" ;;
     *) echo "none" ;;
   esac
+}
+
+import_sync_ticket() {
+  if [[ -z "${SYNC_TICKET}" ]]; then
+    return 0
+  fi
+  log "Importing the supplied workspace ticket into ${STATE_DIR}..."
+  "${INSTALL_DIR}/xo-admin" import-ticket "${STATE_DIR}" "${SYNC_TICKET}" >/dev/null || {
+    fatal "Could not import XO_SYNC_TICKET. Check that it is a writable ticket for this workspace."
+  }
 }
 
 ensure_config() {
@@ -233,6 +247,12 @@ main() {
 
   local mode
   mode="$(ask_installation_mode)"
+
+  if [[ -n "${SYNC_TICKET}" && "${mode}" == "xo" ]]; then
+    warn "XO_SYNC_TICKET was supplied, but xo-syncd was not selected; the ticket was not imported."
+  elif [[ -n "${SYNC_TICKET}" ]]; then
+    import_sync_ticket
+  fi
 
   case "${mode}" in
     syncd | both)

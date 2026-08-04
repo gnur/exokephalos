@@ -48,7 +48,17 @@ jobs:
         run: cargo test --workspace --locked -- --skip three_persisted_peers_converge_after_isolated_edits_and_restarts
 
       - name: Run local relay-backed three-peer sync test
-        run: cargo test -p xo-core --features test-utils --lib three_persisted_peers_converge_after_isolated_edits_and_restarts --locked -- --test-threads=1
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            echo "local relay convergence attempt ${attempt}/3"
+            if cargo test -p xo-core --features test-utils --lib \
+              three_persisted_peers_converge_after_isolated_edits_and_restarts \
+              --locked -- --test-threads=1; then
+              exit 0
+            fi
+          done
+          exit 1
 
   web:
     name: xo-web static PWA

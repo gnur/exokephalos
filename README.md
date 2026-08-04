@@ -1,12 +1,123 @@
 # xo
 
-xo is an offline-first personal knowledge workspace. The `xo` terminal UI keeps
-an ordinary Markdown projection on disk, while Iroh provides replicated state
-and peer-to-peer synchronization. `xo-syncd` is an always-on peer: it stores a
-copy of a workspace and gives intermittently connected TUI clients a stable peer
-with which to synchronize. `xo-web` is the fully client-side, installable PWA;
-its Rust/Wasm runtime runs in a dedicated browser worker and its deployable
-output consists only of static files.
+**xo is a local-first knowledge workspace whose replicas synchronize directly
+with one another over an end-to-end encrypted, peer-to-peer Iroh transport.**
+It works without an application server, without a central database, and without
+an online connection. A laptop, phone, browser tab, and always-on machine can
+all be equal workspace peers.
+
+The project has three clients:
+
+- **`xo`** is a terminal workspace for creating, editing, searching, filtering,
+  and resolving Markdown notes. It maintains a convenient Markdown projection,
+  but the replicated Rust records and immutable revisions are authoritative.
+- **`xo-web`** is an installable, fully client-side PWA. Its Rust/Wasm runtime
+  and Iroh protocols run in a dedicated browser worker; the deployed site is
+  only static HTML, JavaScript, Wasm, and assets. There is no application API or
+  synchronization gateway behind it.
+- **`xo-syncd`** is an optional always-on native peer. It keeps a durable replica
+  available while laptops and phones sleep or disconnect. It is a convenience
+  peer, not a server that owns the workspace or coordinates synchronization.
+
+## What you can do with xo
+
+xo is useful as a private notes and knowledge base, but its replicated document
+model also supports workflows such as:
+
+- write and read notes entirely offline, then synchronize later;
+- keep a canonical Markdown directory on one or more native machines;
+- use the TUI, a browser, and a phone against the same workspace;
+- run a home server or workstation as an always-on `xo-syncd` peer;
+- edit concurrently on disconnected devices and retain every branch until a
+  user resolves the conflict;
+- organize notes with tags, declarative views, subviews, predicates, sorting,
+  and Rust-evaluated search;
+- create plaintext or passphrase-encrypted notes, with ciphertext authenticated
+  to its note identity and replicated without exposing the plaintext;
+- import an existing Markdown tree, export a workspace, or use `xo-lsp` for
+  diagnostics and note/tag completion in an editor;
+- capture readable web pages into notes through capability-gated actions; and
+- extend a workspace with sandboxed Steel modules and plugins, including the
+  bundled Hardcover book-search workflow.
+
+The same data can therefore support a solo offline workflow, a multi-device
+mesh, a TUI-first setup with a headless replica, or a browser-first workflow.
+Choose the peers that should be online; no peer is required to remain online for
+local work.
+
+## P2P and end-to-end encrypted transport
+
+Workspace synchronization is **peer-to-peer**. Iroh attempts direct paths
+between known endpoints and can use a relay only when the peers cannot connect
+directly. A relay forwards encrypted traffic; it is not an xo application
+server, does not host workspace APIs, and is not a database or lock manager.
+Native and browser peers use the same document, blob, and gossip protocols, so a
+browser can synchronize with a native peer without a special browser gateway.
+
+The synchronized content travels over Iroh's end-to-end encrypted connections.
+Relays and intermediate network infrastructure are used for connectivity, not
+for reading or resolving notes. The workspace capability in a writable ticket
+controls who may join and publish; endpoint identities, author identities, and
+browser secrets are persisted locally and treated as secrets. A writable ticket
+is equivalent to permission to write to the workspace—share it only through a
+private channel. Read-only tickets can replicate without publishing changes.
+
+xo-syncd does not weaken this model. It is simply another authenticated replica
+in the mesh. A browser can sync directly with it, two native clients can sync
+with each other, and automatic peer discovery can form a full mesh as peers
+learn about one another. When a device reconnects, immutable revisions and blob
+content converge without requiring a central coordinator.
+
+The Markdown directory is a **projection**, not the transport or complete
+backup. Records, revision history, device identities, capabilities, and blobs
+live in the local state directory. Keep both the projection and state directory.
+
+## Example workflows
+
+### 1. Private offline notebook
+
+Install `xo`, run `xo config-init`, and start the TUI. Create and edit notes in
+`~/notes` while offline. Each save creates an immutable revision locally. When a
+peer becomes reachable, the revisions synchronize automatically.
+
+### 2. Browser and phone companion
+
+Create a writable invitation in the TUI and scan its QR code with the PWA. The
+capability is carried in the URL fragment, never sent in the HTTP request, and
+is removed from the address bar after import. The browser stores its encrypted
+identity in IndexedDB and can continue creating and editing notes offline. It
+can later synchronize through an available native peer or another browser peer.
+
+### 3. Always-on home or server peer
+
+Run `xo-syncd` on a workstation, NAS, VPS, or small home server. Pair it once
+with the TUI, then let laptops and phones come and go. The daemon holds a
+persistent replica and resumes synchronization after restart; its loopback
+operator page is only for administration and setup, not workspace transport.
+
+### 4. Multi-device offline collaboration
+
+Give each device its own state directory and peer identity. Two people—or two
+of your own devices—can edit while disconnected. xo keeps concurrent revisions
+and deterministically selects a visible winner without deleting the other
+branch. Edit the note once with the desired content to create a descendant of
+all branches and clear the conflict on every peer.
+
+### 5. Structured knowledge workflows
+
+Configure replicated views and subviews for notes, books, projects, or reading
+queues. Use tags and predicates to build filtered panes, then invoke declarative
+actions such as adding tags, changing fields, or appending body content. A
+capability-gated URL capture action and the sandboxed Hardcover plugin can turn
+external information into ordinary replicated notes.
+
+### 6. Markdown and editor workflow
+
+Use `xo import` to bring in a Markdown tree, work in the TUI or an editor, and
+use `xo export` when a conventional Markdown handoff is needed. `xo-lsp`
+provides frontmatter diagnostics and completion for `[[note-links]]` and tags.
+The projection stays human-readable while the replicated record graph preserves
+identity, history, and conflicts.
 
 This project is under active development. The commands below describe the
 currently implemented workflow.

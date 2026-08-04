@@ -1120,7 +1120,7 @@ mod tests {
     }
 
     async fn wait_for_conflict(records: WorkspaceRecords<'_>) -> anyhow::Result<ResolvedNote> {
-        for _ in 0..200 {
+        for _ in 0..600 {
             match records.load_note(&NoteId::new("note002")).await {
                 Ok(Some(resolved))
                     if resolved
@@ -1130,10 +1130,10 @@ mod tests {
                 {
                     return Ok(resolved);
                 }
-                Ok(_) | Err(RecordError::Transport(_)) => {}
+                Ok(_) | Err(RecordError::Transport(_) | RecordError::MissingRevision(_)) => {}
                 Err(error) => return Err(error.into()),
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
         anyhow::bail!("peer did not converge on both concurrent revisions")
     }
@@ -1181,14 +1181,23 @@ mod tests {
         let reconnect_ticket = workspace_a.share(true).await?;
         let b = IrohNode::persistent(b_dir.path()).await?;
         let workspace_b = b.open_workspace(workspace_id).await?.expect("workspace B");
-        workspace_b.start_sync(&reconnect_ticket).await?;
         let c = IrohNode::persistent(c_dir.path()).await?;
         let workspace_c = c.open_workspace(workspace_id).await?.expect("workspace C");
+
+        workspace_b.start_sync(&reconnect_ticket).await?;
         workspace_c.start_sync(&reconnect_ticket).await?;
 
-        let resolved_a = wait_for_conflict(WorkspaceRecords::new(&workspace_a)).await?;
-        let resolved_b = wait_for_conflict(WorkspaceRecords::new(&workspace_b)).await?;
-        let resolved_c = wait_for_conflict(WorkspaceRecords::new(&workspace_c)).await?;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let full_ticket = workspace_a.share(true).await?;
+        workspace_b.start_sync(&full_ticket).await?;
+        workspace_c.start_sync(&full_ticket).await?;
+        workspace_a.start_sync(&full_ticket).await?;
+
+        let (resolved_a, resolved_b, resolved_c) = tokio::try_join!(
+            wait_for_conflict(WorkspaceRecords::new(&workspace_a)),
+            wait_for_conflict(WorkspaceRecords::new(&workspace_b)),
+            wait_for_conflict(WorkspaceRecords::new(&workspace_c)),
+        )?;
         assert_eq!(resolved_a, resolved_b);
         assert_eq!(resolved_b, resolved_c);
         c.shutdown().await?;

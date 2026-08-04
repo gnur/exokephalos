@@ -45,6 +45,16 @@ The script creates an annotated UTC tag in ISO 8601 basic format, such as
 default answer is no. It refuses to tag while staged, unstaged, or untracked
 changes exist. Pushing the tag starts the GitHub Release workflow.
 
+## Quick Install (`xo` or `xo-syncd`)
+
+You can install the native `xo` TUI, `xo-syncd` background daemon, `xo-admin`, and `xo-lsp` directly from the deployed static site:
+
+```console
+curl -sSL https://xo.exokephalos.dev/install.sh | bash
+```
+
+The installer detects your OS and CPU architecture (Linux x86-64/ARM64 or macOS Apple Silicon), fetches the latest release archive from GitHub, extracts the binaries to `~/.local/bin`, creates initial configuration at `~/.config/xo/config.scm`, and prompts you to configure `xo` and/or `xo-syncd` as a systemd user unit at `~/.config/systemd/user/xo-syncd.service` with state in `~/.local/share/xo`.
+
 ## Run the xo-web PWA
 
 `xo-web` is a static client-side application with a typed dedicated-worker RPC

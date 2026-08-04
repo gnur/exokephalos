@@ -197,16 +197,18 @@ impl IrohNode {
     }
 
     fn workspace(&self, doc: Doc) -> IrohWorkspace {
-        spawn_auto_sync(&doc);
+        let endpoint_id = self.endpoint_id();
+        spawn_auto_sync(&doc, endpoint_id);
         IrohWorkspace {
             doc,
             blobs: self.blobs.clone(),
             author: self.author,
+            endpoint_id,
         }
     }
 }
 
-fn spawn_auto_sync(doc: &Doc) {
+fn spawn_auto_sync(doc: &Doc, local_endpoint_id: EndpointId) {
     let doc = doc.clone();
     tokio::spawn(async move {
         let Ok(events) = doc.subscribe().await else {
@@ -219,19 +221,21 @@ fn spawn_auto_sync(doc: &Doc) {
                 break;
             };
             match event {
-                LiveEvent::NeighborUp(node_id) => {
+                LiveEvent::NeighborUp(node_id) if node_id != local_endpoint_id => {
                     known_peers.insert(node_id);
                     let _ = doc.start_sync(vec![iroh::EndpointAddr::new(node_id)]).await;
                 }
-                LiveEvent::InsertRemote { .. } => {
+                LiveEvent::InsertRemote { from, .. } if from != local_endpoint_id => {
+                    known_peers.insert(from);
                     let peers = known_peers
                         .iter()
                         .copied()
                         .map(iroh::EndpointAddr::new)
                         .collect::<Vec<_>>();
-                    if !peers.is_empty() {
-                        let _ = doc.start_sync(peers).await;
-                    }
+                    let _ = doc.start_sync(peers).await;
+                }
+                LiveEvent::SyncFinished(event) if event.peer != local_endpoint_id => {
+                    known_peers.insert(event.peer);
                 }
                 _ => {}
             }
@@ -244,6 +248,7 @@ pub struct IrohWorkspace {
     doc: Doc,
     blobs: BlobStore,
     author: AuthorId,
+    endpoint_id: EndpointId,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -332,12 +337,9 @@ impl IrohWorkspace {
         else {
             return Ok(None);
         };
-        let bytes = self
-            .blobs
-            .blobs()
-            .get_bytes(entry.content_hash())
-            .await
-            .context("read workspace entry blob")?;
+        let Ok(bytes) = self.blobs.blobs().get_bytes(entry.content_hash()).await else {
+            return Ok(None);
+        };
         Ok(Some(SignedWorkspaceValue {
             key: entry.key().to_vec(),
             value: bytes.to_vec(),
@@ -367,12 +369,10 @@ impl IrohWorkspace {
         let mut values = Vec::new();
         while let Some(entry) = entries.next().await {
             let entry = entry.context("read workspace entry")?;
-            let bytes = self
-                .blobs
-                .blobs()
-                .get_bytes(entry.content_hash())
-                .await
-                .context("read workspace entry blob")?;
+            let Ok(bytes) = self.blobs.blobs().get_bytes(entry.content_hash()).await else {
+                let _ = self.doc.start_sync(vec![]).await;
+                continue;
+            };
             values.push(SignedWorkspaceValue {
                 key: entry.key().to_vec(),
                 value: bytes.to_vec(),
@@ -426,8 +426,13 @@ impl IrohWorkspace {
         if ticket.capability.id() != self.id() {
             bail!("ticket belongs to a different workspace");
         }
+        let remote_nodes = ticket
+            .nodes
+            .into_iter()
+            .filter(|node| node.id != self.endpoint_id)
+            .collect();
         self.doc
-            .start_sync(ticket.nodes)
+            .start_sync(remote_nodes)
             .await
             .context("start workspace synchronization")
     }

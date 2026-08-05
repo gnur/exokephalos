@@ -280,6 +280,58 @@ impl App {
         self.selected = 0;
     }
 
+    pub fn cycle_subview(&mut self, forward: bool) -> bool {
+        let Some(view) = self
+            .behavior
+            .views
+            .iter()
+            .find(|view| view.id == self.active_view)
+        else {
+            return false;
+        };
+        if view.subviews.is_empty() {
+            return false;
+        }
+        let current = self
+            .active_subview
+            .as_ref()
+            .and_then(|id| view.subviews.iter().position(|subview| &subview.id == id));
+        let next = if forward {
+            current.map_or(0, |index| (index + 1) % view.subviews.len())
+        } else {
+            current.map_or(view.subviews.len() - 1, |index| {
+                index.checked_sub(1).unwrap_or(view.subviews.len() - 1)
+            })
+        };
+        self.set_subview(Some(view.subviews[next].id.clone()));
+        true
+    }
+
+    pub fn subview_header(&self) -> String {
+        let Some(view) = self
+            .behavior
+            .views
+            .iter()
+            .find(|view| view.id == self.active_view)
+        else {
+            return String::new();
+        };
+        if view.subviews.is_empty() {
+            return String::new();
+        }
+        view.subviews
+            .iter()
+            .map(|subview| {
+                if self.active_subview.as_deref() == Some(subview.id.as_str()) {
+                    format!("[{}]", subview.name)
+                } else {
+                    subview.name.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" · ")
+    }
+
     pub fn goto_choices(&self) -> Vec<ViewChoice> {
         let mut choices = self
             .behavior
@@ -794,8 +846,25 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             ]
         })
         .split(frame.area());
+    let view_name = app
+        .behavior
+        .views
+        .iter()
+        .find(|view| view.id == app.active_view)
+        .map_or(app.active_view.as_str(), |view| view.name.as_str());
+    let subviews = app.subview_header();
+    let header = if subviews.is_empty() {
+        format!("xo {} · {}", xo_core::version::VERSION, view_name)
+    } else {
+        format!(
+            "xo {} · {} · {}",
+            xo_core::version::VERSION,
+            view_name,
+            subviews
+        )
+    };
     frame.render_widget(
-        Paragraph::new(format!("xo {}", xo_core::version::VERSION)).style(
+        Paragraph::new(header).style(
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),

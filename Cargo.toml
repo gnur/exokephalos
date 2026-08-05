@@ -28,6 +28,7 @@ clap = { version = "4.5.41", features = ["derive"] }
 crossterm = { version = "0.29.0", features = ["event-stream"] }
 dom_smoothie = "0.18.0"
 futures-lite = "2.6.1"
+fs2 = "0.4.3"
 http-body-util = "0.1.4"
 hyper = { version = "1.11.0", features = ["http1", "server"] }
 hyper-util = { version = "0.1.20", features = ["tokio"] }

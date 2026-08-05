@@ -217,6 +217,8 @@ async fn run_tui(
         LeaveAlternateScreen
     )?;
     terminal.show_cursor()?;
+    println!("Finalizing workspace state and shutting down synchronization...");
+    io::stdout().flush()?;
     session.shutdown().await?;
     result
 }
@@ -856,8 +858,16 @@ async fn event_loop(
                     app.mode = Mode::Leader;
                 }
                 KeyCode::Char('q') => break,
-                KeyCode::Tab => app.next_pane(),
-                KeyCode::BackTab => app.previous_pane(),
+                KeyCode::Tab => {
+                    if !app.cycle_subview(true) {
+                        app.next_pane();
+                    }
+                }
+                KeyCode::BackTab => {
+                    if !app.cycle_subview(false) {
+                        app.previous_pane();
+                    }
+                }
                 KeyCode::Left | KeyCode::Char('h') => app.focus_left(),
                 KeyCode::Right | KeyCode::Char('l') => app.focus_right(),
                 KeyCode::Down | KeyCode::Char('j') => match app.pane {

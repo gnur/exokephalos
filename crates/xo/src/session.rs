@@ -1,5 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs::File;
 use std::path::{Path, PathBuf};
+
+use fs2::FileExt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -15,6 +18,37 @@ use xo_core::{
 };
 
 const ACTIVE_WORKSPACE_FILE: &str = "active-workspace";
+const WORKSPACE_LOCK_FILE: &str = ".xo-workspace.lock";
+
+struct WorkspaceLock {
+    file: File,
+}
+
+impl WorkspaceLock {
+    fn acquire(state_dir: &Path) -> Result<Self> {
+        let path = state_dir.join(WORKSPACE_LOCK_FILE);
+        let file = File::options()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("open workspace lock {}", path.display()))?;
+        file.try_lock_exclusive().map_err(|error| {
+            anyhow::anyhow!(
+                "workspace state is already in use by another xo process ({}): {error}",
+                path.display()
+            )
+        })?;
+        Ok(Self { file })
+    }
+}
+
+impl Drop for WorkspaceLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
 
 pub struct WorkspaceSession {
     node: IrohNode,
@@ -23,6 +57,7 @@ pub struct WorkspaceSession {
     clock: HlcClock,
     projection: ProjectionState,
     pub sync_state: SyncStateStore,
+    _lock: WorkspaceLock,
 }
 
 impl WorkspaceSession {
@@ -32,6 +67,9 @@ impl WorkspaceSession {
         ticket: Option<&str>,
         projection: PathBuf,
     ) -> Result<Self> {
+        std::fs::create_dir_all(state_dir)
+            .with_context(|| format!("create state directory {}", state_dir.display()))?;
+        let lock = WorkspaceLock::acquire(state_dir)?;
         let node = IrohNode::persistent(state_dir).await?;
         let (workspace, reopened) =
             select_workspace(&node, state_dir, workspace_id, ticket).await?;
@@ -54,6 +92,7 @@ impl WorkspaceSession {
             actor: actor.clone(),
             clock: HlcClock::new(actor),
             sync_state,
+            _lock: lock,
         })
     }
 

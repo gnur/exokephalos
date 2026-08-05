@@ -659,7 +659,9 @@ configuration.
 
 Press `Space`, then `v` to open the view menu. Every configured view and subview
 is shown with its shortest unique prefix; type that prefix to switch immediately,
-or use the arrow keys and Enter.
+or use the arrow keys and Enter. When the active view has subviews, press `Tab`
+or `Shift-Tab` to cycle through them; the active view and subview list are shown
+in the TUI header.
 
 Press `Space`, then `t` to show or hide the tag pane. When it is visible, `Tab`
 and `Shift-Tab` include it in cyclic pane navigation. Use Left/Right or `h`/`l`
@@ -860,8 +862,10 @@ operator token or either ticket in browser storage.
 For headless recovery, press `C` in step 2 to copy the equivalent
 `systemctl stop` / `xo-admin import-ticket` / `systemctl start` commands.
 
-Never run `xo`, `xo-admin`, and `xo-syncd` concurrently against the same state
-directory.
+The TUI and mutating `xo` commands such as `xo import` use an exclusive lock
+inside the state directory. If another `xo` process is already using that
+workspace, the second process exits with a clear error. Never run `xo-admin`
+and `xo-syncd` concurrently against the same state directory.
 
 ## Operations and recovery
 

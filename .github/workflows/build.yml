@@ -532,9 +532,11 @@ jobs:
         shell: bash
         run: |
           for archive in xo-*.tar.gz; do
-            tar -tzf "${archive}" | grep -Fxq xo-lsp
+            entries="$(tar -tzf "${archive}")"
+            grep -Fxq xo-lsp <<<"${entries}"
           done
-          unzip -Z1 xo-*.zip | grep -Fxq xo-lsp.exe
+          entries="$(unzip -Z1 xo-*.zip)"
+          grep -Fxq xo-lsp.exe <<<"${entries}"
 
       - name: Generate checksums
         working-directory: release-assets

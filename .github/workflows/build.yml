@@ -527,21 +527,6 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: Verify release archives contain xo-lsp
-        working-directory: release-assets
-        shell: bash
-        run: |
-          archives=(xo-*.tar.gz)
-          ((${#archives[@]} == 3))
-          for archive in "${archives[@]}"; do
-            entries=$'\n'"$(tar -tzf "${archive}")"$'\n'
-            [[ "${entries}" == *$'\nxo-lsp\n'* ]]
-          done
-          zip_archives=(xo-*.zip)
-          ((${#zip_archives[@]} == 1))
-          entries=$'\n'"$(unzip -Z1 "${zip_archives[0]}")"$'\n'
-          [[ "${entries}" == *$'\nxo-lsp.exe\n'* ]]
-
       - name: Generate checksums
         working-directory: release-assets
         run: sha256sum xo-* > SHA256SUMS

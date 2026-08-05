@@ -83,7 +83,7 @@ impl<'a> WorkspaceProjection<'a> {
         let snapshot = self.records.rebuild_index(self.index).await?;
         let materialization = self.state.reconcile(&snapshot.notes)?;
         let asset_materialization = self.state.reconcile_assets(&snapshot.assets)?;
-        let config_materialization = self.state.reconcile_configs(&snapshot.configs)?;
+        let config_materialization = self.state.reconcile_projection_configs(&snapshot.configs)?;
         Ok(RefreshReport {
             snapshot,
             materialization,
@@ -475,7 +475,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn synchronized_config_is_verified_and_materialized() -> anyhow::Result<()> {
+    async fn synchronized_config_is_verified_without_projection_file() -> anyhow::Result<()> {
         let _guard = crate::iroh_node::IROH_TEST_LOCK.lock().await;
         let directory = tempfile::tempdir()?;
         let node = IrohNode::persistent(directory.path().join("iroh")).await?;
@@ -498,16 +498,9 @@ mod tests {
         let projection =
             WorkspaceProjection::open(&workspace, &index, directory.path().join("projection"))?;
         let report = projection.refresh().await?;
-        assert_eq!(report.config_materialization.materialized.len(), 1);
-        let path = projection.root().join("xo.scm");
-        assert_eq!(std::fs::read(&path)?, source);
-        let edited = b"(workspace-config (schema 1) (query-limit 10))\n".to_vec();
-        std::fs::write(&path, &edited)?;
-        let applied = projection
-            .apply_events(&[ProjectionEvent::Upsert(path)])
-            .await?;
-        assert_eq!(applied.committed.len(), 1);
-        assert_eq!(records.list_configs().await?[0].bytes, edited);
+        assert!(report.config_materialization.materialized.is_empty());
+        assert!(!projection.root().join("xo.scm").exists());
+        assert_eq!(records.list_configs().await?[0].bytes, source);
         node.shutdown().await?;
         Ok(())
     }

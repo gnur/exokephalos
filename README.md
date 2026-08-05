@@ -728,8 +728,14 @@ inside `[[...]]` plus tags from the workspace. It does not mutate files yet.
 
 ## Edit workspace behavior
 
-Workspace behavior is replicated and projected as `xo.scm`. A new workspace
-starts with native declarative Steel similar to:
+Workspace behavior is replicated state and is edited from the TUI. It is no
+longer exposed as `xo.scm` inside the Markdown notes projection. Open the leader
+menu and press `c` (**config**) to open the current workspace configuration in
+`$EDITOR`. Save and exit to validate it and commit a new replicated configuration
+revision. Other peers receive the configuration through Iroh; use the TUI refresh
+command after a remote configuration update.
+
+The configuration uses native declarative Steel similar to:
 
 ```scheme
 (workspace-config
@@ -811,7 +817,9 @@ subviews, sorting, explicit mutation grants, and reading actions that set
 
 The declarative workspace/module form remains restricted. Configuration is parsed through a
 strict boundary: arbitrary filesystem, environment, process, network, clock,
-or evaluation expressions are rejected.
+or evaluation expressions are rejected. Auxiliary modules and plugins remain
+materialized below `modules/**/*.scm` and `plugins/**/*.scm`; the main workspace
+configuration is kept in replicated state and edited with `Space`, then `c`.
 
 ## Detailed TUI-to-xo-syncd pairing flow
 

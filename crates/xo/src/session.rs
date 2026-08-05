@@ -71,7 +71,8 @@ impl WorkspaceSession {
         let snapshot = WorkspaceRecords::new(&self.workspace).snapshot().await?;
         self.projection.reconcile(&snapshot.notes)?;
         self.projection.reconcile_assets(&snapshot.assets)?;
-        self.projection.reconcile_configs(&snapshot.configs)?;
+        self.projection
+            .reconcile_projection_configs(&snapshot.configs)?;
         Ok(snapshot)
     }
 
@@ -138,9 +139,50 @@ impl WorkspaceSession {
                 )
                 .await?;
             self.projection
-                .reconcile_configs(&records.list_configs().await?)?;
+                .reconcile_projection_configs(&records.list_configs().await?)?;
         }
         Ok(behavior)
+    }
+
+    pub async fn workspace_config_source(&self) -> Result<String> {
+        let config = WorkspaceRecords::new(&self.workspace)
+            .list_configs()
+            .await?
+            .into_iter()
+            .find(|config| config.record.path == "xo.scm")
+            .context("workspace configuration is unavailable")?;
+        String::from_utf8(config.bytes).context("workspace configuration is not UTF-8")
+    }
+
+    pub async fn save_workspace_config(&mut self, source: &str) -> Result<()> {
+        let configs = WorkspaceRecords::new(&self.workspace)
+            .list_configs()
+            .await?;
+        let mut modules = BTreeMap::new();
+        for config in &configs {
+            if config.record.path != "xo.scm" {
+                modules.insert(
+                    config.record.path.clone(),
+                    String::from_utf8(config.bytes.clone())?,
+                );
+            }
+        }
+        xo_core::steel_runtime::SteelWorkspace::load(source, &modules, "1970-01-01T00:00:00+00:00")
+            .context("validate workspace configuration")?;
+        let predecessors = configs
+            .iter()
+            .find(|config| config.record.path == "xo.scm")
+            .map(|config| BTreeSet::from([config.revision_id.clone()]))
+            .unwrap_or_default();
+        WorkspaceRecords::new(&self.workspace)
+            .put_config(
+                "xo.scm",
+                source.as_bytes().to_vec(),
+                self.clock.next(now_ms()?),
+                predecessors,
+            )
+            .await?;
+        Ok(())
     }
 
     pub async fn install_config(&mut self, path: &str, source: &[u8]) -> Result<()> {
@@ -363,7 +405,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_views_create_default_xo_config_in_projection() -> Result<()> {
+    async fn missing_views_create_default_xo_config_without_projection_file() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let state = directory.path().join("state");
         let projection = directory.path().join("notes");
@@ -380,8 +422,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["notes", "all"]
         );
-        assert!(projection.join("xo.scm").is_file());
-        let source = std::fs::read_to_string(projection.join("xo.scm"))?;
+        assert!(!projection.join("xo.scm").exists());
+        let source = session.workspace_config_source().await?;
         assert!(source.starts_with("(workspace-config\n  (schema 1)"));
         assert!(source.contains("(field-equals \"type\" \"note\")"));
         assert!(source.contains("(plugin (capture-url))"));

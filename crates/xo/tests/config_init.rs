@@ -26,6 +26,12 @@ async fn config_init_output_starts_a_fresh_xo_workspace() -> Result<()> {
     let behavior = session.behavior().await?;
     ensure!(behavior.views.iter().any(|view| view.id == "notes"));
     ensure!(behavior.views.iter().any(|view| view.id == "all"));
-    ensure!(directory.path().join("notes/xo.scm").is_file());
+    ensure!(!directory.path().join("notes/xo.scm").exists());
+    ensure!(
+        session
+            .workspace_config_source()
+            .await?
+            .starts_with("(workspace-config")
+    );
     session.shutdown().await
 }

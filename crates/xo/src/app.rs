@@ -1131,25 +1131,25 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
 }
 
 fn render_leader_menu(frame: &mut Frame<'_>) {
-    let area = centered_rect(54, 8, frame.area());
-    let menu = Text::from(vec![
-        Line::raw("t  toggle tags          v  choose view"),
-        Line::raw("a  actions              m  setup mobile client"),
-        Line::raw("j  server setup/status  s  synchronization status"),
-        Line::raw("x  conflicts            i  devices"),
-        Line::raw("r  refresh sync         o  reverse sort"),
-        Line::raw("p  unlock preview       Esc  cancel"),
-    ]);
+    let entries = [
+        "a  actions",
+        "v  choose view",
+        "c  config",
+        "x  conflicts",
+        "i  devices",
+        "m  setup mobile client",
+        "r  refresh sync",
+        "o  reverse sort",
+        "j  server setup/status",
+        "s  synchronization status",
+        "t  toggle tags",
+        "p  unlock preview",
+    ];
+    let height = u16::try_from(entries.len()).unwrap_or(u16::MAX);
+    let area = centered_rect(32, height, frame.area());
+    let menu = Text::from(entries.into_iter().map(Line::raw).collect::<Vec<_>>());
     frame.render_widget(Clear, area);
-    frame.render_widget(
-        Paragraph::new(menu).block(
-            Block::default()
-                .title("Leader menu")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        ),
-        area,
-    );
+    frame.render_widget(Paragraph::new(menu), area);
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
@@ -1407,13 +1407,14 @@ mod tests {
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
         assert!(screen.contains("[,] menu"));
-        assert!(screen.contains("Leader menu"));
+        assert!(!screen.contains("Leader menu"));
         assert!(screen.contains("t  toggle tags"));
         assert!(screen.contains("v  choose view"));
         assert!(screen.contains("a  actions"));
+        assert!(screen.contains("c  config"));
         assert!(screen.contains("m  setup mobile client"));
         assert!(screen.contains("j  server setup/status"));
-        assert!(screen.contains("s  synchronization status"));
+        assert!(screen.contains("s  synchronization"));
     }
 
     #[test]

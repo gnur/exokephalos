@@ -282,6 +282,7 @@ enum LeaderCommand {
     ToggleTags,
     ChooseView,
     Actions,
+    Config,
     Mobile,
     Server,
     Sync,
@@ -297,6 +298,7 @@ const fn leader_command(key: char) -> Option<LeaderCommand> {
         't' => Some(LeaderCommand::ToggleTags),
         'v' => Some(LeaderCommand::ChooseView),
         'a' => Some(LeaderCommand::Actions),
+        'c' => Some(LeaderCommand::Config),
         'm' => Some(LeaderCommand::Mobile),
         'j' => Some(LeaderCommand::Server),
         's' => Some(LeaderCommand::Sync),
@@ -383,6 +385,15 @@ async fn event_loop(
                 KeyCode::Char(value) if leader_command(value) == Some(LeaderCommand::Actions) => {
                     app.action_query.clear();
                     app.mode = Mode::ActionPicker;
+                }
+                KeyCode::Char(value) if leader_command(value) == Some(LeaderCommand::Config) => {
+                    app.mode = Mode::Normal;
+                    suspend_tui(terminal)?;
+                    let config_result = edit_workspace_config(session).await;
+                    resume_tui(terminal)?;
+                    config_result?;
+                    refresh_workspace(app, session).await?;
+                    app.message = "workspace configuration updated".into();
                 }
                 KeyCode::Char(value) if leader_command(value) == Some(LeaderCommand::Mobile) => {
                     match session.writable_invitation().await {
@@ -968,6 +979,14 @@ async fn capture_url(session: &mut WorkspaceSession, raw_url: &str) -> Result<No
     Ok(note)
 }
 
+async fn edit_workspace_config(session: &mut WorkspaceSession) -> Result<()> {
+    let source = session.workspace_config_source().await?;
+    let editor = std::env::var_os("EDITOR").unwrap_or_else(|| "vi".into());
+    let edited = external_edit_with(&editor, &[], source.as_bytes())?;
+    let source = String::from_utf8(edited).context("workspace configuration is not UTF-8")?;
+    session.save_workspace_config(&source).await
+}
+
 async fn create_note(app: &mut App, session: &mut WorkspaceSession, title: &str) -> Result<()> {
     let instant = xo_core::timestamp::now_local()?;
     let mut note = new_note_draft(instant, title)?;
@@ -1215,6 +1234,7 @@ mod cli_tests {
         assert_eq!(leader_command('t'), Some(LeaderCommand::ToggleTags));
         assert_eq!(leader_command('v'), Some(LeaderCommand::ChooseView));
         assert_eq!(leader_command('a'), Some(LeaderCommand::Actions));
+        assert_eq!(leader_command('c'), Some(LeaderCommand::Config));
         assert_eq!(leader_command('m'), Some(LeaderCommand::Mobile));
         assert_eq!(leader_command('j'), Some(LeaderCommand::Server));
         assert_eq!(leader_command('s'), Some(LeaderCommand::Sync));

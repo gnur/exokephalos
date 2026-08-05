@@ -281,6 +281,21 @@ impl ProjectionState {
             desired,
         )
     }
+
+    /// Materialize auxiliary workspace configuration, excluding the main
+    /// workspace config which is edited through the TUI.
+    #[cfg(feature = "iroh-sync")]
+    pub fn reconcile_projection_configs(
+        &self,
+        configs: &[crate::records::ProjectedConfig],
+    ) -> Result<MaterializationReport, ProjectionError> {
+        let configs = configs
+            .iter()
+            .filter(|config| config.record.path != "xo.scm")
+            .cloned()
+            .collect::<Vec<_>>();
+        self.reconcile_configs(&configs)
+    }
 }
 
 #[cfg(feature = "iroh-sync")]

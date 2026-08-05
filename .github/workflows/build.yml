@@ -81,7 +81,15 @@ jobs:
       - name: Install Wasm C compiler
         run: sudo apt-get update && sudo apt-get install --yes clang
 
+      - name: Cache wasm-pack
+        id: wasm-pack-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-pack
+          key: wasm-pack-0.13.1-${{ runner.os }}-${{ runner.arch }}
+
       - name: Install wasm-pack
+        if: steps.wasm-pack-cache.outputs.cache-hit != 'true'
         run: cargo install wasm-pack --version 0.13.1 --locked
 
       - name: Set up Node.js 22
@@ -123,6 +131,12 @@ jobs:
           curl --fail --silent http://127.0.0.1:4173/client/route | grep -q '<title>xo</title>'
           curl --fail --silent http://127.0.0.1:4173/manifest.webmanifest | grep -q '"name":"xo"'
           curl --fail --silent http://127.0.0.1:4173/version.json | grep -q "\"version\":\"${XO_VERSION}\""
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('web/package-lock.json') }}
 
       - name: Install Chromium, Firefox, and WebKit
         working-directory: web

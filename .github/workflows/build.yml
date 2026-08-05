@@ -527,6 +527,15 @@ jobs:
           path: release-assets
           merge-multiple: true
 
+      - name: Verify release archives contain xo-lsp
+        working-directory: release-assets
+        shell: bash
+        run: |
+          for archive in xo-*.tar.gz; do
+            tar -tzf "${archive}" | grep -Fxq xo-lsp
+          done
+          unzip -Z1 xo-*.zip | grep -Fxq xo-lsp.exe
+
       - name: Generate checksums
         working-directory: release-assets
         run: sha256sum xo-* > SHA256SUMS

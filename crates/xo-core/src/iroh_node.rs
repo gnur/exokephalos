@@ -232,6 +232,22 @@ impl IrohNode {
     }
 }
 
+async fn sync_peers_with_retry(doc: &Doc, peers: Vec<iroh::EndpointAddr>) -> Result<()> {
+    let mut last_error = None;
+    for attempt in 1..=3 {
+        match doc.start_sync(peers.clone()).await {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt < 3 {
+                    tokio::time::sleep(Duration::from_millis(250 * attempt)).await;
+                }
+            }
+        }
+    }
+    Err(last_error.expect("sync attempt failed"))
+}
+
 fn spawn_auto_sync(doc: &Doc, local_endpoint_id: EndpointId) {
     let doc = doc.clone();
     tokio::spawn(async move {
@@ -244,10 +260,13 @@ fn spawn_auto_sync(doc: &Doc, local_endpoint_id: EndpointId) {
             let Ok(event) = event else {
                 break;
             };
-            match event {
+            let sync_result = match event {
                 LiveEvent::NeighborUp(node_id) if node_id != local_endpoint_id => {
                     known_peers.insert(node_id);
-                    let _ = doc.start_sync(vec![iroh::EndpointAddr::new(node_id)]).await;
+                    Some(sync_peers_with_retry(
+                        &doc,
+                        vec![iroh::EndpointAddr::new(node_id)],
+                    ))
                 }
                 LiveEvent::InsertRemote { from, .. } if from != local_endpoint_id => {
                     known_peers.insert(from);
@@ -256,12 +275,18 @@ fn spawn_auto_sync(doc: &Doc, local_endpoint_id: EndpointId) {
                         .copied()
                         .map(iroh::EndpointAddr::new)
                         .collect::<Vec<_>>();
-                    let _ = doc.start_sync(peers).await;
+                    Some(sync_peers_with_retry(&doc, peers))
                 }
                 LiveEvent::SyncFinished(event) if event.peer != local_endpoint_id => {
                     known_peers.insert(event.peer);
+                    None
                 }
-                _ => {}
+                _ => None,
+            };
+            if let Some(result) = sync_result
+                && let Err(error) = result.await
+            {
+                eprintln!("xo Iroh automatic synchronization failed: {error:#}");
             }
         }
     });
@@ -420,6 +445,7 @@ impl IrohWorkspace {
             .await
             .context("subscribe to workspace")?;
         let doc = self.doc.clone();
+        let local_endpoint_id = self.endpoint_id;
         Ok(events.map(move |event| {
             let event = event.context("read workspace event")?;
             let event = match event {
@@ -430,14 +456,20 @@ impl IrohWorkspace {
                 }
                 | LiveEvent::ContentReady { .. }
                 | LiveEvent::PendingContentReady => WorkspaceEvent::ContentChanged,
-                LiveEvent::NeighborUp(node_id) => {
+                LiveEvent::NeighborUp(node_id) if node_id != local_endpoint_id => {
                     let doc = doc.clone();
                     tokio::spawn(async move {
-                        let _ = doc.start_sync(vec![iroh::EndpointAddr::new(node_id)]).await;
+                        if let Err(error) =
+                            sync_peers_with_retry(&doc, vec![iroh::EndpointAddr::new(node_id)])
+                                .await
+                        {
+                            eprintln!("xo Iroh workspace synchronization failed: {error:#}");
+                        }
                     });
                     WorkspaceEvent::StatusChanged
                 }
-                LiveEvent::InsertRemote { .. }
+                LiveEvent::NeighborUp(_)
+                | LiveEvent::InsertRemote { .. }
                 | LiveEvent::NeighborDown(_)
                 | LiveEvent::SyncFinished(_) => WorkspaceEvent::StatusChanged,
             };
@@ -459,6 +491,39 @@ impl IrohWorkspace {
             .start_sync(remote_nodes)
             .await
             .context("start workspace synchronization")
+    }
+
+    /// Start synchronization and wait until Iroh reports a completed peer sync.
+    ///
+    /// Starting a sync only schedules work. Callers that need a readiness
+    /// barrier should use this method before reading replicated content.
+    pub async fn sync_and_wait(&self, ticket: &str) -> Result<()> {
+        let mut events = self
+            .doc
+            .subscribe()
+            .await
+            .context("subscribe to workspace synchronization")?;
+        self.start_sync(ticket).await?;
+        let wait_for_sync = async {
+            while let Some(event) = events.next().await {
+                let event = event.context("read workspace synchronization event")?;
+                if let LiveEvent::SyncFinished(event) = event {
+                    if event.peer == self.endpoint_id {
+                        continue;
+                    }
+                    event
+                        .result
+                        .map_err(|error| anyhow::anyhow!(error))
+                        .context("workspace synchronization")?;
+                    return Ok(());
+                }
+            }
+            bail!("workspace synchronization event stream ended before completion")
+        };
+        tokio::time::timeout(Duration::from_secs(90), wait_for_sync)
+            .await
+            .context("timed out waiting for workspace synchronization")??;
+        Ok(())
     }
 
     /// Resume synchronization using peers persisted by Iroh Docs.

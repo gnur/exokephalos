@@ -1120,7 +1120,8 @@ mod tests {
     }
 
     async fn wait_for_conflict(records: WorkspaceRecords<'_>) -> anyhow::Result<ResolvedNote> {
-        for _ in 0..600 {
+        let mut last_state = String::from("no observation");
+        for _ in 0..900 {
             match records.load_note(&NoteId::new("note002")).await {
                 Ok(Some(resolved))
                     if resolved
@@ -1130,12 +1131,25 @@ mod tests {
                 {
                     return Ok(resolved);
                 }
-                Ok(_) | Err(RecordError::Transport(_) | RecordError::MissingRevision(_)) => {}
+                Ok(Some(resolved)) => {
+                    last_state = format!(
+                        "visible revision {}, conflict={}",
+                        resolved.winning_revision,
+                        resolved.conflict.is_some()
+                    );
+                }
+                Ok(None) => last_state = "note not available".to_owned(),
+                Err(RecordError::Transport(error)) => {
+                    last_state = format!("transport error: {error}");
+                }
+                Err(RecordError::MissingRevision(revision)) => {
+                    last_state = format!("missing revision: {revision}");
+                }
                 Err(error) => return Err(error.into()),
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        anyhow::bail!("peer did not converge on both concurrent revisions")
+        anyhow::bail!("peer did not converge on both concurrent revisions after 90s ({last_state})")
     }
 
     #[tokio::test]
@@ -1187,12 +1201,16 @@ mod tests {
         let ticket_a = workspace_a.share(true).await?;
         let ticket_b = workspace_b.share(true).await?;
         let ticket_c = workspace_c.share(true).await?;
-        workspace_b.start_sync(&ticket_a).await?;
-        workspace_c.start_sync(&ticket_a).await?;
-        workspace_a.start_sync(&ticket_b).await?;
-        workspace_c.start_sync(&ticket_b).await?;
-        workspace_a.start_sync(&ticket_c).await?;
-        workspace_b.start_sync(&ticket_c).await?;
+        // Serialize sync starts per workspace. Iroh Docs can coalesce concurrent
+        // starts, which otherwise lets one readiness event race the next request.
+        for _ in 0..2 {
+            workspace_b.sync_and_wait(&ticket_a).await?;
+            workspace_c.sync_and_wait(&ticket_a).await?;
+            workspace_a.sync_and_wait(&ticket_b).await?;
+            workspace_c.sync_and_wait(&ticket_b).await?;
+            workspace_a.sync_and_wait(&ticket_c).await?;
+            workspace_b.sync_and_wait(&ticket_c).await?;
+        }
 
         let (resolved_a, resolved_b, resolved_c) = tokio::try_join!(
             wait_for_conflict(WorkspaceRecords::new(&workspace_a)),

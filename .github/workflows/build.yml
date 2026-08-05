@@ -531,12 +531,16 @@ jobs:
         working-directory: release-assets
         shell: bash
         run: |
-          for archive in xo-*.tar.gz; do
-            entries="$(tar -tzf "${archive}")"
-            grep -Fxq xo-lsp <<<"${entries}"
+          archives=(xo-*.tar.gz)
+          ((${#archives[@]} == 3))
+          for archive in "${archives[@]}"; do
+            entries=$'\n'"$(tar -tzf "${archive}")"$'\n'
+            [[ "${entries}" == *$'\nxo-lsp\n'* ]]
           done
-          entries="$(unzip -Z1 xo-*.zip)"
-          grep -Fxq xo-lsp.exe <<<"${entries}"
+          zip_archives=(xo-*.zip)
+          ((${#zip_archives[@]} == 1))
+          entries=$'\n'"$(unzip -Z1 "${zip_archives[0]}")"$'\n'
+          [[ "${entries}" == *$'\nxo-lsp.exe\n'* ]]
 
       - name: Generate checksums
         working-directory: release-assets

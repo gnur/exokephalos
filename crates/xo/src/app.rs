@@ -1215,10 +1215,17 @@ fn render_leader_menu(frame: &mut Frame<'_>) {
         "p  unlock preview",
     ];
     let height = u16::try_from(entries.len()).unwrap_or(u16::MAX);
-    let area = centered_rect(32, height, frame.area());
+    let area = centered_rect(34, height.saturating_add(2), frame.area());
     let menu = Text::from(entries.into_iter().map(Line::raw).collect::<Vec<_>>());
     frame.render_widget(Clear, area);
-    frame.render_widget(Paragraph::new(menu), area);
+    frame.render_widget(
+        Paragraph::new(menu).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        ),
+        area,
+    );
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {

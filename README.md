@@ -204,8 +204,10 @@ ten minutes. Only a changed deployment produces an explicit **Update** button.
 
 Press `Space`, then `m` in the TUI to create a writable invitation and display a QR code.
 Scanning it opens `https://xo.exokephalos.dev/`, imports the writable capability,
-starts relay synchronization, stores the encrypted browser identity, and removes
-the capability from the address bar. The capability is encoded in the URL
+starts relay synchronization in the background, stores the encrypted browser
+identity, and removes the capability from the address bar only after import
+succeeds. Invitation fragments are also handled when an already-open PWA receives
+a new setup link; a sleeping peer no longer makes the invitation itself time out. The capability is encoded in the URL
 fragment, so it is not included in the HTTP request. Treat the QR code and copied
 setup link as secrets.
 
@@ -483,7 +485,11 @@ connectivity is unavailable. The host needs outbound network access. A fixed
 inbound sync port is not currently configured by xo.
 
 On first start, `xo-syncd` creates
-`/var/lib/xo-syncd/operator.token` with a random token. The public health checks
+`/var/lib/xo-syncd/operator.token` with a random token. Its structured logs
+report workspace setup attempts, successful initial synchronization, device
+registration, resumed workspaces, incoming content, synchronization status
+changes, and failures. A successful setup page is returned only after initial
+synchronization completes and includes the server ticket needed by the TUI. The public health checks
 are:
 
 ```console
@@ -631,7 +637,9 @@ xo --workspace '<WORKSPACE_ID>'
 The uncluttered TUI header shows only xo and the embedded release version.
 The TUI subscribes to Iroh document events and automatically reloads notes,
 conflicts, devices, replicated behavior, and the filesystem projection when
-local or remote content becomes available. Press `Space`, then `s` for detailed
+local or remote content becomes available. TUI, browser, and `xo-syncd` peers
+publish signed device records when they open a workspace, so `Space`, then `i`
+shows the clients that have joined after their records replicate. Press `Space`, then `s` for detailed
 synchronization state or `Space`, then `r` for a manual refresh and retry.
 
 Create and edit commands open a private temporary file whose name ends in

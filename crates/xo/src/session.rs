@@ -79,6 +79,18 @@ impl WorkspaceSession {
             workspace.resume_sync().await?;
         }
         let actor = ActorId::new(workspace.author_id().to_string());
+        let clock = HlcClock::new(actor.clone());
+        WorkspaceRecords::new(&workspace)
+            .put_device(&DeviceRecord {
+                schema: CURRENT_SCHEMA,
+                endpoint_id: node.endpoint_id().to_string(),
+                author_id: actor.clone(),
+                label: device_label(),
+                capabilities: BTreeSet::from(["write".to_owned(), "tui".to_owned()]),
+                last_seen_ms: Some(now_ms()?),
+                retired_at: None,
+            })
+            .await?;
         let sync_state = SyncStateStore::open(state_dir.join("tui-sync.sqlite"))?;
         sync_state.set_connectivity(if ticket.is_some() || reopened {
             &Connectivity::Connecting
@@ -90,7 +102,7 @@ impl WorkspaceSession {
             node,
             workspace,
             actor: actor.clone(),
-            clock: HlcClock::new(actor),
+            clock,
             sync_state,
             _lock: lock,
         })
@@ -396,6 +408,12 @@ async fn open_active_workspace(node: &IrohNode, state_dir: &Path) -> Result<Opti
         .await?
         .with_context(|| format!("active workspace {active} is not present in this peer"))
         .map(Some)
+}
+
+fn device_label() -> String {
+    std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("COMPUTERNAME"))
+        .map_or_else(|_| "xo TUI".to_owned(), |host| format!("xo TUI on {host}"))
 }
 
 fn now_ms() -> Result<u64> {

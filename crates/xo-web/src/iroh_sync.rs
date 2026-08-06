@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::str::FromStr;
 
 use anyhow::{Context, Result, bail};
@@ -27,6 +28,7 @@ use n0_future::time::{self, Duration};
 use serde::Serialize;
 use wasm_bindgen::JsError;
 use wasm_bindgen::prelude::*;
+use xo_core::{ActorId, CURRENT_SCHEMA, DeviceRecord};
 
 const SYNC_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_ENTRY_BYTES: usize = 8 * 1024 * 1024;
@@ -128,6 +130,9 @@ impl IrohDocNode {
     #[wasm_bindgen(js_name = createWorkspace)]
     pub async fn create_workspace(&mut self) -> Result<String, JsError> {
         let document = self.docs.create().await.map_err(js_error)?;
+        self.register_browser_device(&document)
+            .await
+            .map_err(js_error)?;
         spawn_browser_auto_sync(document.clone());
         self.document = Some(document);
         self.sync_nodes.clear();
@@ -164,18 +169,21 @@ impl IrohDocNode {
             .cloned()
             .collect::<Vec<_>>();
         self.sync_nodes.clone_from(&remote_nodes);
+        // Joining establishes the durable local namespace immediately. Initial
+        // synchronization continues in the background so a temporarily slow or
+        // sleeping peer does not make invitation links appear to fail.
         let sync_error = if remote_nodes.is_empty() {
             None
         } else {
-            let mut events = document.subscribe().await.map_err(js_error)?;
-            match document.start_sync(remote_nodes).await {
-                Ok(()) => wait_for_initial_sync(&mut events)
-                    .await
-                    .err()
-                    .map(|error| error.to_string()),
-                Err(error) => Some(error.to_string()),
-            }
+            document
+                .start_sync(remote_nodes)
+                .await
+                .err()
+                .map(|error| error.to_string())
         };
+        self.register_browser_device(&document)
+            .await
+            .map_err(js_error)?;
         spawn_browser_auto_sync(document.clone());
         self.document = Some(document);
         self.ticket = Some(ticket.clone());
@@ -185,6 +193,30 @@ impl IrohDocNode {
             sync_error,
         })
         .map_err(js_error)
+    }
+
+    async fn register_browser_device(&self, document: &Doc) -> Result<()> {
+        let endpoint_id = self.router.endpoint().id().to_string();
+        let device = DeviceRecord {
+            schema: CURRENT_SCHEMA,
+            endpoint_id: endpoint_id.clone(),
+            author_id: ActorId::new(self.author.to_string()),
+            label: "xo-web PWA".to_owned(),
+            capabilities: BTreeSet::from(["write".to_owned(), "browser".to_owned()]),
+            last_seen_ms: js_sys::Date::now().round().to_string().parse().ok(),
+            retired_at: None,
+        };
+        let mut bytes = Vec::new();
+        ciborium::into_writer(&device, &mut bytes).context("encode browser device record")?;
+        document
+            .set_bytes(
+                self.author,
+                format!("device/{endpoint_id}").into_bytes(),
+                bytes,
+            )
+            .await
+            .context("publish browser device record")?;
+        Ok(())
     }
 
     /// Retry live synchronization using the peers retained in the ticket.

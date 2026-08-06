@@ -82,7 +82,7 @@ export class XoRuntime {
       const timeout = window.setTimeout(() => {
         this.#pending.delete(id);
         reject(new Error(`${method} timed out`));
-      }, 45_000);
+      }, 120_000);
       this.#pending.set(id, {
         resolve: (value) => resolve(value as T),
         reject,

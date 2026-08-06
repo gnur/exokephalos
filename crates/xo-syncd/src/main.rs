@@ -7,10 +7,14 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use futures_lite::StreamExt as _;
 use rand::RngCore as _;
 use serde_json::json;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
+use xo_core::iroh_node::{IrohNode, WorkspaceEvent};
+use xo_core::records::WorkspaceRecords;
+use xo_core::{ActorId, CURRENT_SCHEMA, DeviceRecord};
 
 use operator::{OperatorState, log_event};
 
@@ -42,10 +46,17 @@ async fn main() -> Result<()> {
             .open_workspace_str(workspace_id)
             .await?
             .with_context(|| format!("stored workspace {workspace_id} disappeared"))?;
+        register_daemon_device(&node, &workspace).await?;
         workspace
             .resume_sync()
             .await
             .with_context(|| format!("resume workspace {workspace_id}"))?;
+        log_event(
+            "info",
+            "workspace_sync_resumed",
+            &json!({ "workspace_id": workspace_id }),
+        );
+        spawn_workspace_logging(workspace, workspace_id.clone());
     }
     let token_file = cli
         .operator_token_file
@@ -77,6 +88,71 @@ async fn main() -> Result<()> {
     node.shutdown().await?;
     log_event("info", "daemon_stopped", &json!({}));
     Ok(())
+}
+
+async fn register_daemon_device(
+    node: &IrohNode,
+    workspace: &xo_core::iroh_node::IrohWorkspace,
+) -> Result<()> {
+    WorkspaceRecords::new(workspace)
+        .put_device(&DeviceRecord {
+            schema: CURRENT_SCHEMA,
+            endpoint_id: node.endpoint_id().to_string(),
+            author_id: ActorId::new(workspace.author_id().to_string()),
+            label: "xo-syncd".to_owned(),
+            capabilities: std::collections::BTreeSet::from([
+                "write".to_owned(),
+                "daemon".to_owned(),
+            ]),
+            last_seen_ms: Some(wall_clock_ms()?),
+            retired_at: None,
+        })
+        .await?;
+    Ok(())
+}
+
+fn spawn_workspace_logging(workspace: xo_core::iroh_node::IrohWorkspace, workspace_id: String) {
+    tokio::spawn(async move {
+        let Ok(mut events) = workspace.subscribe().await else {
+            log_event(
+                "error",
+                "workspace_subscription_failed",
+                &json!({ "workspace_id": workspace_id }),
+            );
+            return;
+        };
+        while let Some(event) = events.next().await {
+            match event {
+                Ok(WorkspaceEvent::ContentChanged) => log_event(
+                    "info",
+                    "workspace_content_received",
+                    &json!({ "workspace_id": workspace_id }),
+                ),
+                Ok(WorkspaceEvent::StatusChanged) => log_event(
+                    "debug",
+                    "workspace_sync_status_changed",
+                    &json!({ "workspace_id": workspace_id }),
+                ),
+                Err(error) => {
+                    log_event(
+                        "error",
+                        "workspace_event_failed",
+                        &json!({ "workspace_id": workspace_id, "error": error.to_string() }),
+                    );
+                    break;
+                }
+            }
+        }
+    });
+}
+
+fn wall_clock_ms() -> Result<u64> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .context("system clock precedes Unix epoch")?
+        .as_millis()
+        .try_into()
+        .context("system time does not fit u64")
 }
 
 fn load_or_create_token(path: &Path) -> Result<String> {

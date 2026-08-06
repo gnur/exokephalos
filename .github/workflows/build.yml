@@ -44,21 +44,41 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Run workspace tests
-        run: cargo test --workspace --locked -- --skip three_persisted_peers_converge_after_isolated_edits_and_restarts
-
-      - name: Run local relay-backed three-peer sync test
-        shell: bash
+      - name: Run quick workspace tests
         run: |
-          for attempt in 1 2 3; do
-            echo "local relay convergence attempt ${attempt}/3"
-            if cargo test -p xo-core --features test-utils --lib \
-              three_persisted_peers_converge_after_isolated_edits_and_restarts \
-              --locked -- --test-threads=1; then
-              exit 0
-            fi
-          done
-          exit 1
+          cargo test --workspace --locked -- \
+            --skip three_persisted_peers_converge_after_isolated_edits_and_restarts \
+            --skip extensive_thousand_item_workspace_rebuilds_and_resolves
+
+  extensive:
+    name: Extensive release tests
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust 1.89
+        uses: dtolnay/rust-toolchain@1.89.0
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: extensive-release
+
+      - name: Run 1000-item knowledge-base test
+        run: |
+          cargo test -p xo-core --features test-utils --lib \
+            extensive_thousand_item_workspace_rebuilds_and_resolves \
+            --locked -- --ignored --test-threads=1
+
+      - name: Run local relay-backed three-peer replication test
+        run: |
+          cargo test -p xo-core --features test-utils --lib \
+            three_persisted_peers_converge_after_isolated_edits_and_restarts \
+            --locked -- --test-threads=1
 
   web:
     name: xo-web static PWA
@@ -519,7 +539,9 @@ jobs:
   release:
     name: GitHub Release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    needs: binaries
+    needs:
+      - binaries
+      - extensive
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

@@ -10,6 +10,7 @@ repository.workspace = true
 anyhow.workspace = true
 bytes.workspace = true
 clap.workspace = true
+futures-lite.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true

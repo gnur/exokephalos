@@ -51,7 +51,7 @@ const updateServiceWorker = registerSW({
     serviceWorkerRegistration = registration;
   },
 });
-let scannedWorkspaceTicket = consumeWorkspaceTicket();
+let scannedWorkspaceTicket = workspaceTicketFromLocation();
 
 function announceUpdate() {
   updateIsAvailable = true;
@@ -100,12 +100,13 @@ function workspaceRouteState() {
   };
 }
 
-function consumeWorkspaceTicket() {
+function workspaceTicketFromLocation() {
   const parameters = new URLSearchParams(window.location.hash.replace(/^#/, ''));
-  const ticket = parameters.get('ticket')?.trim();
-  if (!ticket) return undefined;
+  return parameters.get('ticket')?.trim() || undefined;
+}
+
+function clearWorkspaceTicket() {
   window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
-  return ticket;
 }
 
 function App() {
@@ -132,11 +133,9 @@ function App() {
       const setupTicket = scannedWorkspaceTicket;
       let next = await runtime.initialize();
       if (setupTicket) {
-        try {
-          next = await runtime.joinWorkspace(setupTicket);
-        } finally {
-          scannedWorkspaceTicket = undefined;
-        }
+        next = await runtime.joinWorkspace(setupTicket);
+        scannedWorkspaceTicket = undefined;
+        clearWorkspaceTicket();
       }
       if (!active) return;
       setReport(next);
@@ -151,6 +150,25 @@ function App() {
       if (runtimeRef.current === runtime) runtimeRef.current = undefined;
       runtime.terminate();
     };
+  }, []);
+
+  useEffect(() => {
+    const joinFromLocation = () => {
+      const ticket = workspaceTicketFromLocation();
+      const runtime = runtimeRef.current;
+      if (!ticket || !runtime) return;
+      setBusy(true);
+      void runtime.joinWorkspace(ticket).then((next) => {
+        clearWorkspaceTicket();
+        setReport(next);
+        setState('ready');
+        setError(next.syncError ?? '');
+      }).catch((cause: unknown) => {
+        setError(errorMessage(cause));
+      }).finally(() => setBusy(false));
+    };
+    window.addEventListener('hashchange', joinFromLocation);
+    return () => window.removeEventListener('hashchange', joinFromLocation);
   }, []);
 
   useEffect(() => {

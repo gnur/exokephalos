@@ -1153,6 +1153,48 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "release-only extensive 1000-item workspace test"]
+    async fn extensive_thousand_item_workspace_rebuilds_and_resolves() -> anyhow::Result<()> {
+        let _guard = crate::iroh_node::IROH_TEST_LOCK.lock().await;
+        let directory = tempfile::tempdir()?;
+        let node = IrohNode::persistent(directory.path()).await?;
+        let workspace = node.create_workspace().await?;
+        let records = WorkspaceRecords::new(&workspace);
+        for index in 0..1_000_u64 {
+            let id = NoteId::new(format!("{:a>7}", crate::id::encode_base32(index + 1)));
+            records
+                .commit_revision(&NoteRevision {
+                    schema: CURRENT_SCHEMA,
+                    note_id: id.clone(),
+                    frontmatter: Frontmatter::from([
+                        ("id".to_owned(), FrontmatterValue::String(id.to_string())),
+                        (
+                            "title".to_owned(),
+                            FrontmatterValue::String(format!("Knowledge item {index}")),
+                        ),
+                    ]),
+                    body: format!("Body for knowledge item {index}"),
+                    materialized_path: format!("bulk/{index}.md"),
+                    hlc: Hlc {
+                        physical_ms: 1_000_000 + index,
+                        logical: 0,
+                        actor_id: records.actor_id(),
+                    },
+                    author_id: records.actor_id(),
+                    predecessors: BTreeSet::new(),
+                    deleted: false,
+                })
+                .await?;
+        }
+        let snapshot = records.snapshot().await?;
+        assert_eq!(snapshot.notes.len(), 1_000);
+        assert_eq!(snapshot.resolved.len(), 1_000);
+        assert!(snapshot.diagnostics.is_empty());
+        node.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn three_persisted_peers_converge_after_isolated_edits_and_restarts() -> anyhow::Result<()>
     {
         let _guard = crate::iroh_node::IROH_TEST_LOCK.lock().await;

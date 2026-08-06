@@ -21,6 +21,8 @@ use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use xo_core::iroh_node::{IrohNode, writable_ticket_workspace_id};
+use xo_core::records::WorkspaceRecords;
+use xo_core::{ActorId, CURRENT_SCHEMA, DeviceRecord};
 
 type Body = Full<Bytes>;
 
@@ -275,6 +277,11 @@ async fn handle_setup(
             None,
         );
     };
+    log_event(
+        "info",
+        "workspace_setup_started",
+        &json!({ "workspace_id": workspace_id }),
+    );
     let workspace = match node.import_writable_workspace(ticket).await {
         Ok(workspace) => workspace,
         Err(error) => {
@@ -286,16 +293,62 @@ async fn handle_setup(
             );
         }
     };
-    if let Err(error) = workspace.start_sync(ticket).await {
+    if let Err(error) = workspace.sync_and_wait(ticket).await {
         state.inner.metrics.errors.fetch_add(1, Ordering::Relaxed);
+        log_event(
+            "error",
+            "workspace_sync_failed",
+            &json!({ "workspace_id": workspace_id, "error": error.to_string() }),
+        );
         return setup_page(
             StatusCode::BAD_GATEWAY,
             Some(&format!(
-                "Workspace imported, but synchronization failed: {error}"
+                "Workspace imported, but initial synchronization did not complete: {error}"
             )),
             None,
         );
     }
+    if let Err(error) = WorkspaceRecords::new(&workspace)
+        .put_device(&DeviceRecord {
+            schema: CURRENT_SCHEMA,
+            endpoint_id: node.endpoint_id().to_string(),
+            author_id: ActorId::new(workspace.author_id().to_string()),
+            label: "xo-syncd".to_owned(),
+            capabilities: std::collections::BTreeSet::from([
+                "write".to_owned(),
+                "daemon".to_owned(),
+            ]),
+            last_seen_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .ok()
+                .and_then(|duration| duration.as_millis().try_into().ok()),
+            retired_at: None,
+        })
+        .await
+    {
+        state.inner.metrics.errors.fetch_add(1, Ordering::Relaxed);
+        log_event(
+            "error",
+            "workspace_device_registration_failed",
+            &json!({ "workspace_id": workspace_id, "error": error.to_string() }),
+        );
+        return setup_page(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Some(&format!(
+                "Synchronization succeeded, but daemon registration failed: {error}"
+            )),
+            None,
+        );
+    }
+    log_event(
+        "info",
+        "workspace_sync_established",
+        &json!({
+            "workspace_id": workspace_id,
+            "endpoint_id": node.endpoint_id().to_string(),
+        }),
+    );
+    crate::spawn_workspace_logging(workspace.clone(), workspace_id.to_owned());
     let server_ticket = match workspace.share(true).await {
         Ok(ticket) => ticket,
         Err(error) => {

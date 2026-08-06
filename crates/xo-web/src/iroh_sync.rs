@@ -30,7 +30,7 @@ use wasm_bindgen::JsError;
 use wasm_bindgen::prelude::*;
 use xo_core::{ActorId, CURRENT_SCHEMA, DeviceRecord};
 
-const SYNC_TIMEOUT: Duration = Duration::from_secs(30);
+const SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_ENTRY_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Serialize)]
@@ -395,13 +395,16 @@ fn normalize_lookup_item(item: AddressLookupItem) -> AddressLookupItem {
 
 fn normalize_browser_nodes(nodes: &mut [EndpointAddr]) -> Result<()> {
     for node in nodes {
+        // Browsers cannot dial native UDP socket addresses. Keeping them in a
+        // native ticket can make WebKit report a connection failure before the
+        // usable relay path completes, especially when stale peers are present.
         node.addrs = std::mem::take(&mut node.addrs)
             .into_iter()
-            .map(|address| match address {
+            .filter_map(|address| match address {
                 TransportAddr::Relay(relay) => {
-                    Ok(TransportAddr::Relay(normalize_relay_url(relay)?))
+                    Some(normalize_relay_url(relay).map(TransportAddr::Relay))
                 }
-                address => Ok(address),
+                _ => None,
             })
             .collect::<Result<_>>()?;
     }
@@ -448,16 +451,19 @@ where
     S: futures_lite::Stream<Item = Result<LiveEvent>> + Unpin,
 {
     time::timeout(SYNC_TIMEOUT, async {
+        let mut last_error = None;
         while let Some(event) = events.next().await {
             match event? {
-                LiveEvent::SyncFinished(event) => {
-                    if let Err(error) = event.result {
-                        bail!("initial document sync failed: {error}");
-                    }
-                }
+                LiveEvent::SyncFinished(event) => match event.result {
+                    Ok(_) => return Ok(()),
+                    Err(error) => last_error = Some(error.to_string()),
+                },
                 LiveEvent::PendingContentReady => return Ok(()),
                 _ => {}
             }
+        }
+        if let Some(error) = last_error {
+            bail!("no reachable ticket peer completed synchronization: {error}");
         }
         bail!("document event stream ended before initial sync completed")
     })
@@ -509,7 +515,11 @@ mod tests {
         let relay = "https://euc1-1.relay.n0.iroh-canary.iroh.link./"
             .parse()
             .unwrap();
-        let mut nodes = vec![EndpointAddr::new(endpoint).with_relay_url(relay)];
+        let mut nodes = vec![
+            EndpointAddr::new(endpoint)
+                .with_relay_url(relay)
+                .with_ip_addr("127.0.0.1:12345".parse().unwrap()),
+        ];
 
         normalize_browser_nodes(&mut nodes).unwrap();
 
@@ -517,6 +527,7 @@ mod tests {
             nodes[0].relay_urls().next().unwrap().host_str(),
             Some("euc1-1.relay.n0.iroh-canary.iroh.link")
         );
+        assert!(nodes[0].ip_addrs().next().is_none());
         assert!(
             browser_relay_map()
                 .unwrap()

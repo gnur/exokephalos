@@ -665,9 +665,12 @@ refresh, sorting, and preview unlocking. Space is the default. Set another
 single printable character with `(leader-key ",")` in the schema-3 command
 configuration.
 
-Press `Space`, then `v` to open the view menu. Every configured view and subview
-is shown with its shortest unique prefix; type that prefix to switch immediately,
-or use the arrow keys and Enter. When the active view has subviews, press `Tab`
+Press `g` from the normal TUI to open the quick main-view switcher. It lists
+only top-level views and assigns each one a unique single-character key,
+preferring its configured key and then letters from its name. Press that key to
+switch immediately, or use Up/Down and Enter. Press `Space`, then `v` for the
+full view menu containing both views and subviews; type its shown prefix or use
+the arrow keys and Enter. When the active view has subviews, press `Tab`
 or `Shift-Tab` to cycle through them; the active view and subview list are shown
 in the TUI header.
 

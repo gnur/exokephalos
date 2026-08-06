@@ -520,6 +520,27 @@ async fn event_loop(
                 }
                 _ => {}
             },
+            Mode::ViewPicker => match key.code {
+                KeyCode::Esc => app.mode = Mode::Normal,
+                KeyCode::Enter => {
+                    if app.choose_main_view() {
+                        app.mode = Mode::Normal;
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let last = app.main_view_choices().len().saturating_sub(1);
+                    app.goto_index = (app.goto_index + 1).min(last);
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    app.goto_index = app.goto_index.saturating_sub(1);
+                }
+                KeyCode::Char(value) => {
+                    if app.choose_main_view_key(value) {
+                        app.mode = Mode::Normal;
+                    }
+                }
+                _ => {}
+            },
             Mode::ActionPicker => match key.code {
                 KeyCode::Esc => app.mode = Mode::Normal,
                 KeyCode::Backspace => {
@@ -883,6 +904,14 @@ async fn event_loop(
                 }
                 KeyCode::Char('/') => {
                     app.mode = Mode::Search;
+                }
+                KeyCode::Char('g') => {
+                    app.goto_index = app
+                        .main_view_choices()
+                        .iter()
+                        .position(|choice| choice.view == app.active_view)
+                        .unwrap_or(0);
+                    app.mode = Mode::ViewPicker;
                 }
                 KeyCode::Char('R') => {
                     if let Some(operation) = app.operations.first() {

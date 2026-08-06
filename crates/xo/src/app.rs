@@ -36,6 +36,7 @@ pub enum Mode {
     CreateTitle,
     CreateEncryptedTitle,
     Goto,
+    ViewPicker,
     ActionPicker,
     CaptureUrl,
     PluginInput,
@@ -330,6 +331,60 @@ impl App {
             })
             .collect::<Vec<_>>()
             .join(" · ")
+    }
+
+    pub fn main_view_choices(&self) -> Vec<ViewChoice> {
+        let mut used = BTreeSet::new();
+        self.behavior
+            .views
+            .iter()
+            .enumerate()
+            .map(|(index, view)| {
+                let candidates = view
+                    .key
+                    .iter()
+                    .flat_map(|key| key.chars())
+                    .chain(view.name.chars())
+                    .chain(view.id.chars())
+                    .chain("abcdefghijklmnopqrstuvwxyz0123456789".chars())
+                    .chain((33_u8..=126).map(char::from));
+                let key = candidates
+                    .map(|candidate| candidate.to_ascii_lowercase())
+                    .find(|candidate| !candidate.is_whitespace() && used.insert(*candidate))
+                    .unwrap_or_else(|| {
+                        let offset = u32::try_from(index).unwrap_or(0);
+                        char::from_u32(0xe000_u32.saturating_add(offset)).unwrap_or('?')
+                    });
+                ViewChoice {
+                    label: view.name.clone(),
+                    view: view.id.clone(),
+                    subview: None,
+                    navigation_key: key.to_string(),
+                    prefix: key.to_string(),
+                }
+            })
+            .collect()
+    }
+
+    pub fn choose_main_view(&mut self) -> bool {
+        if let Some(choice) = self.main_view_choices().get(self.goto_index).cloned() {
+            self.set_view(&choice.view);
+            return true;
+        }
+        false
+    }
+
+    pub fn choose_main_view_key(&mut self, key: char) -> bool {
+        let key = key.to_ascii_lowercase();
+        if let Some(choice) = self
+            .main_view_choices()
+            .into_iter()
+            .find(|choice| choice.navigation_key.starts_with(key))
+        {
+            self.set_view(&choice.view);
+            return true;
+        }
+        false
     }
 
     pub fn goto_choices(&self) -> Vec<ViewChoice> {
@@ -817,6 +872,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             | Mode::CreateTitle
             | Mode::CreateEncryptedTitle
             | Mode::Goto
+            | Mode::ViewPicker
             | Mode::ActionPicker
             | Mode::CaptureUrl
             | Mode::PluginInput
@@ -824,6 +880,9 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     );
     let input_height = match app.mode {
         Mode::Goto => u16::try_from((app.goto_choices().len() + 3).clamp(4, 10)).unwrap_or(10),
+        Mode::ViewPicker => {
+            u16::try_from((app.main_view_choices().len() + 2).clamp(3, 10)).unwrap_or(10)
+        }
         Mode::PluginResults => {
             u16::try_from((app.plugin_results.len() + 2).clamp(3, 9)).unwrap_or(9)
         }
@@ -877,7 +936,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         app.leader_key.to_string()
     };
     let mut footer = format!(
-        "[{leader}] menu · [/] search · [e/Enter] edit · [c/C] create/encrypted · [d] delete · [u] restore · [q] quit"
+        "[{leader}] menu · [g] views · [/] search · [e/Enter] edit · [c/C] create/encrypted · [d] delete · [u] restore · [q] quit"
     );
     if !app.message.is_empty() {
         footer.push_str(" · ");
@@ -920,6 +979,23 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                     "Goto view · type shown prefix · Enter apply · Esc close",
                     format!("g{}\n{menu}", app.goto_input),
                 )
+            }
+            Mode::ViewPicker => {
+                let menu = app
+                    .main_view_choices()
+                    .iter()
+                    .enumerate()
+                    .map(|(index, choice)| {
+                        format!(
+                            "{} [{}] {}",
+                            if index == app.goto_index { "→" } else { " " },
+                            choice.navigation_key,
+                            choice.label
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                ("Switch view · key or ↑/↓ and Enter · Esc close", menu)
             }
             Mode::ActionPicker => {
                 let selected = app
@@ -1678,6 +1754,18 @@ mod tests {
                 ("Books / Reading", "r"),
             ]
         );
+        let main_choices = app.main_view_choices();
+        assert_eq!(
+            main_choices
+                .iter()
+                .map(|choice| (choice.label.as_str(), choice.navigation_key.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("Notes", "n"), ("News", "e"), ("Books", "b")]
+        );
+        assert!(app.choose_main_view_key('b'));
+        assert_eq!(app.active_view, "books");
+        assert!(app.active_subview.is_none());
+
         app.goto_input = "ne".into();
         assert!(app.goto_is_unambiguous());
         assert!(app.choose_goto());

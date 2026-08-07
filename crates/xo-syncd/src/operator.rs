@@ -123,7 +123,7 @@ async fn handle(request: Request<Incoming>, state: &OperatorState) -> Response<B
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
     if request.method() == Method::POST && request.uri().path() == "/setup" {
-        return handle_setup(request, authorization.as_deref(), state).await;
+        return handle_setup(request, state).await;
     }
     route(
         request.method(),
@@ -190,11 +190,7 @@ fn route(
 }
 
 #[allow(clippy::too_many_lines)]
-async fn handle_setup(
-    request: Request<Incoming>,
-    authorization: Option<&str>,
-    state: &OperatorState,
-) -> Response<Body> {
+async fn handle_setup(request: Request<Incoming>, state: &OperatorState) -> Response<Body> {
     const MAX_FORM_BYTES: usize = 256 * 1024;
     let content_length = request
         .headers()
@@ -231,22 +227,6 @@ async fn handle_setup(
             return setup_page(StatusCode::BAD_REQUEST, Some(&error), None);
         }
     };
-    let form_token = fields.get("operator_token").map(String::as_str);
-    if !authorized(authorization, &state.inner.token)
-        && !form_token
-            .is_some_and(|token| token.as_bytes().ct_eq(state.inner.token.as_slice()).into())
-    {
-        state
-            .inner
-            .metrics
-            .unauthorized
-            .fetch_add(1, Ordering::Relaxed);
-        return setup_page(
-            StatusCode::UNAUTHORIZED,
-            Some("The operator token is incorrect."),
-            None,
-        );
-    }
     let workspace_id = fields.get("workspace_id").map_or("", String::as_str).trim();
     let ticket = fields.get("ticket").map_or("", String::as_str).trim();
     if workspace_id.is_empty() || ticket.is_empty() {
@@ -349,19 +329,6 @@ async fn handle_setup(
         }),
     );
     crate::spawn_workspace_logging(workspace.clone(), workspace_id.to_owned());
-    let server_ticket = match workspace.share(true).await {
-        Ok(ticket) => ticket,
-        Err(error) => {
-            state.inner.metrics.errors.fetch_add(1, Ordering::Relaxed);
-            return setup_page(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Some(&format!(
-                    "Could not create the server return ticket: {error}"
-                )),
-                None,
-            );
-        }
-    };
     if let Ok(mut ids) = state.inner.workspace_ids.write()
         && !ids.iter().any(|id| id == workspace_id)
     {
@@ -373,28 +340,21 @@ async fn handle_setup(
         "workspace_configured",
         &json!({ "workspace_id": workspace_id }),
     );
-    setup_page(StatusCode::OK, None, Some((workspace_id, &server_ticket)))
+    setup_page(StatusCode::OK, None, Some(workspace_id))
 }
 
-fn setup_page(
-    status: StatusCode,
-    error: Option<&str>,
-    connected: Option<(&str, &str)>,
-) -> Response<Body> {
+fn setup_page(status: StatusCode, error: Option<&str>, connected: Option<&str>) -> Response<Body> {
     let notice = error.map_or_else(String::new, |error| {
         format!(
             "<p class=\"notice error\" role=\"alert\">{}</p>",
             html_escape(error)
         )
     });
-    let result = connected.map_or_else(String::new, |(workspace_id, ticket)| {
+    let result = connected.map_or_else(String::new, |workspace_id| {
         format!(
-            "<section class=\"result\"><h2>Server connected</h2>\
-             <p>Workspace <code>{}</code> is now stored and synchronizing.</p>\
-             <p>Paste this server ticket into the originating xo client to complete the bidirectional connection:</p>\
-             <textarea readonly rows=\"7\">{}</textarea></section>",
-            html_escape(workspace_id),
-            html_escape(ticket)
+            "<section class=\"result\"><h2>Daemon connected</h2>\
+             <p>Workspace <code>{}</code> is now stored and synchronizing. The daemon connects back to the originating client automatically; no return ticket is required.</p></section>",
+            html_escape(workspace_id)
         )
     });
     let body = format!(
@@ -412,8 +372,6 @@ fn setup_page(
          </style></head><body><main><div class=\"card\"><h1>Configure xo-syncd</h1>\
          <p class=\"hint\">Attach this server to an existing xo workspace. The ticket is used once and is never logged.</p>\
          {notice}<form method=\"post\" action=\"/setup\" autocomplete=\"off\">\
-         <label for=\"operator_token\">Operator token</label>\
-         <input id=\"operator_token\" name=\"operator_token\" type=\"password\" required>\
          <label for=\"workspace_id\">Workspace ID</label>\
          <input id=\"workspace_id\" name=\"workspace_id\" required spellcheck=\"false\">\
          <label for=\"ticket\">Writable workspace ticket</label>\
@@ -703,11 +661,7 @@ mod tests {
 
         let mismatch = http_post_form(
             address,
-            &format!(
-                "operator_token={}&workspace_id=wrong&ticket={}",
-                form_encode(&token),
-                form_encode(&ticket)
-            ),
+            &format!("workspace_id=wrong&ticket={}", form_encode(&ticket)),
         )
         .await;
         assert!(mismatch.starts_with("HTTP/1.1 400"));
@@ -716,15 +670,14 @@ mod tests {
         let connected = http_post_form(
             address,
             &format!(
-                "operator_token={}&workspace_id={}&ticket={}",
-                form_encode(&token),
+                "workspace_id={}&ticket={}",
                 form_encode(&workspace_id),
                 form_encode(&ticket)
             ),
         )
         .await;
         assert!(connected.starts_with("HTTP/1.1 200"));
-        assert!(connected.contains("Server connected"));
+        assert!(connected.contains("Daemon connected"));
         assert!(connected.contains(&workspace_id));
         assert!(!connected.contains(&ticket));
         assert_eq!(daemon.workspace_ids().await.unwrap(), vec![workspace_id]);

@@ -5,7 +5,9 @@ set -euo pipefail
 REPO="${XO_REPO:-gnur/exokephalos}"
 INSTALL_DIR="${XO_INSTALL_DIR:-${HOME}/.local/bin}"
 CONFIG_DIR="${HOME}/.config/xo"
-STATE_DIR="${HOME}/.local/share/xo"
+CLIENT_STATE_DIR="${HOME}/.local/share/xo"
+SYNC_STATE_DIR="${XO_SYNCD_STATE_DIR:-${HOME}/.local/share/xo-syncd}"
+WORKSPACE_ID="${XO_WORKSPACE_ID:-}"
 SYNC_TICKET="${XO_SYNC_TICKET:-}"
 SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
 
@@ -120,10 +122,8 @@ prompt_choice() {
   local prompt="$1" default="$2"
   local reply=""
 
-  if [[ -c /dev/tty && -t 1 ]]; then
+  if [[ -r /dev/tty ]]; then
     read -r -p "${prompt} [${default}]: " reply </dev/tty || reply=""
-  elif read -r reply_input; then
-    reply="${reply_input}"
   fi
 
   if [[ -z "${reply}" ]]; then
@@ -131,6 +131,15 @@ prompt_choice() {
   else
     echo "${reply}"
   fi
+}
+
+prompt_secret() {
+  local prompt="$1" reply=""
+  if [[ -r /dev/tty ]]; then
+    read -r -s -p "${prompt}: " reply </dev/tty || reply=""
+    echo "" >/dev/tty
+  fi
+  echo "${reply}"
 }
 
 ask_installation_mode() {
@@ -155,31 +164,36 @@ ask_installation_mode() {
   esac
 }
 
-import_sync_ticket() {
-  if [[ -z "${SYNC_TICKET}" ]]; then
-    return 0
+prompt_sync_workspace() {
+  if [[ -z "${WORKSPACE_ID}" ]]; then
+    WORKSPACE_ID="$(prompt_choice "Workspace ID" "")"
   fi
-  log "Importing the supplied workspace ticket into ${STATE_DIR}..."
-  "${INSTALL_DIR}/xo-admin" import-ticket "${STATE_DIR}" "${SYNC_TICKET}" >/dev/null || {
-    fatal "Could not import XO_SYNC_TICKET. Check that it is a writable ticket for this workspace."
+  if [[ -z "${SYNC_TICKET}" ]]; then
+    SYNC_TICKET="$(prompt_secret "Writable workspace ticket")"
+  fi
+  [[ -n "${WORKSPACE_ID}" ]] || fatal "A workspace ID is required for xo-syncd setup."
+  [[ -n "${SYNC_TICKET}" ]] || fatal "A writable workspace ticket is required for xo-syncd setup."
+}
+
+import_sync_ticket() {
+  log "Importing workspace ${WORKSPACE_ID} into ${SYNC_STATE_DIR}..."
+  local output imported_workspace
+  output="$("${INSTALL_DIR}/xo-admin" import-ticket "${SYNC_STATE_DIR}" "${SYNC_TICKET}")" || {
+    fatal "Could not import the writable ticket. Check that its source peer is online and reachable."
   }
+  imported_workspace="$(printf '%s\n' "${output}" | awk -F= '$1 == "workspace_id" { print $2; exit }')"
+  if [[ "${imported_workspace}" != "${WORKSPACE_ID}" ]]; then
+    fatal "The ticket belongs to workspace ${imported_workspace:-<unknown>}, not ${WORKSPACE_ID}."
+  fi
 }
 
 ensure_config() {
-  mkdir -p "${CONFIG_DIR}" "${STATE_DIR}"
+  mkdir -p "${CONFIG_DIR}" "${CLIENT_STATE_DIR}"
   local config_file="${CONFIG_DIR}/config.scm"
 
   if [[ ! -f "${config_file}" ]]; then
     log "Creating initial workspace configuration at ${config_file}..."
-    cat > "${config_file}" <<EOF
-(xo-config
-  (schema 3)
-  (state-dir "${STATE_DIR}")
-  (workspace #f)
-  (projection "~/notes")
-  (pwa-url "https://xo.exokephalos.dev/")
-  (leader-key " "))
-EOF
+    "${INSTALL_DIR}/xo" config-init > "${config_file}"
   fi
 }
 
@@ -190,7 +204,7 @@ setup_systemd_unit() {
   fi
 
   log "Setting up systemd user unit for xo-syncd..."
-  mkdir -p "${SYSTEMD_USER_DIR}" "${STATE_DIR}"
+  mkdir -p "${SYSTEMD_USER_DIR}" "${SYNC_STATE_DIR}"
 
   local unit_file="${SYSTEMD_USER_DIR}/xo-syncd.service"
   cat > "${unit_file}" <<EOF
@@ -202,7 +216,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${INSTALL_DIR}/xo-syncd --state-dir ${STATE_DIR}
+ExecStart=${INSTALL_DIR}/xo-syncd --state-dir ${SYNC_STATE_DIR}
 Restart=on-failure
 RestartSec=5s
 Environment=RUST_BACKTRACE=1
@@ -250,12 +264,13 @@ main() {
 
   if [[ -n "${SYNC_TICKET}" && "${mode}" == "xo" ]]; then
     warn "XO_SYNC_TICKET was supplied, but xo-syncd was not selected; the ticket was not imported."
-  elif [[ -n "${SYNC_TICKET}" ]]; then
-    import_sync_ticket
   fi
 
   case "${mode}" in
     syncd | both)
+      prompt_sync_workspace
+      systemctl --user stop xo-syncd.service 2>/dev/null || true
+      import_sync_ticket
       setup_systemd_unit
       ;;
   esac
@@ -277,8 +292,13 @@ main() {
   echo "  ${INSTALL_DIR}/xo-syncd"
   echo ""
   echo "Configuration directory: ${CONFIG_DIR}"
-  echo "State directory:         ${STATE_DIR}"
+  echo "TUI state directory:     ${CLIENT_STATE_DIR}"
+  if [[ "${mode}" == "syncd" || "${mode}" == "both" ]]; then
+    echo "xo-syncd state directory: ${SYNC_STATE_DIR}"
+  fi
   echo ""
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

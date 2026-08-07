@@ -164,14 +164,15 @@ You can install the native `xo` TUI, `xo-syncd` background daemon, `xo-admin`, a
 curl -sSL https://xo.exokephalos.dev/install.sh | bash
 ```
 
-The installer detects your OS and CPU architecture (Linux x86-64/ARM64 or macOS Apple Silicon), fetches the latest release archive from GitHub, extracts the binaries to `~/.local/bin`, creates initial configuration at `~/.config/xo/config.scm`, and prompts you to configure `xo` and/or `xo-syncd` as a systemd user unit at `~/.config/systemd/user/xo-syncd.service` with state in `~/.local/share/xo`.
+The installer detects your OS and CPU architecture (Linux x86-64/ARM64 or macOS Apple Silicon), fetches the latest release archive from GitHub, extracts the binaries to `~/.local/bin`, generates `~/.config/xo/config.scm` with `xo config-init`, and prompts you to configure `xo` and/or `xo-syncd`. The TUI uses `~/.local/share/xo`; the systemd user daemon uses the separate `~/.local/share/xo-syncd` state directory.
 
 Native multi-peer CI tests use an ephemeral in-process Iroh relay, while public N0 relay coverage remains an opt-in network test.
 
-To seed a new user `xo-syncd` directly from a TUI writable invitation, set `XO_SYNC_TICKET` before running the installer:
+When systemd setup is selected, the installer prompts for both the workspace ID and writable ticket before importing and starting the daemon. To seed it directly from a TUI invitation, provide both values:
 
 ```console
-curl -fsSL https://xo.exokephalos.dev/install.sh | XO_SYNC_TICKET='<writable-ticket>' bash
+curl -fsSL https://xo.exokephalos.dev/install.sh \
+  | XO_WORKSPACE_ID='<workspace-id>' XO_SYNC_TICKET='<writable-ticket>' bash
 ```
 
 The installer imports that ticket into the user daemon state before enabling the service. The TUI pairing screen also displays this command after revealing the ticket; press `U` there to copy it. Tickets are secrets and should not be placed in shell history.
@@ -379,30 +380,23 @@ options are documented under [Running xo-syncd](#running-xo-syncd). Do not seed
 a second workspace: the pairing flow imports the document created by the first
 TUI.
 
-The daemon creates an operator token on first start. For the system service it
-is `/var/lib/xo-syncd/operator.token`; for the documented container it is
-`/data/operator.token`. Keep the operator listener on loopback. It is an
-administrative HTTP interface, not Iroh's synchronization port.
+The operator listener remains bound to loopback. Its workspace setup form does
+not require an operator token; authenticated status and metrics APIs still use
+the token created in the daemon state directory. This is an administrative HTTP
+interface, not Iroh's synchronization port.
 
 ### 3. Pair the first TUI with xo-syncd
 
-In the first TUI, press `Space`, then `j` and follow the three-step **Connect xo-syncd**
-wizard. In outline:
+In the first TUI, press `Space`, then `j`. xo immediately creates a writable
+invitation and a ready-to-run user-unit installer command. Press `F2` to reveal
+it and `U` to copy it, then run it on the daemon host. Alternatively, open
+`http://127.0.0.1:9464/setup` and enter the displayed workspace ID and ticket.
+For a remote host, first run
+`ssh -L 9464:127.0.0.1:9464 user@server` and open the local URL.
 
-1. Enter the server state directory: normally `/var/lib/xo-syncd` for the
-   system service or `/data` for the documented container.
-2. xo creates a one-time writable invitation. Open
-   `http://127.0.0.1:9464/setup`, enter the operator token, workspace ID, and
-   invitation, and submit the form. For a remote host, first run
-   `ssh -L 9464:127.0.0.1:9464 user@server` and open the local URL.
-3. The server imports the workspace and returns its own writable ticket. Paste
-   that ticket into the TUI to complete the connection in the other direction.
-
-The two-ticket exchange gives each endpoint current addressing information and
-persists the peer relationship on both sides. After it succeeds, future TUI and
-daemon launches resume synchronization without either ticket. See the
-[full pairing walkthrough](#detailed-tui-to-xo-syncd-pairing-flow) for ticket
-visibility controls and the command-line fallback.
+The daemon imports the workspace, performs initial synchronization, and connects
+back to the TUI. Neighbor discovery persists the peer relationship automatically;
+there is no state-directory prompt or return ticket.
 
 ### 4. Optionally add more TUI clients
 
@@ -489,8 +483,7 @@ On first start, `xo-syncd` creates
 report workspace setup attempts, successful initial synchronization, device
 registration, resumed workspaces, incoming content, synchronization status
 changes, and failures. A successful setup page is returned only after initial
-synchronization completes and includes the server ticket needed by the TUI. The public health checks
-are:
+synchronization completes; the daemon then connects back automatically. The public health checks are:
 
 ```console
 curl http://127.0.0.1:9464/healthz
@@ -558,14 +551,10 @@ docker run --detach \
 ```
 
 The process runs as UID/GID `10001`, stores all durable state below `/data`,
-and reports container health through `/readyz`. Read the generated operator
-token with:
-
-```console
-docker exec xo-syncd cat /data/operator.token
-```
-
-Then open `http://127.0.0.1:9464/setup` and follow the TUI pairing flow below.
+and reports container health through `/readyz`. Open
+`http://127.0.0.1:9464/setup` and follow the TUI pairing flow below. No operator
+token is required for workspace setup; the generated `/data/operator.token`
+continues to protect status and metrics APIs.
 For a remote Docker host, use the same SSH port forwarding described in that
 flow. Do not publish port `9464` on an unrestricted interface.
 
@@ -600,9 +589,9 @@ The default configuration uses `~/.local/share/xo` for replicated local state,
   (leader-key " "))
 ```
 
-### Join with the server ticket
+### Join with a writable invitation
 
-Use the writable ticket printed while initializing the server:
+Use a writable ticket generated by an existing peer:
 
 ```console
 xo --ticket '<WRITABLE_TICKET>'
@@ -837,41 +826,27 @@ configuration is kept in replicated state and edited with `Space`, then `c`.
 ## Detailed TUI-to-xo-syncd pairing flow
 
 If the workspace was created in the TUI, press `Space`, then `j` to open **Connect
-xo-syncd**:
+xo-syncd**. The writable ticket is hidden by default.
 
-1. Confirm the server state directory. The default is `/var/lib/xo-syncd`.
-2. Press Enter to create a writable invitation. The ticket is hidden by
-   default.
-3. Open `http://127.0.0.1:9464/setup` on the server. For a remote server, keep
-   the operator endpoint on loopback and forward it temporarily:
+1. Press `F2` to reveal the ticket and generated installer command.
+2. Press `U` to copy the installer command and run it on the Linux daemon host.
+   The script asks for any workspace ID or ticket not already supplied by the
+   command, verifies that they match, imports the workspace into the daemon's
+   separate state directory, and starts the systemd user unit.
+3. Alternatively, open `http://127.0.0.1:9464/setup`, entering the displayed
+   workspace ID and writable ticket. For a remote daemon, temporarily forward
+   its loopback listener:
 
    ```console
    ssh -L 9464:127.0.0.1:9464 user@server
    ```
 
-4. Enter the operator token, workspace ID, and writable ticket displayed by
-   the TUI. For the system unit, read the token on the server with:
-
-   ```console
-   sudo cat /var/lib/xo-syncd/operator.token
-   ```
-
-   Press `c` in the TUI to copy only the writable ticket, or `F2` to reveal it.
-   The page verifies that the ticket is writable and belongs to the entered
-   workspace before importing it. It then starts synchronization and returns a
-   server ticket.
-5. Press Enter in the TUI and paste the server ticket returned by the page.
-6. Press Enter again. The TUI validates that the returned ticket belongs to the
-   active workspace, stores the peer relationship, and starts synchronization.
-
-The successful screen displays the workspace ID and confirms that future TUI
-and daemon launches will resume synchronization without either ticket. Press
-Esc at any step to discard the in-memory invitation. Tickets and pasted server
-output remain hidden unless `F2` is pressed. The setup page does not store the
-operator token or either ticket in browser storage.
-
-For headless recovery, press `C` in step 2 to copy the equivalent
-`systemctl stop` / `xo-admin import-ticket` / `systemctl start` commands.
+The setup form requires no operator token because the listener is loopback-only.
+It validates that the writable ticket belongs to the entered workspace, imports
+it, and waits for initial synchronization. The daemon then connects back to the
+TUI automatically, so there is no return ticket to paste. Press `c` to copy only
+the ticket or Enter/Esc to close the pairing screen. The setup page does not
+store the ticket in browser storage.
 
 The TUI and mutating `xo` commands such as `xo import` use an exclusive lock
 inside the state directory. If another `xo` process is already using that

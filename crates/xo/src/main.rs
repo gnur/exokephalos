@@ -4,7 +4,7 @@ use std::io::{self, Write as _, stdout};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use app::{App, Mode, PairingStep, external_edit_with, render, required_frontmatter};
+use app::{App, Mode, external_edit_with, render, required_frontmatter};
 use base64::Engine as _;
 use clap::{Parser, Subcommand};
 use crossterm::event::{
@@ -356,11 +356,6 @@ async fn event_loop(
                     app.capture_url.push_str(value.trim());
                 } else if app.mode == Mode::PluginInput {
                     app.plugin_input.push_str(value.trim());
-                } else if let Some(pairing) = &mut app.pairing
-                    && pairing.step == PairingStep::ServerOutput
-                {
-                    pairing.server_output.push_str(&value);
-                    pairing.error.clear();
                 }
                 continue;
             }
@@ -413,7 +408,13 @@ async fn event_loop(
                     }
                 }
                 KeyCode::Char(value) if leader_command(value) == Some(LeaderCommand::Server) => {
-                    app.start_server_pairing();
+                    match session.writable_invitation().await {
+                        Ok(invitation) => app.start_server_pairing(invitation),
+                        Err(error) => {
+                            app.message = format!("could not create invitation: {error:#}");
+                            app.mode = Mode::Normal;
+                        }
+                    }
                 }
                 KeyCode::Char(value) if leader_command(value) == Some(LeaderCommand::Sync) => {
                     app.mode = Mode::Sync;
@@ -718,162 +719,40 @@ async fn event_loop(
                 }
                 _ => {}
             },
-            Mode::Pairing => {
-                let step = app.pairing.as_ref().map(|pairing| pairing.step);
-                match (step, key.code) {
-                    (_, KeyCode::Esc) => {
-                        if step == Some(PairingStep::Connected) {
-                            app.message = "sync server connected".into();
-                        }
-                        app.cancel_server_pairing();
+            Mode::Pairing => match key.code {
+                KeyCode::Esc | KeyCode::Enter => app.cancel_server_pairing(),
+                KeyCode::F(2) => {
+                    if let Some(pairing) = &mut app.pairing {
+                        pairing.reveal_ticket = !pairing.reveal_ticket;
                     }
-                    (Some(PairingStep::StateDirectory), KeyCode::Backspace) => {
-                        if let Some(pairing) = &mut app.pairing {
-                            pairing.state_dir.pop();
-                            pairing.error.clear();
-                        }
-                    }
-                    (Some(PairingStep::StateDirectory), KeyCode::Char('u'))
-                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
-                        if let Some(pairing) = &mut app.pairing {
-                            pairing.state_dir.clear();
-                            pairing.error.clear();
-                        }
-                    }
-                    (Some(PairingStep::StateDirectory), KeyCode::Char(value))
-                        if !key
-                            .modifiers
-                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                    {
-                        if let Some(pairing) = &mut app.pairing {
-                            pairing.state_dir.push(value);
-                            pairing.error.clear();
-                        }
-                    }
-                    (Some(PairingStep::StateDirectory), KeyCode::Enter) => {
-                        let state_dir = app
-                            .pairing
-                            .as_ref()
-                            .map(|pairing| pairing.state_dir.trim())
-                            .unwrap_or_default();
-                        if state_dir.is_empty() {
-                            if let Some(pairing) = &mut app.pairing {
-                                pairing.error = "server state directory is required".into();
-                            }
-                        } else {
-                            match session.writable_invitation().await {
-                                Ok(invitation) => app.set_pairing_invitation(invitation),
-                                Err(error) => {
-                                    if let Some(pairing) = &mut app.pairing {
-                                        pairing.error = error.to_string();
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    (
-                        Some(PairingStep::ServerCommand | PairingStep::ServerOutput),
-                        KeyCode::F(2),
-                    ) => {
-                        if let Some(pairing) = &mut app.pairing {
-                            pairing.reveal_ticket = !pairing.reveal_ticket;
-                        }
-                    }
-                    (Some(PairingStep::ServerCommand), KeyCode::Char('c')) => {
-                        if let Some(invitation) = app.pairing_invitation() {
-                            match copy_to_clipboard(terminal, &invitation) {
-                                Ok(()) => app.message = "writable ticket copied".into(),
-                                Err(error) => {
-                                    if let Some(pairing) = &mut app.pairing {
-                                        pairing.error = format!("could not copy ticket: {error}");
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    (Some(PairingStep::ServerCommand), KeyCode::Char('C')) => {
-                        if let Some(command) = app.pairing_command() {
-                            match copy_to_clipboard(terminal, &command) {
-                                Ok(()) => app.message = "CLI fallback copied".into(),
-                                Err(error) => {
-                                    if let Some(pairing) = &mut app.pairing {
-                                        pairing.error =
-                                            format!("could not copy CLI fallback: {error}");
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    (Some(PairingStep::ServerCommand), KeyCode::Char('U')) => {
-                        if let Some(command) = app.user_syncd_command() {
-                            match copy_to_clipboard(terminal, &command) {
-                                Ok(()) => app.message = "user-unit installer command copied".into(),
-                                Err(error) => {
-                                    if let Some(pairing) = &mut app.pairing {
-                                        pairing.error =
-                                            format!("could not copy installer command: {error}");
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    (Some(PairingStep::ServerCommand), KeyCode::Enter) => {
-                        if let Some(pairing) = &mut app.pairing {
-                            pairing.step = PairingStep::ServerOutput;
-                            pairing.server_output.clear();
-                            pairing.reveal_ticket = false;
-                            pairing.error.clear();
-                        }
-                    }
-                    (Some(PairingStep::ServerOutput), KeyCode::Backspace) => {
-                        if let Some(pairing) = &mut app.pairing {
-                            pairing.server_output.pop();
-                            pairing.error.clear();
-                        }
-                    }
-                    (Some(PairingStep::ServerOutput), KeyCode::Char(value))
-                        if !key
-                            .modifiers
-                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                    {
-                        if let Some(pairing) = &mut app.pairing {
-                            pairing.server_output.push(value);
-                            pairing.error.clear();
-                        }
-                    }
-                    (Some(PairingStep::ServerOutput), KeyCode::Enter) => {
-                        let Some(ticket) = app.pairing_ticket() else {
-                            if let Some(pairing) = &mut app.pairing {
-                                pairing.error =
-                                    "paste the server ticket returned by the setup page".into();
-                            }
-                            continue;
-                        };
-                        match session.connect_peer(&ticket).await {
-                            Ok(()) => {
-                                if let Some(pairing) = &mut app.pairing {
-                                    pairing.step = PairingStep::Connected;
-                                    pairing.server_output.clear();
-                                    pairing.invitation = None;
-                                    pairing.error.clear();
-                                }
-                                app.sync = Some(session.sync_state.status()?);
-                                app.message = "sync server connected".into();
-                            }
+                }
+                KeyCode::Char('c') => {
+                    if let Some(invitation) = app.pairing_invitation() {
+                        match copy_to_clipboard(terminal, &invitation) {
+                            Ok(()) => app.message = "writable ticket copied".into(),
                             Err(error) => {
                                 if let Some(pairing) = &mut app.pairing {
-                                    pairing.error = error.to_string();
+                                    pairing.error = format!("could not copy ticket: {error}");
                                 }
                             }
                         }
                     }
-                    (Some(PairingStep::Connected), KeyCode::Enter) => {
-                        app.cancel_server_pairing();
-                    }
-                    _ => {}
                 }
-            }
+                KeyCode::Char('U') => {
+                    if let Some(command) = app.user_syncd_command() {
+                        match copy_to_clipboard(terminal, &command) {
+                            Ok(()) => app.message = "user-unit installer command copied".into(),
+                            Err(error) => {
+                                if let Some(pairing) = &mut app.pairing {
+                                    pairing.error =
+                                        format!("could not copy installer command: {error}");
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            },
             _ => match key.code {
                 KeyCode::Char(value) if value == app.leader_key => {
                     app.mode = Mode::Leader;

@@ -90,6 +90,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Validate streamed installer entry point
+        run: |
+          bash -n web/public/install.sh
+          bash -c 'source web/public/install.sh'
+          output="$(sed 's/^  main "$@"$/  echo streamed-main-ran/' web/public/install.sh | bash)"
+          test "${output}" = streamed-main-ran
+
       - name: Install Rust 1.89 with Wasm target
         uses: dtolnay/rust-toolchain@1.89.0
         with:

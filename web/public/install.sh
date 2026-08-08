@@ -299,6 +299,8 @@ main() {
   echo ""
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+# BASH_SOURCE is unset when the installer is streamed into `bash`. Run main in
+# that case, while still allowing tests and shell sessions to source this file.
+if [[ -z "${BASH_SOURCE[0]-}" || "${BASH_SOURCE[0]}" == "$0" ]]; then
   main "$@"
 fi

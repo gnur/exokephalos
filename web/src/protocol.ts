@@ -125,7 +125,8 @@ export type WorkerMethod =
   | 'query-notes'
   | 'mutate-note'
   | 'refresh-sync'
-  | 'share-ticket';
+  | 'share-ticket'
+  | 'wipe-local-data';
 
 export interface PutEntryInput {
   key: string;

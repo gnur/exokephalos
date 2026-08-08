@@ -165,6 +165,9 @@
 .settings-pane { max-width: 860px; margin: 0 auto; }
 .settings-section { border: 1px solid #263244; border-radius: 8px; padding: 14px; background: #111827; }
 .settings-section h2 { margin: 0; color: #f8fafc; font-size: 1.15rem; }
+.danger-zone { border-color: #7f1d1d; }
+.danger-button { border-color: #b91c1c; color: #fecaca; }
+.danger-button:hover { background: #7f1d1d; color: #fff; }
 .status-grid.compact { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .legacy-shell .status-card { min-width: 0; min-height: 0; display: flex; grid-template-columns: none; align-items: center; gap: 10px; border: 1px solid #263244; border-radius: 8px; padding: 11px; background: #0f172a; }
 .status-card > span { color: #38bdf8; }

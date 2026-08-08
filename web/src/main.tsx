@@ -250,6 +250,34 @@ function App() {
     setInstallPrompt(undefined);
   }
 
+  async function wipeBrowserData() {
+    const confirmed = window.confirm(
+      'Permanently remove this browser identity, workspace capability, cached notes, pending writes, and offline app files? You will need a new invitation to reconnect.',
+    );
+    if (!confirmed) return;
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    setBusy(true);
+    setError('');
+    try {
+      await runtime.wipeLocalData();
+      runtime.terminate();
+      runtimeRef.current = undefined;
+      localStorage.clear();
+      sessionStorage.clear();
+      if ('caches' in window) {
+        await Promise.all((await caches.keys()).map((name) => caches.delete(name)));
+      }
+      if ('serviceWorker' in navigator) {
+        await Promise.all((await navigator.serviceWorker.getRegistrations()).map((registration) => registration.unregister()));
+      }
+      window.location.replace('/');
+    } catch (cause) {
+      setError(errorMessage(cause));
+      setBusy(false);
+    }
+  }
+
   async function runWorkspace(operation: (runtime: XoRuntime) => Promise<RuntimeReport>) {
     const runtime = runtimeRef.current;
     if (!runtime) return undefined;
@@ -288,6 +316,7 @@ function App() {
         onMutate={(input) => runWorkspace((runtime) => runtime.mutateNote(input))}
         onRefresh={() => void runWorkspace((runtime) => runtime.refreshSync())}
         onUpdate={() => void applyUpdate()}
+        onWipe={() => void wipeBrowserData()}
       />
     );
   }

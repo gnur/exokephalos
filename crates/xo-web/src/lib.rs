@@ -27,7 +27,7 @@ pub fn runtime_info() -> String {
         "version": env!("XO_BUILD_VERSION"),
         "steel": true,
         "iroh": true,
-        "persistence": "indexeddb-recovery",
+        "persistence": "indexeddb-durable-replica",
     })
     .to_string()
 }

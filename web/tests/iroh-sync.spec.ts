@@ -93,6 +93,20 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   expect(consoleErrors.filter((message) => !message.includes('net::ERR_INTERNET_DISCONNECTED'))).toEqual([]);
 });
 
+test('wipes the browser client from settings and returns to onboarding', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByText('Runtime ready')).toBeVisible();
+  await page.getByRole('button', { name: 'Create workspace' }).click();
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Wipe all browser data' })).toBeVisible();
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: 'Wipe all browser data' }).click();
+  await expect(page.getByText('Runtime ready')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('button', { name: 'Create workspace' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'New note' })).toHaveCount(0);
+});
+
 test('creates a local item without attempting to synchronize with itself', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByText('Runtime ready')).toBeVisible();

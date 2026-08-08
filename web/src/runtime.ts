@@ -70,6 +70,10 @@ export class XoRuntime {
     return this.#call<string>('share-ticket');
   }
 
+  wipeLocalData() {
+    return this.#call<void>('wipe-local-data');
+  }
+
   terminate() {
     this.#worker.terminate();
     this.#rejectAll(new Error('xo runtime worker terminated'));

@@ -206,11 +206,19 @@ ten minutes. Only a changed deployment produces an explicit **Update** button.
 Press `Space`, then `m` in the TUI to create a writable invitation and display a QR code.
 Scanning it opens `https://xo.exokephalos.dev/`, imports the writable capability,
 starts relay synchronization in the background, stores the encrypted browser
-identity, and removes the capability from the address bar only after import
+identity and a durable IndexedDB document cache, and removes the capability from
+the address bar only after import
 succeeds. Invitation fragments are also handled when an already-open PWA receives
 a new setup link; a sleeping peer no longer makes the invitation itself time out. The capability is encoded in the URL
 fragment, so it is not included in the HTTP request. Treat the QR code and copied
-setup link as secrets.
+setup link as secrets. On reload, cached records are immediately available and
+entries authored by that browser are restored into its in-memory Iroh replica
+before network synchronization. Remote signed entries remain cached without
+being unsafely re-authored and refresh from peers in the background.
+
+Settings includes **Wipe all browser data** for removing the encrypted identity,
+workspace capability, document cache, pending writes, service worker, and offline
+files. A new invitation is required afterward.
 
 To use another PWA deployment, set its absolute HTTPS URL in
 `~/.config/xo/config.scm`:

@@ -25,7 +25,7 @@ use iroh_gossip::ALPN as GOSSIP_ALPN;
 use iroh_gossip::net::Gossip;
 use js_sys::Uint8Array;
 use n0_future::time::{self, Duration};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsError;
 use wasm_bindgen::prelude::*;
 use xo_core::{ActorId, CURRENT_SCHEMA, DeviceRecord};
@@ -61,6 +61,17 @@ struct DocumentEntry {
     author: String,
     content_hash: String,
     content_len: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedEntry {
+    key_base64: String,
+    value_base64: String,
+    author: String,
+    content_hash: String,
+    #[serde(default)]
+    pending: bool,
 }
 
 /// Relay-only Iroh Docs node intended to live for the lifetime of a Web Worker.
@@ -217,6 +228,37 @@ impl IrohDocNode {
             .await
             .context("publish browser device record")?;
         Ok(())
+    }
+
+    /// Restore entries originally signed by this persistent browser author.
+    ///
+    /// Remote entries cannot safely be re-authored: xo validates that the Iroh
+    /// signer matches the actor encoded in each record. They remain available
+    /// from the durable `IndexedDB` cache until synchronization refreshes them.
+    #[wasm_bindgen(js_name = restoreAuthorEntries)]
+    pub async fn restore_author_entries(&self, entries_json: String) -> Result<u32, JsError> {
+        let entries: Vec<PersistedEntry> = serde_json::from_str(&entries_json).map_err(js_error)?;
+        let document = self.document().map_err(js_error)?;
+        let author = self.author.to_string();
+        let mut restored = 0_u32;
+        for entry in entries {
+            if entry.pending || entry.author != author {
+                continue;
+            }
+            let key = BASE64.decode(entry.key_base64).map_err(js_error)?;
+            let value = BASE64.decode(entry.value_base64).map_err(js_error)?;
+            if iroh_blobs::Hash::new(&value).to_string() != entry.content_hash {
+                return Err(JsError::new(
+                    "persisted browser entry failed its content hash check",
+                ));
+            }
+            document
+                .set_bytes(self.author, key, value)
+                .await
+                .map_err(js_error)?;
+            restored = restored.saturating_add(1);
+        }
+        Ok(restored)
     }
 
     /// Retry live synchronization using the peers retained in the ticket.

@@ -186,7 +186,7 @@ async function initializeIroh() {
   try {
     const outcome = JSON.parse(await node.joinWorkspace(identity.ticket)) as WorkspaceOutcome;
     lastSyncError = outcome.syncError;
-    if (!outcome.syncError) await refreshEntryCache();
+    await restoreDurableBrowserEntries();
     await syncPendingWrites();
   } catch (cause) {
     lastSyncError = errorMessage(cause);
@@ -202,10 +202,17 @@ async function createWorkspace() {
 
 async function joinWorkspace(ticket: string) {
   if (!ticket.trim()) throw new Error('A writable workspace ticket is required');
+  const previous = JSON.parse(await requireNode().statusJson()) as SyncStatus;
   const outcome = JSON.parse(await requireNode().joinWorkspace(ticket.trim())) as WorkspaceOutcome;
+  if (previous.workspaceId && previous.workspaceId !== outcome.workspaceId) {
+    const tx = requireDatabase().transaction([ENTRY_STORE, PENDING_STORE], 'readwrite');
+    tx.objectStore(ENTRY_STORE).clear();
+    tx.objectStore(PENDING_STORE).clear();
+    await transactionComplete(tx);
+    workspaceCache = undefined;
+  }
   await saveIdentity({ ...requireIdentity(), ticket: outcome.ticket });
   lastSyncError = outcome.syncError;
-  if (!outcome.syncError) await refreshEntryCache();
   try {
     await syncPendingWrites();
   } catch (cause) {
@@ -311,11 +318,19 @@ async function hasRemotePeers() {
   return status.peers > 0;
 }
 
+async function restoreDurableBrowserEntries() {
+  const entries = (await allRecords<DocumentEntry & { id: string }>(ENTRY_STORE))
+    .map(({ id: _, ...entry }) => entry);
+  if (entries.length) await requireNode().restoreAuthorEntries(JSON.stringify(entries));
+}
+
 async function refreshEntryCache() {
   const entries = JSON.parse(await requireNode().entriesJson()) as DocumentEntry[];
   const tx = requireDatabase().transaction(ENTRY_STORE, 'readwrite');
   const store = tx.objectStore(ENTRY_STORE);
-  store.clear();
+  // Docs uses immutable revision/config keys and explicit tombstones. Merging
+  // keeps the durable replica usable while remote content is still arriving,
+  // instead of erasing it whenever an in-memory Iroh node starts empty.
   for (const entry of entries) store.put({ id: entry.keyBase64, ...entry });
   await transactionComplete(tx);
 }
@@ -394,6 +409,20 @@ function optimisticEntry(write: PendingWrite): DocumentEntry & { id: string } {
   };
 }
 
+async function wipeLocalData() {
+  database?.close();
+  database = undefined;
+  node = undefined;
+  identity = undefined;
+  workspaceCache = undefined;
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(DATABASE);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error ?? new Error('Could not delete xo IndexedDB data'));
+    request.onblocked = () => reject(new Error('Close other xo tabs before wiping browser data'));
+  });
+}
+
 async function handle(request: WorkerRequest): Promise<unknown> {
   if (request.method === 'initialize') {
     await initializeWasm();
@@ -427,6 +456,9 @@ async function handle(request: WorkerRequest): Promise<unknown> {
       await saveIdentity({ ...requireIdentity(), ticket });
       return ticket;
     }
+    case 'wipe-local-data':
+      await wipeLocalData();
+      return undefined;
   }
 }
 

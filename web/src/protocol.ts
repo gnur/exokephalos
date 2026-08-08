@@ -33,6 +33,7 @@ export interface ViewDescriptor {
   show_tags: boolean;
   title_field: string;
   subtitle_field?: string;
+  sort_field?: string;
   descending: boolean;
   subviews: SubviewDescriptor[];
 }

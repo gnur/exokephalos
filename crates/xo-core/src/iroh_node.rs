@@ -217,6 +217,10 @@ impl IrohNode {
     }
 
     pub async fn shutdown(&self) -> Result<()> {
+        self.blobs
+            .sync_db()
+            .await
+            .context("flush Iroh blob metadata")?;
         self.router.shutdown().await.context("shutdown Iroh router")
     }
 

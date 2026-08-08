@@ -81,6 +81,7 @@
 .items-header p { margin: 3px 0 0; color: #94a3b8; font-size: .82rem; }
 .list-pane, .single-pane { padding: 14px; }
 .item-list { display: grid; gap: 8px; }
+.year-heading { grid-column: 1 / -1; margin: 14px 0 2px; padding-bottom: 6px; border-bottom: 1px solid #334155; color: #7dd3fc; font-size: .95rem; letter-spacing: .08em; }
 .item-row {
   width: 100%;
   min-width: 0;

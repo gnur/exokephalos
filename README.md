@@ -779,6 +779,12 @@ The configuration uses native declarative Steel similar to:
       (capabilities create-note network))))
 ```
 
+Each view may choose any frontmatter field with `(sort-field "field-name")`
+and reverse its ordering with `(descending #t)`. When omitted, `sort-field`
+defaults to `created`. The TUI and PWA insert year headers from the leading ISO
+year in the selected sort field; missing or non-date values appear under **No
+year**.
+
 Predicates support `always`, `field-equals`, `has-tag`, `not`, `all`, and
 `any`. Actions use declarative effects such as `add-tag`, `remove-tag`,
 `set-field`, and `append-body`; `(set-field "started" (now))` stores the

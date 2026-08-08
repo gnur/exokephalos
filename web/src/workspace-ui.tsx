@@ -279,6 +279,7 @@ export function WorkspaceExperience({
               ? view?.subviews.find((subview) => subview.id === activeSubview)?.name || activeSubview
               : undefined}
             showTags={Boolean(view?.show_tags)}
+            sortField={view?.sort_field || 'created'}
             selectedTagCount={selectedTags.length}
             deleted={workspace?.deleted ?? []}
             onTags={() => setPane('tags')}
@@ -324,17 +325,19 @@ export function WorkspaceExperience({
   );
 }
 
-function ItemsPane({ notes, viewName, subviewName, showTags, selectedTagCount, deleted, onTags, onSelect, onRestore }: {
+function ItemsPane({ notes, viewName, subviewName, showTags, sortField, selectedTagCount, deleted, onTags, onSelect, onRestore }: {
   notes: WorkspaceNote[];
   viewName: string;
   subviewName?: string;
   showTags: boolean;
+  sortField: string;
   selectedTagCount: number;
   deleted: WorkspaceNote[];
   onTags: () => void;
   onSelect: (note: WorkspaceNote) => void;
   onRestore: (noteId: string) => void;
 }) {
+  const groups = groupNotesByYear(notes, sortField);
   return (
     <section className="pane-shell">
       <div className="items-header notes-toolbar">
@@ -343,12 +346,17 @@ function ItemsPane({ notes, viewName, subviewName, showTags, selectedTagCount, d
       </div>
       <div className="list-pane">
         <div className="item-list note-list" aria-label="Notes">
-          {notes.map((note) => (
-            <button key={note.id} className="item-row note-list-item" onClick={() => onSelect(note)}>
-              <strong>{noteTitle(note)}</strong>
-              <span>{noteField(note, 'type') || note.path}</span>
-              <span className="row-tags">{note.conflict ? <i>conflict</i> : null}{noteTags(note).map((tag) => <i key={tag}>{tag}</i>)}</span>
-            </button>
+          {groups.map(([year, groupedNotes], groupIndex) => (
+            <React.Fragment key={`${year}-${groupIndex}`}>
+              <h2 className="year-heading">{year}</h2>
+              {groupedNotes.map((note) => (
+                <button key={note.id} className="item-row note-list-item" onClick={() => onSelect(note)}>
+                  <strong>{noteTitle(note)}</strong>
+                  <span>{noteField(note, 'type') || note.path}</span>
+                  <span className="row-tags">{note.conflict ? <i>conflict</i> : null}{noteTags(note).map((tag) => <i key={tag}>{tag}</i>)}</span>
+                </button>
+              ))}
+            </React.Fragment>
           ))}
           {!notes.length ? <div className="empty-state">No matching items.</div> : null}
         </div>
@@ -423,6 +431,18 @@ function Status({ icon, label, value }: { icon: React.ReactNode; label: string; 
 
 function EntryRow({ entry }: { entry: DocumentEntry }) {
   return <article className="entry-row"><div><strong>{entry.key}</strong><span>{entry.value ?? `${entry.contentLen} binary bytes`}</span></div><div className="entry-meta"><code>{short(entry.author)}</code><span>{entry.pending ? 'pending' : 'replicated'}</span></div></article>;
+}
+
+function groupNotesByYear(notes: WorkspaceNote[], sortField: string): Array<[string, WorkspaceNote[]]> {
+  const groups: Array<[string, WorkspaceNote[]]> = [];
+  for (const note of notes) {
+    const value = noteField(note, sortField);
+    const year = /^\d{4}/.exec(value)?.[0] ?? 'No year';
+    const current = groups.at(-1);
+    if (current?.[0] === year) current[1].push(note);
+    else groups.push([year, [note]]);
+  }
+  return groups;
 }
 
 function noteField(note: WorkspaceNote, field?: string) {

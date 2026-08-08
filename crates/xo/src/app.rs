@@ -147,6 +147,15 @@ impl App {
         }
     }
 
+    pub fn active_sort_field(&self) -> &str {
+        self.behavior
+            .views
+            .iter()
+            .find(|view| view.id == self.active_view)
+            .and_then(|view| view.sort_field.as_deref())
+            .unwrap_or("created")
+    }
+
     pub fn visible_notes(&self) -> Vec<&Note> {
         let mut notes = self.query_notes(self.selected_tags.clone());
         if self.sort_descending {
@@ -1061,15 +1070,27 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         );
     }
     let selected_index = app.selected_index();
-    let note_items = app
-        .visible_notes()
-        .iter()
-        .enumerate()
-        .map(|(index, note)| {
-            let title = match note.frontmatter.get("title") {
-                Some(FrontmatterValue::String(value)) => value.clone(),
-                _ => note.id.to_string(),
-            };
+    let sort_field = app.active_sort_field();
+    let mut previous_year = None;
+    let mut note_items = Vec::new();
+    for (index, note) in app.visible_notes().iter().enumerate() {
+        let year =
+            xo_core::behavior::sort_year(note, sort_field).unwrap_or_else(|| "No year".to_owned());
+        if previous_year.as_deref() != Some(year.as_str()) {
+            note_items.push(
+                ListItem::new(format!("  ── {year} ──")).style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            );
+            previous_year = Some(year);
+        }
+        let title = match note.frontmatter.get("title") {
+            Some(FrontmatterValue::String(value)) => value.clone(),
+            _ => note.id.to_string(),
+        };
+        note_items.push(
             ListItem::new(format!(
                 "{} {title}",
                 if Some(index) == selected_index {
@@ -1082,9 +1103,9 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 selected
             } else {
                 Style::default()
-            })
-        })
-        .collect::<Vec<_>>();
+            }),
+        );
+    }
     frame.render_widget(
         List::new(note_items).block(
             Block::default()
@@ -1539,6 +1560,35 @@ mod tests {
         assert!(screen.contains("<writable ticket hidden>"));
         assert!(!screen.contains("operator.token"));
         assert!(!screen.contains("client-secret-ticket"));
+    }
+
+    #[test]
+    fn note_list_groups_the_configured_sort_field_by_year() {
+        let mut app = fixture();
+        app.set_view("notes");
+        app.behavior.views[0].sort_field = Some("published".into());
+        app.notes[0].frontmatter.insert(
+            "published".into(),
+            FrontmatterValue::String("2024-03-01".into()),
+        );
+        let mut newer = app.notes[0].clone();
+        newer.id = NoteId::new("note002");
+        newer.frontmatter.insert(
+            "published".into(),
+            FrontmatterValue::String("2025-04-01".into()),
+        );
+        app.notes.push(newer);
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(screen.contains("2024"), "{screen}");
+        assert!(screen.contains("2025"), "{screen}");
     }
 
     #[test]

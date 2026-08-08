@@ -273,12 +273,19 @@ fn mutation_contents(
     }
     let parsed = xo_core::markdown::parse(&input.markdown)?;
     match (note_id, resolved) {
-        (Some(id), Some(_)) => Ok((
-            id,
-            parsed.frontmatter.unwrap_or_default(),
-            parsed.body,
-            false,
-        )),
+        (Some(id), Some(current)) => {
+            let previous = repository.groups[&id]
+                .revisions
+                .get(&current.winning_revision)
+                .context("winning revision is unavailable")?;
+            let created = string_field(&previous.frontmatter, "created").unwrap_or_default();
+            let frontmatter = xo_core::markdown::required_frontmatter(
+                parsed.frontmatter.unwrap_or_default(),
+                id.as_str(),
+                created,
+            );
+            Ok((id, frontmatter, parsed.body, false))
+        }
         (None, None) => {
             let instant =
                 time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(now_ms) * 1_000_000)?;
@@ -686,6 +693,10 @@ mod tests {
         let snapshot: serde_json::Value =
             serde_json::from_str(&snapshot_json(&encoded).unwrap()).unwrap();
         assert_eq!(snapshot["notes"][0]["body"], "Second body");
+        assert_eq!(
+            snapshot["notes"][0]["frontmatter"]["created"],
+            "2027-01-15T13:30:00+05:30"
+        );
         assert_eq!(snapshot["notes"][0]["history"].as_array().unwrap().len(), 2);
 
         let deleted: PreparedMutation = serde_json::from_str(

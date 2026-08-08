@@ -362,7 +362,7 @@ impl WorkspaceBehavior {
             .collect::<Vec<_>>();
         let sort_field = view
             .and_then(|value| value.sort_field.as_deref())
-            .unwrap_or("title");
+            .unwrap_or("created");
         result.sort_by(|left, right| {
             field(left, sort_field)
                 .to_lowercase()
@@ -513,6 +513,17 @@ fn unique<'a>(
     Ok(())
 }
 
+/// Return the four-digit year represented by a configured sort field.
+///
+/// Date and timestamp fields conventionally begin with an ISO year. Values
+/// without such a prefix are grouped under an undated heading by clients.
+#[must_use]
+pub fn sort_year(note: &Note, sort_field: &str) -> Option<String> {
+    let value = field(note, sort_field);
+    let year = value.get(..4)?;
+    (year.chars().all(|character| character.is_ascii_digit())).then(|| year.to_owned())
+}
+
 fn field(note: &Note, name: &str) -> String {
     if name == "id" {
         return note.id.to_string();
@@ -593,6 +604,26 @@ mod tests {
             body: "body".to_owned(),
             path: format!("{title}.md"),
         }
+    }
+
+    #[test]
+    fn default_sort_uses_created_and_extracts_year_headers() {
+        let mut older = note("Z title", &[]);
+        older.frontmatter.insert(
+            "created".into(),
+            FrontmatterValue::String("2024-03-01T10:00:00Z".into()),
+        );
+        let mut newer = note("A title", &[]);
+        newer.frontmatter.insert(
+            "created".into(),
+            FrontmatterValue::String("2025-04-01T10:00:00Z".into()),
+        );
+        let behavior = WorkspaceBehavior::default();
+        let notes = [newer, older];
+        let found = behavior.query(&notes, &Query::default()).unwrap();
+        assert_eq!(found[0].id.as_str(), "z title");
+        assert_eq!(sort_year(found[0], "created").as_deref(), Some("2024"));
+        assert_eq!(sort_year(found[1], "title"), None);
     }
 
     #[test]

@@ -72,6 +72,7 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   await page.getByRole('button', { name: 'Save note' }).click();
   await expect(page.locator('.markdown-preview')).toContainText('edited and survives browser recovery');
   await selectWorkspaceNavigation(page, 'All');
+  await expect(page.getByRole('heading', { name: String(new Date().getFullYear()) })).toBeVisible();
   await expect(page.getByText('Web Playwright', { exact: true }).first()).toBeVisible();
   await selectWorkspaceNavigation(page, 'Notes');
   await page.getByText('Web Playwright', { exact: true }).first().click();

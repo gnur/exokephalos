@@ -17,10 +17,26 @@ pub struct ExportResult {
     pub paths: Vec<PathBuf>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImportProgress {
+    Found { total: usize },
+    Processed { current: usize, total: usize },
+    Finalizing,
+}
+
 pub async fn import_markdown(
     session: &mut WorkspaceSession,
     source: &Path,
     default_type: &str,
+) -> Result<usize> {
+    import_markdown_with_progress(session, source, default_type, |_| {}).await
+}
+
+pub async fn import_markdown_with_progress(
+    session: &mut WorkspaceSession,
+    source: &Path,
+    default_type: &str,
+    mut progress: impl FnMut(ImportProgress),
 ) -> Result<usize> {
     let source = source
         .canonicalize()
@@ -38,11 +54,18 @@ pub async fn import_markdown(
     }
     let existing = session.snapshot().await?.notes;
     let notes = prepare_import(&source, &existing, default_type)?;
-    for note in &notes {
+    let total = notes.len();
+    progress(ImportProgress::Found { total });
+    for (index, note) in notes.iter().enumerate() {
         session.save(note).await?;
+        progress(ImportProgress::Processed {
+            current: index + 1,
+            total,
+        });
     }
+    progress(ImportProgress::Finalizing);
     session.snapshot().await?;
-    Ok(notes.len())
+    Ok(total)
 }
 
 pub async fn export_markdown(

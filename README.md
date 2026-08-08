@@ -712,6 +712,9 @@ Generated timestamps use the system's local wall time with an explicit numeric
 UTC offset. During import, RFC 3339 UTC timestamps anywhere in frontmatter are
 converted to the equivalent instant in the system time zone, including the
 historically correct daylight-saving offset. The source tree is never modified.
+The command reports the number of discovered items, updates an in-place
+`current/total` counter on terminals, and does not report completion until the
+projection, Iroh Docs engine, and blob database have been finalized and closed.
 
 `xo export` writes winning workspace notes as conventional Markdown:
 

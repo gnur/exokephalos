@@ -38,6 +38,20 @@ fn xo_recursively_imports_and_conventionally_exports_markdown() -> Result<()> {
         "unexpected import output: {}",
         String::from_utf8_lossy(&imported.stdout)
     );
+    let progress = String::from_utf8_lossy(&imported.stderr);
+    for expected in [
+        "Scanning ",
+        "Found 2 item(s) ready to import.",
+        "Importing item 1/2",
+        "Importing item 2/2",
+        "Finalizing projection and durable Iroh state...",
+        "Import finalized and all local stores closed cleanly.",
+    ] {
+        ensure!(
+            progress.contains(expected),
+            "missing import progress {expected:?}: {progress}"
+        );
+    }
     ensure!(std::fs::read_to_string(source.join("first.md"))? == first);
     ensure!(std::fs::read_to_string(source.join("nested/second.md"))? == second);
 

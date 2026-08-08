@@ -1,6 +1,6 @@
 mod app;
 
-use std::io::{self, Write as _, stdout};
+use std::io::{self, IsTerminal as _, Write as _, stdout};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -99,19 +99,7 @@ async fn main() -> Result<()> {
             );
         }
         Some(Command::Import { source, item_type }) => {
-            let config = configured(&cli)?;
-            let mut session = WorkspaceSession::open(
-                &config.state_dir,
-                config.workspace.as_deref(),
-                cli.ticket.as_deref(),
-                config.projection,
-            )
-            .await?;
-            let result = xo::content_io::import_markdown(&mut session, source, item_type).await;
-            let shutdown = session.shutdown().await;
-            let imported = result?;
-            shutdown?;
-            println!("imported={imported}");
+            import_command(&cli, source, item_type).await?;
         }
         Some(Command::Export {
             destination,
@@ -170,6 +158,56 @@ async fn main() -> Result<()> {
             .await?;
         }
     }
+    Ok(())
+}
+
+async fn import_command(cli: &Cli, source: &std::path::Path, item_type: &str) -> Result<()> {
+    let config = configured(cli)?;
+    let mut session = WorkspaceSession::open(
+        &config.state_dir,
+        config.workspace.as_deref(),
+        cli.ticket.as_deref(),
+        config.projection,
+    )
+    .await?;
+    let interactive = io::stderr().is_terminal();
+    let mut progress_line = false;
+    eprintln!("Scanning {} for Markdown items...", source.display());
+    let result = xo::content_io::import_markdown_with_progress(
+        &mut session,
+        source,
+        item_type,
+        |progress| match progress {
+            xo::content_io::ImportProgress::Found { total } => {
+                eprintln!("Found {total} item(s) ready to import.");
+            }
+            xo::content_io::ImportProgress::Processed { current, total } => {
+                if interactive {
+                    eprint!("\rImporting items: {current}/{total}");
+                    let _ = io::stderr().flush();
+                    progress_line = true;
+                } else {
+                    eprintln!("Importing item {current}/{total}");
+                }
+            }
+            xo::content_io::ImportProgress::Finalizing => {
+                if progress_line {
+                    eprintln!();
+                    progress_line = false;
+                }
+                eprintln!("Finalizing projection and durable Iroh state...");
+            }
+        },
+    )
+    .await;
+    if progress_line {
+        eprintln!();
+    }
+    let shutdown = session.shutdown().await;
+    let imported = result?;
+    shutdown?;
+    eprintln!("Import finalized and all local stores closed cleanly.");
+    println!("imported={imported}");
     Ok(())
 }
 

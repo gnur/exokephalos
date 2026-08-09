@@ -131,14 +131,22 @@ finally:
         approval_finished.set()
     try:
         os.write(terminal, b"\x1bq")
-        time.sleep(0.2)
-        os.kill(pid, signal.SIGTERM)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            waited, _ = os.waitpid(pid, os.WNOHANG)
+            if waited:
+                pid = 0
+                break
+            time.sleep(0.1)
+        if pid:
+            os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
-        pass
-    try:
-        os.waitpid(pid, 0)
-    except ChildProcessError:
-        pass
+        pid = 0
+    if pid:
+        try:
+            os.waitpid(pid, 0)
+        except ChildProcessError:
+            pass
     os.close(terminal)
 
 raise SystemExit(status if not stopping.is_set() else 0)

@@ -1,6 +1,8 @@
 //! Shared domain, storage, and synchronization contracts for exokephalos.
 
 pub mod authenticated_change;
+#[cfg(feature = "iroh-sync")]
+pub mod automerge_node;
 pub mod automerge_store;
 #[cfg(feature = "native")]
 pub mod backup;
@@ -16,6 +18,8 @@ pub mod iroh_node;
 pub mod local_index;
 pub mod markdown;
 pub mod membership;
+#[cfg(feature = "iroh-sync")]
+pub mod peer_protocol;
 #[cfg(feature = "native")]
 pub mod projection;
 #[cfg(feature = "iroh-sync")]

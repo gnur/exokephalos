@@ -28,6 +28,14 @@ pub enum MembershipError {
     InvalidSignature,
     #[error("membership public key is invalid")]
     InvalidPublicKey,
+    #[error("membership event issuer is not authorized")]
+    UnauthorizedEvent,
+    #[error("membership event references an unknown member")]
+    UnknownMember,
+    #[error("membership public key is already registered")]
+    DuplicateMember,
+    #[error("peer ID is already used by an active member")]
+    DuplicatePeerId,
 }
 
 /// A required, human-readable node identifier. Cryptographic identity uses the membership key.
@@ -233,6 +241,166 @@ impl SignedMembershipEvent {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemberStatus {
+    Active,
+    Rejected,
+    Removed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Member {
+    pub peer_id: PeerId,
+    pub public_key: [u8; 32],
+    pub endpoint_ids: std::collections::BTreeSet<String>,
+    pub status: MemberStatus,
+    pub accepted_actor_sequence: Option<u64>,
+    pub accepted_heads: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct MembershipRegistry {
+    members: std::collections::BTreeMap<String, Member>,
+    peer_ids: std::collections::BTreeMap<PeerId, String>,
+    events: std::collections::BTreeSet<String>,
+}
+
+impl MembershipRegistry {
+    pub fn apply(&mut self, event: &SignedMembershipEvent) -> Result<bool, MembershipError> {
+        event.verify()?;
+        if self.events.contains(&event.event_id) {
+            return Ok(false);
+        }
+        let issuer_active = self
+            .members
+            .get(&event.issuer)
+            .is_some_and(|member| member.status == MemberStatus::Active);
+        match &event.payload {
+            MembershipEvent::Genesis {
+                peer_id,
+                public_key,
+                endpoint_id,
+            } => {
+                if !self.members.is_empty()
+                    || *public_key != event.issuer_public_key
+                    || public_key_fingerprint(public_key) != event.issuer
+                {
+                    return Err(MembershipError::UnauthorizedEvent);
+                }
+                self.insert_member(peer_id, public_key, endpoint_id, MemberStatus::Active)?;
+            }
+            MembershipEvent::JoinApproved {
+                peer_id,
+                public_key,
+                endpoint_id,
+            } => {
+                if !issuer_active {
+                    return Err(MembershipError::UnauthorizedEvent);
+                }
+                self.insert_member(peer_id, public_key, endpoint_id, MemberStatus::Active)?;
+            }
+            MembershipEvent::JoinRejected {
+                peer_id,
+                public_key,
+            } => {
+                if !issuer_active {
+                    return Err(MembershipError::UnauthorizedEvent);
+                }
+                self.insert_member(peer_id, public_key, "", MemberStatus::Rejected)?;
+            }
+            MembershipEvent::EndpointBound {
+                public_key,
+                endpoint_id,
+            } => {
+                let fingerprint = public_key_fingerprint(public_key);
+                if event.issuer != fingerprint {
+                    return Err(MembershipError::UnauthorizedEvent);
+                }
+                let member = self
+                    .members
+                    .get_mut(&fingerprint)
+                    .filter(|member| member.status == MemberStatus::Active)
+                    .ok_or(MembershipError::UnknownMember)?;
+                member.endpoint_ids.insert(endpoint_id.clone());
+            }
+            MembershipEvent::PeerRemoved {
+                peer_id,
+                public_key,
+                accepted_actor_sequence,
+                accepted_heads,
+                ..
+            } => {
+                if !issuer_active {
+                    return Err(MembershipError::UnauthorizedEvent);
+                }
+                let fingerprint = public_key_fingerprint(public_key);
+                let member = self
+                    .members
+                    .get_mut(&fingerprint)
+                    .filter(|member| member.peer_id == *peer_id)
+                    .ok_or(MembershipError::UnknownMember)?;
+                member.status = MemberStatus::Removed;
+                member.accepted_actor_sequence = Some(*accepted_actor_sequence);
+                member.accepted_heads.clone_from(accepted_heads);
+                self.peer_ids.remove(peer_id);
+            }
+        }
+        self.events.insert(event.event_id.clone());
+        Ok(true)
+    }
+
+    fn insert_member(
+        &mut self,
+        peer_id: &PeerId,
+        public_key: &[u8; 32],
+        endpoint_id: &str,
+        status: MemberStatus,
+    ) -> Result<(), MembershipError> {
+        let fingerprint = public_key_fingerprint(public_key);
+        if self.members.contains_key(&fingerprint) {
+            return Err(MembershipError::DuplicateMember);
+        }
+        if status == MemberStatus::Active && self.peer_ids.contains_key(peer_id) {
+            return Err(MembershipError::DuplicatePeerId);
+        }
+        let endpoint_ids = if endpoint_id.is_empty() {
+            std::collections::BTreeSet::new()
+        } else {
+            std::collections::BTreeSet::from([endpoint_id.to_owned()])
+        };
+        self.members.insert(
+            fingerprint.clone(),
+            Member {
+                peer_id: peer_id.clone(),
+                public_key: *public_key,
+                endpoint_ids,
+                status,
+                accepted_actor_sequence: None,
+                accepted_heads: Vec::new(),
+            },
+        );
+        if status == MemberStatus::Active {
+            self.peer_ids.insert(peer_id.clone(), fingerprint);
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn member(&self, fingerprint: &str) -> Option<&Member> {
+        self.members.get(fingerprint)
+    }
+
+    pub fn members(&self) -> impl Iterator<Item = &Member> {
+        self.members.values()
+    }
+
+    #[must_use]
+    pub fn is_active_key(&self, public_key: &[u8; 32]) -> bool {
+        self.member(&public_key_fingerprint(public_key))
+            .is_some_and(|member| member.status == MemberStatus::Active)
+    }
+}
+
 fn canonical_bytes(value: &impl Serialize) -> Result<Vec<u8>, MembershipError> {
     let mut bytes = Vec::new();
     ciborium::into_writer(value, &mut bytes)
@@ -361,5 +529,94 @@ mod tests {
         );
         assert_eq!(restored.public_key(), identity.public_key());
         assert_eq!(restored.fingerprint(), identity.fingerprint());
+    }
+
+    #[test]
+    fn registry_propagates_approval_and_terminal_removal() {
+        let owner = MembershipIdentity::generate(PeerId::parse("owner").unwrap());
+        let candidate = MembershipIdentity::generate(PeerId::parse("phone").unwrap());
+        let workspace = WorkspaceId::new("workspace");
+        let genesis = SignedMembershipEvent::create(
+            &owner,
+            workspace.clone(),
+            time(owner.actor_id().as_str()),
+            MembershipEvent::Genesis {
+                peer_id: owner.peer_id().clone(),
+                public_key: owner.public_key(),
+                endpoint_id: "owner-endpoint".into(),
+            },
+        )
+        .unwrap();
+        let approval = SignedMembershipEvent::create(
+            &owner,
+            workspace.clone(),
+            time(owner.actor_id().as_str()),
+            MembershipEvent::JoinApproved {
+                peer_id: candidate.peer_id().clone(),
+                public_key: candidate.public_key(),
+                endpoint_id: "phone-endpoint".into(),
+            },
+        )
+        .unwrap();
+        let removal = SignedMembershipEvent::create(
+            &owner,
+            workspace,
+            time(owner.actor_id().as_str()),
+            MembershipEvent::PeerRemoved {
+                peer_id: candidate.peer_id().clone(),
+                public_key: candidate.public_key(),
+                accepted_actor_sequence: 4,
+                accepted_heads: vec!["head".into()],
+                reason: None,
+            },
+        )
+        .unwrap();
+
+        let mut registry = MembershipRegistry::default();
+        registry.apply(&genesis).unwrap();
+        registry.apply(&approval).unwrap();
+        assert!(registry.is_active_key(&candidate.public_key()));
+        registry.apply(&removal).unwrap();
+        assert!(!registry.is_active_key(&candidate.public_key()));
+        assert_eq!(
+            registry.member(&candidate.fingerprint()).unwrap().status,
+            MemberStatus::Removed
+        );
+    }
+
+    #[test]
+    fn unknown_key_cannot_approve_a_candidate() {
+        let owner = MembershipIdentity::generate(PeerId::parse("owner").unwrap());
+        let outsider = MembershipIdentity::generate(PeerId::parse("outsider").unwrap());
+        let candidate = MembershipIdentity::generate(PeerId::parse("phone").unwrap());
+        let workspace = WorkspaceId::new("workspace");
+        let genesis = SignedMembershipEvent::create(
+            &owner,
+            workspace.clone(),
+            time(owner.actor_id().as_str()),
+            MembershipEvent::Genesis {
+                peer_id: owner.peer_id().clone(),
+                public_key: owner.public_key(),
+                endpoint_id: "owner-endpoint".into(),
+            },
+        )
+        .unwrap();
+        let forged = SignedMembershipEvent::create(
+            &outsider,
+            workspace,
+            time(outsider.actor_id().as_str()),
+            MembershipEvent::JoinApproved {
+                peer_id: candidate.peer_id().clone(),
+                public_key: candidate.public_key(),
+                endpoint_id: "phone-endpoint".into(),
+            },
+        )
+        .unwrap();
+        let mut registry = MembershipRegistry::default();
+        registry.apply(&genesis).unwrap();
+        assert_eq!(
+            registry.apply(&forged).unwrap_err(),
+            MembershipError::UnauthorizedEvent
+        );
     }
 }

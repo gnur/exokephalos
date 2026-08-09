@@ -140,6 +140,23 @@ impl AutomergeRecordStore {
         self.document.merge(&mut other.document)?;
         Ok(())
     }
+
+    pub fn apply_changes(
+        &mut self,
+        changes: impl IntoIterator<Item = automerge::Change>,
+    ) -> Result<(), AutomergeStoreError> {
+        self.document.apply_changes(changes)?;
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn all_changes(&mut self) -> Vec<automerge::Change> {
+        self.document
+            .get_changes(&[])
+            .into_iter()
+            .cloned()
+            .collect()
+    }
 }
 
 /// Native durable wrapper. Every acknowledged mutation atomically replaces an fsynced snapshot.
@@ -203,6 +220,20 @@ impl PersistentAutomergeStore {
         let changes = self.store.load_incremental(bytes)?;
         self.flush()?;
         Ok(changes)
+    }
+
+    pub fn merge_snapshot(&mut self, bytes: &[u8], actor: &[u8]) -> anyhow::Result<()> {
+        let mut remote = AutomergeRecordStore::load(bytes, actor)?;
+        if remote.workspace_id() != self.store.workspace_id() {
+            anyhow::bail!("remote Automerge snapshot belongs to a different workspace");
+        }
+        self.store.merge(&mut remote)?;
+        self.flush()
+    }
+
+    #[must_use]
+    pub fn snapshot(&mut self) -> Vec<u8> {
+        self.store.save()
     }
 
     pub fn flush(&mut self) -> anyhow::Result<()> {

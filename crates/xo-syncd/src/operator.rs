@@ -6,7 +6,7 @@ use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use bytes::Bytes;
 use http_body_util::{BodyExt as _, Full};
 use hyper::body::Incoming;
@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-use xo_core::iroh_node::{IrohNode, writable_ticket_workspace_id};
+use xo_core::iroh_node::{IrohNode, IrohWorkspace, writable_ticket_workspace_id};
 use xo_core::records::WorkspaceRecords;
 use xo_core::{ActorId, CURRENT_SCHEMA, DeviceRecord};
 
@@ -124,6 +124,74 @@ async fn handle(request: Request<Incoming>, state: &OperatorState) -> Response<B
         .map(str::to_owned);
     if request.method() == Method::POST && request.uri().path() == "/setup" {
         return handle_setup(request, state).await;
+    }
+    if request.method() == Method::GET
+        && request.uri().path().starts_with("/v1/workspaces/")
+        && request.uri().path().ends_with("/invitation")
+    {
+        if !authorized(authorization.as_deref(), &state.inner.token) {
+            return json_response(
+                StatusCode::UNAUTHORIZED,
+                &json!({ "error": "bearer token required" }),
+            );
+        }
+        let workspace_id = request
+            .uri()
+            .path()
+            .trim_start_matches("/v1/workspaces/")
+            .trim_end_matches("/invitation")
+            .trim_end_matches('/');
+        let Some(node) = &state.inner.node else {
+            return json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &json!({ "error": "node unavailable" }),
+            );
+        };
+        return match node.open_workspace_str(workspace_id).await {
+            Ok(Some(workspace)) => match workspace.share(true).await {
+                Ok(invitation) => {
+                    json_response(StatusCode::OK, &json!({ "invitation": invitation }))
+                }
+                Err(error) => json_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &json!({ "error": error.to_string() }),
+                ),
+            },
+            Ok(None) => json_response(
+                StatusCode::NOT_FOUND,
+                &json!({ "error": "workspace not found" }),
+            ),
+            Err(error) => json_response(
+                StatusCode::BAD_REQUEST,
+                &json!({ "error": error.to_string() }),
+            ),
+        };
+    }
+    if request.method() == Method::POST && request.uri().path() == "/v1/members/approve-pending" {
+        if !authorized(authorization.as_deref(), &state.inner.token) {
+            return json_response(
+                StatusCode::UNAUTHORIZED,
+                &json!({ "error": "bearer token required" }),
+            );
+        }
+        let Some(node) = &state.inner.node else {
+            return json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &json!({ "error": "node unavailable" }),
+            );
+        };
+        let mut approved = 0_u64;
+        for workspace_id in node.workspace_ids().await.unwrap_or_default() {
+            let Ok(Some(workspace)) = node.open_workspace_str(&workspace_id).await else {
+                continue;
+            };
+            for request in workspace.pending_requests().await {
+                if workspace.approve_peer(&request.public_key).await.is_ok() {
+                    approved = approved.saturating_add(1);
+                }
+            }
+        }
+        return json_response(StatusCode::OK, &json!({ "approved": approved }));
     }
     route(
         request.method(),
@@ -232,7 +300,7 @@ async fn handle_setup(request: Request<Incoming>, state: &OperatorState) -> Resp
     if workspace_id.is_empty() || ticket.is_empty() {
         return setup_page(
             StatusCode::BAD_REQUEST,
-            Some("Workspace ID and writable ticket are required."),
+            Some("Workspace ID and invitation are required."),
             None,
         );
     }
@@ -264,6 +332,55 @@ async fn handle_setup(request: Request<Incoming>, state: &OperatorState) -> Resp
     );
     let workspace = match node.import_writable_workspace(ticket).await {
         Ok(workspace) => workspace,
+        Err(error) if error.to_string().contains("pending approval") => {
+            let state = state.clone();
+            let node = Arc::clone(node);
+            let ticket = ticket.to_owned();
+            let workspace_id = workspace_id.to_owned();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    match node.import_writable_workspace(&ticket).await {
+                        Ok(workspace) => {
+                            if let Err(error) = complete_workspace_setup(&node, &workspace).await {
+                                state.inner.metrics.errors.fetch_add(1, Ordering::Relaxed);
+                                log_event(
+                                    "error",
+                                    "workspace_setup_failed",
+                                    &json!({
+                                        "workspace_id": workspace_id,
+                                        "error": error.to_string(),
+                                    }),
+                                );
+                                continue;
+                            }
+                            record_workspace(&state, &workspace_id);
+                            break;
+                        }
+                        Err(error) if error.to_string().contains("pending approval") => {}
+                        Err(error) => {
+                            state.inner.metrics.errors.fetch_add(1, Ordering::Relaxed);
+                            log_event(
+                                "error",
+                                "workspace_setup_failed",
+                                &json!({
+                                    "workspace_id": workspace_id,
+                                    "error": error.to_string(),
+                                }),
+                            );
+                            break;
+                        }
+                    }
+                }
+            });
+            return setup_page(
+                StatusCode::ACCEPTED,
+                Some(
+                    "Membership request submitted. Approve this peer from an active workspace; setup will finish automatically.",
+                ),
+                None,
+            );
+        }
         Err(error) => {
             state.inner.metrics.errors.fetch_add(1, Ordering::Relaxed);
             return setup_page(
@@ -341,6 +458,43 @@ async fn handle_setup(request: Request<Incoming>, state: &OperatorState) -> Resp
         &json!({ "workspace_id": workspace_id }),
     );
     setup_page(StatusCode::OK, None, Some(workspace_id))
+}
+
+async fn complete_workspace_setup(node: &IrohNode, workspace: &IrohWorkspace) -> Result<()> {
+    WorkspaceRecords::new(workspace)
+        .put_device(&DeviceRecord {
+            schema: CURRENT_SCHEMA,
+            endpoint_id: node.endpoint_id().to_string(),
+            author_id: ActorId::new(workspace.author_id().to_string()),
+            label: "xo-syncd".to_owned(),
+            capabilities: std::collections::BTreeSet::from([
+                "write".to_owned(),
+                "daemon".to_owned(),
+            ]),
+            last_seen_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .ok()
+                .and_then(|duration| duration.as_millis().try_into().ok()),
+            retired_at: None,
+        })
+        .await
+        .context("register daemon device")?;
+    crate::spawn_workspace_logging(workspace.clone(), workspace.id().to_string());
+    Ok(())
+}
+
+fn record_workspace(state: &OperatorState, workspace_id: &str) {
+    if let Ok(mut ids) = state.inner.workspace_ids.write()
+        && !ids.iter().any(|id| id == workspace_id)
+    {
+        ids.push(workspace_id.to_owned());
+        ids.sort();
+    }
+    log_event(
+        "info",
+        "workspace_configured",
+        &json!({ "workspace_id": workspace_id }),
+    );
 }
 
 fn setup_page(status: StatusCode, error: Option<&str>, connected: Option<&str>) -> Response<Body> {
@@ -640,17 +794,23 @@ mod tests {
     async fn setup_page_imports_matching_writable_workspace() {
         let directory = tempfile::tempdir().unwrap();
         let source = Arc::new(
-            IrohNode::persistent(directory.path().join("source"))
-                .await
-                .unwrap(),
+            IrohNode::persistent_with_peer(
+                directory.path().join("source"),
+                xo_core::PeerId::parse("setup-source").unwrap(),
+            )
+            .await
+            .unwrap(),
         );
         let workspace = source.create_workspace().await.unwrap();
         let workspace_id = workspace.id().to_string();
         let ticket = workspace.share(true).await.unwrap();
         let daemon = Arc::new(
-            IrohNode::persistent(directory.path().join("daemon"))
-                .await
-                .unwrap(),
+            IrohNode::persistent_with_peer(
+                directory.path().join("daemon"),
+                xo_core::PeerId::parse("setup-daemon").unwrap(),
+            )
+            .await
+            .unwrap(),
         );
         let token = "a".repeat(32);
         let state = OperatorState::new(Arc::clone(&daemon), Vec::new(), token.clone());
@@ -676,11 +836,20 @@ mod tests {
             ),
         )
         .await;
-        assert!(connected.starts_with("HTTP/1.1 200"));
-        assert!(connected.contains("Daemon connected"));
-        assert!(connected.contains(&workspace_id));
+        assert!(connected.starts_with("HTTP/1.1 202"));
+        assert!(connected.contains("Membership request submitted"));
         assert!(!connected.contains(&ticket));
-        assert_eq!(daemon.workspace_ids().await.unwrap(), vec![workspace_id]);
+        let request = workspace.pending_requests().await.remove(0);
+        workspace.approve_peer(&request.public_key).await.unwrap();
+        let mut configured = false;
+        for _ in 0..100 {
+            if daemon.workspace_ids().await.unwrap() == vec![workspace_id.clone()] {
+                configured = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(configured, "approved daemon did not complete setup");
 
         shutdown_tx.send(()).unwrap();
         server.await.unwrap().unwrap();

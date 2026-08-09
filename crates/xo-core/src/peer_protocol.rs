@@ -18,6 +18,8 @@ pub struct WorkspaceInvitation {
     pub workspace_id: String,
     pub bootstrap_peers: Vec<iroh::EndpointAddr>,
     pub gossip_topic: [u8; 32],
+    pub base_gossip_topic: [u8; 32],
+    pub membership_epoch: u64,
     pub genesis_key_fingerprint: String,
 }
 
@@ -306,6 +308,8 @@ mod tests {
                 iroh::SecretKey::generate().public(),
             )],
             gossip_topic: [7; 32],
+            base_gossip_topic: [7; 32],
+            membership_epoch: 0,
             genesis_key_fingerprint: "genesis".into(),
         };
         assert_eq!(

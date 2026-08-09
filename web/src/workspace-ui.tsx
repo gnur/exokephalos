@@ -46,6 +46,9 @@ export function WorkspaceExperience({
   onMutate,
   onRefresh,
   onUpdate,
+  onApprovePeer,
+  onRejectPeer,
+  onRemovePeer,
   onWipe,
 }: {
   report: RuntimeReport;
@@ -62,6 +65,9 @@ export function WorkspaceExperience({
   onMutate: (input: NoteMutationInput) => Promise<RuntimeReport | undefined>;
   onRefresh: () => void;
   onUpdate: () => void;
+  onApprovePeer: (fingerprint: string) => void;
+  onRejectPeer: (fingerprint: string) => void;
+  onRemovePeer: (fingerprint: string) => void;
   onWipe: () => void;
 }) {
   const initialPath = useMemo(() => window.location.pathname.split('/').filter(Boolean), []);
@@ -268,6 +274,9 @@ export function WorkspaceExperience({
             ticketVisible={ticketVisible}
             onTicketVisible={setTicketVisible}
             onRefresh={onRefresh}
+            onApprovePeer={onApprovePeer}
+            onRejectPeer={onRejectPeer}
+            onRemovePeer={onRemovePeer}
             onRestore={(noteId) => void onMutate({ operation: 'restore', noteId })}
             onWipe={onWipe}
           />
@@ -413,16 +422,27 @@ function EditorPane({ editingId, title, draft, busy, error, onTitle, onDraft, on
   return <section className="single-pane editor"><div className="detail-heading"><div><p className="legacy-eyebrow">{editingId ? `Edit ${editingId}` : 'Create item'}</p><h2>Markdown editor</h2></div><button className="icon-button" onClick={onCancel} aria-label="Close editor"><X /></button></div>{error ? <p className="error-message">{error}</p> : null}{!editingId ? <label>Title<input autoFocus value={title} onChange={(event) => onTitle(event.target.value)} /></label> : null}<label>Frontmatter and Markdown<textarea className="raw-editor" value={draft} onChange={(event) => onDraft(event.target.value)} spellCheck="true" /></label><div className="button-row"><button className="button" onClick={onCancel}>Cancel</button><button className="button primary" disabled={busy || (!editingId && !title.trim())} onClick={onSave}>{busy ? <RefreshCw className="spin" /> : <Check />} Save note</button></div></section>;
 }
 
-function SettingsPane({ report, busy, ticketVisible, onTicketVisible, onRefresh, onRestore, onWipe }: {
+function SettingsPane({ report, busy, ticketVisible, onTicketVisible, onRefresh, onApprovePeer, onRejectPeer, onRemovePeer, onRestore, onWipe }: {
   report: RuntimeReport;
   busy: boolean;
   ticketVisible: boolean;
   onTicketVisible: (visible: boolean) => void;
   onRefresh: () => void;
+  onApprovePeer: (fingerprint: string) => void;
+  onRejectPeer: (fingerprint: string) => void;
+  onRemovePeer: (fingerprint: string) => void;
   onRestore: (noteId: string) => void;
   onWipe: () => void;
 }) {
-  return <section className="single-pane settings-pane"><div className="settings-section"><p className="legacy-eyebrow">Iroh workspace</p><h2>Synchronization</h2><div className="status-grid compact"><Status icon={<Cloud />} label="Transport" value="relay-only E2EE" /><Status icon={<Radio />} label="Peers" value={String(report.status.peers)} /><Status icon={<Check />} label="Pending writes" value={String(report.pendingWrites)} /><Status icon={<KeyRound />} label="Workspace" value={short(report.status.workspaceId)} /></div><button className="button" disabled={busy} onClick={onRefresh}><RefreshCw className={busy ? 'spin' : ''} /> Sync now</button></div><div className="settings-section ticket-panel"><div><p className="legacy-eyebrow">Writable capability</p><h2>Workspace ticket</h2><p>Treat this ticket as a secret.</p></div><div className="button-row"><button className="button" onClick={() => onTicketVisible(!ticketVisible)}>{ticketVisible ? 'Hide' : 'Reveal'} ticket</button><button className="button" onClick={() => void navigator.clipboard.writeText(report.ticket ?? '')}><Copy /> Copy</button></div>{ticketVisible ? <textarea className="ticket-output" readOnly value={report.ticket ?? ''} /> : null}</div>{report.workspace?.deleted.length ? <details className="deleted-panel"><summary>Deleted notes ({report.workspace.deleted.length})</summary>{report.workspace.deleted.map((note) => <div key={note.id}><span><strong>{noteTitle(note)}</strong><small>{note.id}</small></span><button className="button" onClick={() => onRestore(note.id)}>Restore</button></div>)}</details> : null}{report.workspace?.diagnostics.map((diagnostic) => <p className="error-message" key={diagnostic}>{diagnostic}</p>)}<details className="raw-panel"><summary>Raw Iroh document entries ({report.entries.length})</summary><div className="entry-list">{report.entries.map((entry) => <EntryRow key={entry.keyBase64} entry={entry} />)}</div></details><div className="settings-section danger-zone"><p className="legacy-eyebrow">Local browser data</p><h2>Reset this client</h2><p>Remove the encrypted identity, workspace capability, durable document cache, pending writes, and offline application files from this browser.</p><button className="button danger-button" disabled={busy} onClick={onWipe}><Trash2 /> Wipe all browser data</button></div></section>;
+  return <section className="single-pane settings-pane">
+    <div className="settings-section"><p className="legacy-eyebrow">Automerge workspace</p><h2>Synchronization</h2><div className="status-grid compact"><Status icon={<Cloud />} label="Transport" value="relay-only E2EE" /><Status icon={<Radio />} label="Peers" value={String(report.status.peers)} /><Status icon={<Check />} label="Pending writes" value={String(report.pendingWrites)} /><Status icon={<KeyRound />} label="Workspace" value={short(report.status.workspaceId)} /></div><button className="button" disabled={busy} onClick={onRefresh}><RefreshCw className={busy ? 'spin' : ''} /> Sync now</button></div>
+    <div className="settings-section"><p className="legacy-eyebrow">Authenticated membership</p><h2>Peers</h2>{report.pendingMembers.map((peer) => <div className="entry-row" key={peer.fingerprint}><div><strong>{peer.peerId}</strong><code>{short(peer.fingerprint)}</code></div><div className="button-row"><button className="button" disabled={busy} onClick={() => onApprovePeer(peer.fingerprint)}>Approve</button><button className="button danger-button" disabled={busy} onClick={() => onRejectPeer(peer.fingerprint)}>Reject</button></div></div>)}{report.members.map((peer) => <div className="entry-row" key={peer.fingerprint}><div><strong>{peer.peerId}</strong><span>{peer.status} · {short(peer.fingerprint)}</span></div>{peer.fingerprint !== report.status.authorId && peer.status === 'active' ? <button className="button danger-button" disabled={busy} onClick={() => onRemovePeer(peer.fingerprint)}>Remove</button> : null}</div>)}</div>
+    <div className="settings-section ticket-panel"><div><p className="legacy-eyebrow">Workspace invitation</p><h2>Invitation</h2><p>New peers remain quarantined until an active member approves them.</p></div><div className="button-row"><button className="button" onClick={() => onTicketVisible(!ticketVisible)}>{ticketVisible ? 'Hide' : 'Reveal'} ticket</button><button className="button" onClick={() => void navigator.clipboard.writeText(report.ticket ?? '')}><Copy /> Copy</button></div>{ticketVisible ? <textarea className="ticket-output" readOnly value={report.ticket ?? ''} /> : null}</div>
+    {report.workspace?.deleted.length ? <details className="deleted-panel"><summary>Deleted notes ({report.workspace.deleted.length})</summary>{report.workspace.deleted.map((note) => <div key={note.id}><span><strong>{noteTitle(note)}</strong><small>{note.id}</small></span><button className="button" onClick={() => onRestore(note.id)}>Restore</button></div>)}</details> : null}
+    {report.workspace?.diagnostics.map((diagnostic) => <p className="error-message" key={diagnostic}>{diagnostic}</p>)}
+    <details className="raw-panel"><summary>Raw Automerge records ({report.entries.length})</summary><div className="entry-list">{report.entries.map((entry) => <EntryRow key={entry.keyBase64} entry={entry} />)}</div></details>
+    <div className="settings-section danger-zone"><p className="legacy-eyebrow">Local browser data</p><h2>Reset this client</h2><p>Remove the encrypted identity, workspace invitation, durable Automerge replica, pending writes, and offline application files from this browser.</p><button className="button danger-button" disabled={busy} onClick={onWipe}><Trash2 /> Wipe all browser data</button></div>
+  </section>;
 }
 
 function Status({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {

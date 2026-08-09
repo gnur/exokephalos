@@ -95,12 +95,28 @@ export interface SyncStatus {
   authorId: string;
   peers: number;
   writable: boolean;
+  pendingApproval?: boolean;
 }
 
 export interface WorkspaceOutcome {
   workspaceId: string;
   ticket: string;
   syncError?: string;
+}
+
+export interface WorkspaceMember {
+  peerId: string;
+  fingerprint: string;
+  publicKey: string;
+  status: string;
+  endpoints: string[];
+}
+
+export interface PendingMember {
+  peerId: string;
+  publicKey: string;
+  endpointId: string;
+  fingerprint: string;
 }
 
 export interface RuntimeReport {
@@ -116,6 +132,8 @@ export interface RuntimeReport {
   pendingWrites: number;
   workspace?: WorkspaceSnapshot;
   mutatedNoteId?: string;
+  members: WorkspaceMember[];
+  pendingMembers: PendingMember[];
 }
 
 export type WorkerMethod =
@@ -129,6 +147,9 @@ export type WorkerMethod =
   | 'mutate-note'
   | 'refresh-sync'
   | 'share-ticket'
+  | 'approve-peer'
+  | 'reject-peer'
+  | 'remove-peer'
   | 'wipe-local-data';
 
 export interface PutEntryInput {

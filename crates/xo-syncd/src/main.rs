@@ -28,6 +28,9 @@ struct Cli {
     /// Directory containing local daemon state.
     #[arg(long, default_value = ".xo/syncd")]
     state_dir: PathBuf,
+    /// Human-readable peer ID; defaults to the system hostname.
+    #[arg(long)]
+    peer_id: Option<String>,
     /// Address for health, metrics, and authenticated operator endpoints.
     #[arg(long, default_value = "127.0.0.1:9464")]
     operator_bind: SocketAddr,
@@ -39,7 +42,18 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let node = Arc::new(xo_core::iroh_node::IrohNode::persistent(&cli.state_dir).await?);
+    let peer_id = if let Some(value) = cli.peer_id {
+        xo_core::PeerId::parse(value)?
+    } else {
+        let hostname = hostname::get()
+            .context("read system hostname")?
+            .into_string()
+            .map_err(|_| anyhow::anyhow!("system hostname is not valid UTF-8"))?;
+        xo_core::PeerId::parse(hostname)?
+    };
+    let node = Arc::new(
+        xo_core::iroh_node::IrohNode::persistent_with_peer(&cli.state_dir, peer_id).await?,
+    );
     let workspace_ids = node.workspace_ids().await?;
     for workspace_id in &workspace_ids {
         let workspace = node

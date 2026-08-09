@@ -277,11 +277,10 @@ pub struct DeviceRecord {
 pub struct WorkspaceDescriptor {
     pub schema: SchemaVersion,
     pub workspace_id: WorkspaceId,
-    pub docs_ticket: String,
+    pub invitation: String,
     pub bootstrap_peers: Vec<String>,
     pub relay_mode: String,
     pub encrypted_workspace_key: Option<String>,
-    pub read_only: bool,
 }
 
 impl AssetRecord {
@@ -394,9 +393,9 @@ impl WorkspaceDescriptor {
                 field: "workspace_id",
             });
         }
-        if self.docs_ticket.is_empty() {
+        if self.invitation.is_empty() {
             return Err(DomainError::EmptyField {
-                field: "docs_ticket",
+                field: "invitation",
             });
         }
         Ok(())

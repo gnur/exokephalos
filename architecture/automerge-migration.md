@@ -1,6 +1,6 @@
 # Automerge migration
 
-Status: approved for implementation.
+Status: implemented. Iroh Docs and Iroh Blobs were removed; native and browser replicas now use the protocols and persistence model below.
 
 ## Target
 

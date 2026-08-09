@@ -24,11 +24,12 @@ import type {
 
 const scope = self as DedicatedWorkerGlobalScope;
 const DATABASE = 'xo-web';
-const DATABASE_VERSION = 2;
+const DATABASE_VERSION = 3;
 const CHECKPOINT_STORE = 'runtime-checkpoints';
 const VAULT_STORE = 'vault';
 const ENTRY_STORE = 'document-entries';
 const PENDING_STORE = 'pending-writes';
+const REPLICA_STORE = 'automerge-replicas';
 const VAULT_KEY_ID = 'browser-key';
 const VAULT_STATE_ID = 'identity';
 
@@ -78,7 +79,7 @@ function openDatabase() {
     request.onerror = () => reject(request.error ?? new Error('IndexedDB open failed'));
     request.onupgradeneeded = () => {
       const db = request.result;
-      for (const store of [CHECKPOINT_STORE, VAULT_STORE, ENTRY_STORE, PENDING_STORE]) {
+      for (const store of [CHECKPOINT_STORE, VAULT_STORE, ENTRY_STORE, PENDING_STORE, REPLICA_STORE]) {
         if (!db.objectStoreNames.contains(store)) db.createObjectStore(store, { keyPath: 'id' });
       }
     };
@@ -183,11 +184,23 @@ async function initializeIroh() {
   node = await IrohDocNode.spawn(
     decodeBase64(identity.endpointSecret),
     decodeBase64(identity.authorSecret),
+    identity.peerId,
   );
   if (!identity.ticket) return;
   try {
-    const outcome = JSON.parse(await node.joinWorkspace(identity.ticket)) as WorkspaceOutcome;
-    lastSyncError = outcome.syncError;
+    const replica = await getRecord<{ id: string; value: string }>(REPLICA_STORE, 'active');
+    if (replica?.value) {
+      await node.restoreReplica(identity.ticket, replica.value);
+      try {
+        await node.refreshSync();
+        lastSyncError = undefined;
+      } catch (cause) {
+        lastSyncError = errorMessage(cause);
+      }
+    } else {
+      const outcome = JSON.parse(await node.joinWorkspace(identity.ticket)) as WorkspaceOutcome;
+      lastSyncError = outcome.syncError;
+    }
     await restoreDurableBrowserEntries();
     await syncPendingWrites();
   } catch (cause) {
@@ -212,6 +225,7 @@ async function createWorkspace() {
   const outcome = JSON.parse(await requireNode().createWorkspace()) as WorkspaceOutcome;
   await saveIdentity({ ...requireIdentity(), ticket: outcome.ticket });
   lastSyncError = undefined;
+  await persistActiveReplica();
   return report();
 }
 
@@ -220,14 +234,16 @@ async function joinWorkspace(ticket: string) {
   const previous = JSON.parse(await requireNode().statusJson()) as SyncStatus;
   const outcome = JSON.parse(await requireNode().joinWorkspace(ticket.trim())) as WorkspaceOutcome;
   if (previous.workspaceId && previous.workspaceId !== outcome.workspaceId) {
-    const tx = requireDatabase().transaction([ENTRY_STORE, PENDING_STORE], 'readwrite');
+    const tx = requireDatabase().transaction([ENTRY_STORE, PENDING_STORE, REPLICA_STORE], 'readwrite');
     tx.objectStore(ENTRY_STORE).clear();
     tx.objectStore(PENDING_STORE).clear();
+    tx.objectStore(REPLICA_STORE).clear();
     await transactionComplete(tx);
     workspaceCache = undefined;
   }
   await saveIdentity({ ...requireIdentity(), ticket: outcome.ticket });
   lastSyncError = outcome.syncError;
+  await persistActiveReplica();
   try {
     await syncPendingWrites();
   } catch (cause) {
@@ -339,15 +355,23 @@ async function restoreDurableBrowserEntries() {
   if (entries.length) await requireNode().restoreAuthorEntries(JSON.stringify(entries));
 }
 
+async function persistActiveReplica() {
+  const status = JSON.parse(await requireNode().statusJson()) as SyncStatus;
+  if (status.workspaceId && status.writable) {
+    await putRecord(REPLICA_STORE, { id: 'active', value: await requireNode().replicaBase64() });
+  }
+}
+
 async function refreshEntryCache() {
   const entries = JSON.parse(await requireNode().entriesJson()) as DocumentEntry[];
   const tx = requireDatabase().transaction(ENTRY_STORE, 'readwrite');
   const store = tx.objectStore(ENTRY_STORE);
-  // Docs uses immutable revision/config keys and explicit tombstones. Merging
+  // xo uses immutable revision/config keys and explicit tombstones. Merging
   // keeps the durable replica usable while remote content is still arriving,
   // instead of erasing it whenever an in-memory Iroh node starts empty.
   for (const entry of entries) store.put({ id: entry.keyBase64, ...entry });
   await transactionComplete(tx);
+  await persistActiveReplica();
 }
 
 async function cachedEntries() {
@@ -369,6 +393,12 @@ async function report(): Promise<RuntimeReport> {
     : { endpointId: '', authorId: '', peers: 0, writable: false };
   const entries = await cachedEntries();
   const workspace = status.workspaceId ? resolvedWorkspace(entries) : undefined;
+  const members = status.workspaceId
+    ? JSON.parse(await requireNode().membersJson())
+    : [];
+  const pendingMembers = status.workspaceId
+    ? JSON.parse(await requireNode().pendingMembersJson())
+    : [];
   return {
     runtime: JSON.parse(runtime_info()) as RuntimeInfo,
     peerId: identity?.peerId,
@@ -381,6 +411,8 @@ async function report(): Promise<RuntimeReport> {
     syncError: lastSyncError,
     pendingWrites: (await allRecords<PendingWrite>(PENDING_STORE)).length,
     workspace: workspace?.value,
+    members,
+    pendingMembers,
   };
 }
 
@@ -476,6 +508,21 @@ async function handle(request: WorkerRequest): Promise<unknown> {
       const ticket = await requireNode().shareTicket();
       await saveIdentity({ ...requireIdentity(), ticket });
       return ticket;
+    }
+    case 'approve-peer':
+      await requireNode().approvePeer(request.payload as string);
+      await persistActiveReplica();
+      return report();
+    case 'reject-peer':
+      await requireNode().rejectPeer(request.payload as string);
+      await persistActiveReplica();
+      return report();
+    case 'remove-peer': {
+      await requireNode().removePeer(request.payload as string);
+      const ticket = await requireNode().shareTicket();
+      await saveIdentity({ ...requireIdentity(), ticket });
+      await persistActiveReplica();
+      return report();
     }
     case 'wipe-local-data':
       await wipeLocalData();

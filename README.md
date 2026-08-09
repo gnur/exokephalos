@@ -51,25 +51,24 @@ Workspace synchronization is **peer-to-peer**. Iroh attempts direct paths
 between known endpoints and can use a relay only when the peers cannot connect
 directly. A relay forwards encrypted traffic; it is not an xo application
 server, does not host workspace APIs, and is not a database or lock manager.
-Native and browser peers use the same document, blob, and gossip protocols, so a
-browser can synchronize with a native peer without a special browser gateway.
+Native and browser peers use the same Automerge and authenticated Iroh QUIC
+protocols, so a browser synchronizes with native peers without a gateway.
 
 The synchronized content travels over Iroh's end-to-end encrypted connections.
-Relays and intermediate network infrastructure are used for connectivity, not
-for reading or resolving notes. The workspace capability in a writable ticket
-controls who may join and publish; endpoint identities, author identities, and
-browser secrets are persisted locally and treated as secrets. A writable ticket
-is equivalent to permission to write to the workspace—share it only through a
-private channel. Read-only tickets can replicate without publishing changes.
+Relays provide connectivity but cannot read or resolve notes. Invitations carry
+discovery information only: a new Ed25519 membership key remains quarantined
+until an active member approves it. Every Automerge change is signed, and
+removed keys are permanently denied after their accepted causal frontier.
+Read-only membership and bearer write capabilities are intentionally unsupported.
 
 xo-syncd does not weaken this model. It is simply another authenticated replica
 in the mesh. A browser can sync directly with it, two native clients can sync
 with each other, and automatic peer discovery can form a full mesh as peers
-learn about one another. When a device reconnects, immutable revisions and blob
-content converge without requiring a central coordinator.
+learn about one another. When a device reconnects, immutable revisions and
+Automerge records converge without requiring a central coordinator.
 
 The Markdown directory is a **projection**, not the transport or complete
-backup. Records, revision history, device identities, capabilities, and blobs
+backup. Records, revision history, membership identities, and signed Automerge changes
 live in the local state directory. Keep both the projection and state directory.
 
 ## Example workflows
@@ -168,7 +167,7 @@ The installer detects your OS and CPU architecture (Linux x86-64/ARM64 or macOS 
 
 Native multi-peer CI tests use an ephemeral in-process Iroh relay, while public N0 relay coverage remains an opt-in network test.
 
-When systemd setup is selected, the installer prompts for both the workspace ID and writable ticket before importing and starting the daemon. To seed it directly from a TUI invitation, provide both values:
+When systemd setup is selected, the installer prompts for both the workspace ID and workspace invitation before importing and starting the daemon. To seed it directly from a TUI invitation, provide both values:
 
 ```console
 curl -fsSL https://xo.exokephalos.dev/install.sh \
@@ -180,12 +179,12 @@ The installer imports that ticket into the user daemon state before enabling the
 ## Run the xo-web PWA
 
 `xo-web` is a static client-side application with a typed dedicated-worker RPC
-layer, sandboxed Steel, and direct browser Iroh Docs/Blobs/Gossip in Rust
-WebAssembly. It can create a writable document, join an existing writable
-ticket, synchronize through Iroh's end-to-end encrypted browser relay, create
-and edit notes offline, recover cached records and pending revisions after reload,
-and converge two browser contexts through a native `xo-syncd` peer. Endpoint and
-author keys plus the writable capability are encrypted in IndexedDB. The PWA
+layer, sandboxed Steel, and direct browser Automerge/Iroh synchronization in Rust
+WebAssembly. It can create an Automerge workspace, request authenticated
+membership, synchronize through Iroh's end-to-end encrypted browser relay,
+create and edit notes offline, recover its real Automerge replica and pending
+revisions after reload, and converge browser and native peers. Endpoint and
+membership keys plus the invitation are encrypted in IndexedDB. The PWA
 uses no application service or application API.
 
 The workspace restores the original mobile-first interaction model from the Go
@@ -203,12 +202,11 @@ ten minutes. Only a changed deployment produces an explicit **Update** button.
 
 ### Pair a phone from the TUI
 
-Press `Space`, then `m` in the TUI to create a writable invitation and display a QR code.
-Scanning it opens `https://xo.exokephalos.dev/`, imports the writable capability,
-starts relay synchronization in the background, stores the encrypted browser
-identity and a durable IndexedDB document cache, and removes the capability from
-the address bar only after import
-succeeds. Invitation fragments are also handled when an already-open PWA receives
+Press `Space`, then `m` in the TUI to create an invitation and display a QR code.
+Scanning it opens `https://xo.exokephalos.dev/`, submits the browser's visible
+peer ID and Ed25519 fingerprint for approval, and stores its encrypted identity
+and durable Automerge replica. Approve it with `Space`, then `i`; synchronization
+starts immediately afterward and the invitation is removed from the address bar. Invitation fragments are also handled when an already-open PWA receives
 a new setup link; a sleeping peer no longer makes the invitation itself time out. The capability is encoded in the URL
 fragment, so it is not included in the HTTP request. Treat the QR code and copied
 setup link as secrets. On reload, cached records are immediately available and
@@ -280,15 +278,12 @@ browser workspace durability belongs in IndexedDB.
 
 ## How synchronization works
 
-### Iroh documents and the Markdown projection
+### Automerge and the Markdown projection
 
-An xo workspace is an [Iroh Docs](https://www.iroh.computer/docs) namespace.
-Every TUI and `xo-syncd` instance keeps a persistent local replica in its own
-state directory. A replica contains:
-
-- immutable note revisions and one current head per author;
-- workspace configuration, device records, and asset metadata; and
-- content hashes whose bytes are transferred through Iroh Blobs.
+An xo workspace is one Automerge document. Every TUI, PWA, and `xo-syncd`
+instance keeps a durable local replica. A replica contains immutable note
+revisions, per-author heads, workspace configuration, membership events,
+device records, tombstones, and small asset bytes.
 
 The Markdown directory is a local projection of that replicated state, not the
 transport or source of truth. xo turns local Markdown edits into new immutable
@@ -296,12 +291,11 @@ revisions and materializes incoming revisions back into canonical Markdown
 paths. This is why the projection remains editable while the machine is
 offline.
 
-An Iroh ticket contains the document capability, workspace ID, and addressing
-information for one or more peers. A writable ticket grants write access to the
-whole workspace; treat it like a secret. A read-only ticket can replicate data
-but cannot publish revisions. Tickets are needed to establish a peer
-relationship, not for every launch: Iroh stores known peers in the state
-directory and xo resumes synchronization on restart.
+A workspace invitation contains its protocol version, workspace ID, bootstrap
+addresses, Gossip topic, and genesis-key fingerprint. A candidate submits its
+peer ID, membership public key, and endpoint binding, then waits for approval
+from any active member. Known peers and the durable Automerge replica survive
+restart, so the invitation is not needed for every launch.
 
 Synchronization is peer-to-peer and eventually consistent. Iroh attempts a
 direct connection and can use its configured relay when a direct path is not
@@ -339,7 +333,7 @@ revision garbage collection. This is safe for offline peers and conflict
 recovery, but a long-lived workspace with heavily edited notes will eventually
 need explicit compaction. Compaction must retain current heads and unresolved
 branches, establish a replicated checkpoint, and account for active or retired
-offline peers before deleting predecessor records and unreferenced blobs; a
+offline peers before deleting predecessor records and unreferenced asset content; a
 local "keep the last N revisions" deletion would break convergence and is not
 implemented.
 
@@ -372,21 +366,21 @@ Markdown into `~/notes`, and uses Space as the TUI leader key:
   (leader-key " "))
 ```
 
-On this first launch, xo creates a local Iroh endpoint and writable document,
-records it as the active workspace, installs the default `xo.scm`, and opens
+On this first launch, xo creates separate membership and Iroh identities plus a
+local Automerge workspace, installs the default `xo.scm`, and opens
 the TUI. Create or import some notes and verify that the local projection works
 before adding a server. At this point the workspace is fully usable offline.
 
 Keep the state directory as well as the Markdown projection. The state
-directory contains the endpoint identity, document capabilities, revision
-history, and blobs; the projection alone is not a complete backup.
+directory contains endpoint and membership identities, the Automerge snapshot,
+signed changes, and revision history; the projection alone is not a complete backup.
 
 ### 2. Start an empty xo-syncd service
 
 Install and start `xo-syncd` on the always-on host. The systemd and container
 options are documented under [Running xo-syncd](#running-xo-syncd). Do not seed
-a second workspace: the pairing flow imports the document created by the first
-TUI.
+a second workspace: the pairing flow requests admission to the workspace created
+by the first TUI.
 
 The operator listener remains bound to loopback. Its workspace setup form does
 not require an operator token; authenticated status and metrics APIs still use
@@ -430,11 +424,11 @@ Transfer the printed ticket privately and use it once on the new client:
 xo --ticket '<WRITABLE_TICKET>'
 ```
 
-That launch imports the existing Iroh document, records it as the active local
-workspace, starts synchronization, and opens the TUI. Later launches use plain
-`xo`. Repeat these steps for any other optional clients. Add `--read-only` to
-`xo-admin invite` when a client should replicate but not publish changes. Never
-run `xo-admin` and `xo-syncd` concurrently against the same state directory.
+The first launch submits a membership request. Approve the displayed peer ID and
+fingerprint from an active TUI (`Space`, then `i`) and retry the launch. It then
+stores the Automerge workspace, starts synchronization, and opens the TUI.
+Later launches use plain `xo`. Read-only membership is not supported. Never run
+`xo-admin` and `xo-syncd` concurrently against the same state directory.
 
 ## Running xo-syncd
 
@@ -463,12 +457,12 @@ assets=0
 configs=0
 ```
 
-Save both `workspace_id` and `ticket`. A writable ticket is a capability: anyone
-who possesses it can join and write to the workspace. Transfer it privately and
-do not commit it to a repository or put it in `config.scm`.
+Save both `workspace_id` and `ticket`. An invitation lets a candidate contact
+the workspace but does not grant membership. An active peer must approve the
+candidate's peer ID and Ed25519 fingerprint.
 
-The state directory contains the server's endpoint identity, workspace records,
-and blobs. Back it up and do not delete `endpoint.key`.
+The state directory contains endpoint and membership identities, the Automerge
+snapshot, and signed changes. Back it up and protect the identity files.
 
 ### Start the daemon directly
 
@@ -599,7 +593,7 @@ The default configuration uses `~/.local/share/xo` for replicated local state,
 
 ### Join with a writable invitation
 
-Use a writable ticket generated by an existing peer:
+Use a workspace invitation generated by an existing peer:
 
 ```console
 xo --ticket '<WRITABLE_TICKET>'
@@ -714,7 +708,7 @@ converted to the equivalent instant in the system time zone, including the
 historically correct daylight-saving offset. The source tree is never modified.
 The command reports the number of discovered items, updates an in-place
 `current/total` counter on terminals, and does not report completion until the
-projection, Iroh Docs engine, and blob database have been finalized and closed.
+projection, Automerge snapshot, signed-change log, and local index have been finalized and closed.
 
 `xo export` writes winning workspace notes as conventional Markdown:
 
@@ -843,7 +837,7 @@ configuration is kept in replicated state and edited with `Space`, then `c`.
 ## Detailed TUI-to-xo-syncd pairing flow
 
 If the workspace was created in the TUI, press `Space`, then `j` to open **Connect
-xo-syncd**. The writable ticket is hidden by default.
+xo-syncd**. The workspace invitation is hidden by default.
 
 1. Press `F2` to reveal the ticket and generated installer command.
 2. Press `U` to copy the installer command and run it on the Linux daemon host.
@@ -851,7 +845,7 @@ xo-syncd**. The writable ticket is hidden by default.
    command, verifies that they match, imports the workspace into the daemon's
    separate state directory, and starts the systemd user unit.
 3. Alternatively, open `http://127.0.0.1:9464/setup`, entering the displayed
-   workspace ID and writable ticket. For a remote daemon, temporarily forward
+   workspace ID and workspace invitation. For a remote daemon, temporarily forward
    its loopback listener:
 
    ```console
@@ -859,7 +853,7 @@ xo-syncd**. The writable ticket is hidden by default.
    ```
 
 The setup form requires no operator token because the listener is loopback-only.
-It validates that the writable ticket belongs to the entered workspace, imports
+It validates that the workspace invitation belongs to the entered workspace, imports
 it, and waits for initial synchronization. The daemon then connects back to the
 TUI automatically, so there is no return ticket to paste. Press `c` to copy only
 the ticket or Enter/Esc to close the pairing screen. The setup page does not
@@ -899,7 +893,7 @@ xo-admin restore /srv/backups/xo-2026-07-22 /var/lib/xo-syncd-restored
   loopback and use an SSH tunnel, or place it behind a suitably secured reverse
   proxy.
 - Ticket revocation is not equivalent to deleting a string that has already
-  been shared. Use device retirement or namespace rotation when a capability or
+  been shared. Use permanent membership-key removal when a capability or
   device must be revoked.
 - The binaries are not yet packaged by this repository; build or deploy the
   release binaries directly.

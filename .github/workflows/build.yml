@@ -261,9 +261,15 @@ jobs:
             sleep 0.5
           done
           curl --fail --silent http://127.0.0.1:19464/healthz > /dev/null
+          operator_token=$(cat "${fixture}/state/operator.token")
+          workspace_id=$(grep '^workspace_id=' "${fixture}/import.out" | cut -d= -f2-)
+          invitation_json=$(curl --fail --silent \
+            -H "Authorization: Bearer ${operator_token}" \
+            "http://127.0.0.1:19464/v1/workspaces/${workspace_id}/invitation")
+          ticket=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["invitation"])' <<<"${invitation_json}")
           cd web
-          XO_IROH_TICKET="${ticket}" npm run test:e2e
-          XO_IROH_TICKET="${ticket}" npx playwright test \
+          XO_IROH_TICKET="${ticket}" XO_OPERATOR_TOKEN="${operator_token}" npm run test:e2e
+          XO_IROH_TICKET="${ticket}" XO_OPERATOR_TOKEN="${operator_token}" npx playwright test \
             --project=firefox --project=mobile-webkit \
             --grep 'creates a local item|prevents mobile|receives native items'
 

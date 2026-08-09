@@ -37,8 +37,6 @@ hyper = { version = "1.11.0", features = ["http1", "server"] }
 hyper-util = { version = "0.1.20", features = ["tokio"] }
 hostname = "0.4.2"
 iroh = "=0.98.0"
-iroh-blobs = "=0.100.0"
-iroh-docs = "=0.98.0"
 iroh-gossip = "=0.98.0"
 notify = "=8.2.0"
 quick_html2md = { version = "0.2.1", features = ["url"] }

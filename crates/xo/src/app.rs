@@ -16,6 +16,8 @@ use xo::steel_plugin::PluginChoice;
 use xo_core::behavior::{Query, WorkspaceBehavior};
 use xo_core::domain::{DeviceRecord, Frontmatter, FrontmatterValue};
 use xo_core::encryption;
+use xo_core::membership::Member;
+use xo_core::peer_protocol::JoinRequest;
 use xo_core::projection::Diagnostic;
 use xo_core::sync_state::{DurableOperation, SyncStatus};
 use xo_core::{Conflict, Note, NoteId, NoteRevision, RevisionId};
@@ -68,6 +70,8 @@ pub struct App {
     pub conflicts: Vec<Conflict>,
     pub conflict_history: BTreeMap<NoteId, Vec<(RevisionId, NoteRevision)>>,
     pub devices: Vec<DeviceRecord>,
+    pub members: Vec<Member>,
+    pub pending_members: Vec<JoinRequest>,
     pub diagnostics: Vec<Diagnostic>,
     pub operations: Vec<DurableOperation>,
     pub sync: Option<SyncStatus>,
@@ -115,6 +119,8 @@ impl App {
             conflicts: vec![],
             conflict_history: BTreeMap::new(),
             devices: vec![],
+            members: vec![],
+            pending_members: vec![],
             diagnostics: vec![],
             operations: vec![],
             sync: None,
@@ -1158,29 +1164,43 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                     .join("\n\n"),
             ),
         ),
-        Mode::Devices => (
-            "Devices (V retires)",
-            Text::from(
-                app.devices
-                    .iter()
-                    .map(|device| {
-                        format!(
-                            "{}\n{}\ncapabilities: {}\nretired: {}",
-                            device.label,
-                            device.endpoint_id,
-                            device
-                                .capabilities
-                                .iter()
-                                .cloned()
-                                .collect::<Vec<_>>()
-                                .join(", "),
-                            device.retired_at.is_some()
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n\n"),
-            ),
-        ),
+        Mode::Devices => {
+            let pending = app.pending_members.iter().map(|request| {
+                format!(
+                    "PENDING  {}  {}\n  endpoint {}",
+                    request.peer_id,
+                    xo_core::membership::public_key_fingerprint(&request.public_key),
+                    request.endpoint_id
+                )
+            });
+            let active = app.members.iter().map(|member| {
+                format!(
+                    "{:?}  {}  {}\n  endpoints {}",
+                    member.status,
+                    member.peer_id,
+                    xo_core::membership::public_key_fingerprint(&member.public_key),
+                    member
+                        .endpoint_ids
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            });
+            (
+                "Peers (j/k select · a approve · r reject · x remove · Esc close)",
+                Text::from(
+                    pending
+                        .chain(active)
+                        .enumerate()
+                        .map(|(index, value)| {
+                            format!("{} {value}", if index == app.selected { ">" } else { " " })
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n\n"),
+                ),
+            )
+        }
         Mode::Sync => (
             "Synchronization (R retries)",
             Text::from(format!(
@@ -1300,7 +1320,7 @@ fn render_mobile_pairing(frame: &mut Frame<'_>, app: &App, area: ratatui::layout
             ),
             Style::default().add_modifier(Modifier::BOLD),
         )),
-        Line::raw("The QR contains a writable capability. Keep it private."),
+        Line::raw("The QR contains bootstrap information; new peers still require approval."),
         Line::raw(""),
     ];
     if fits {
@@ -1346,7 +1366,7 @@ fn render_pairing(frame: &mut Frame<'_>, app: &App, area: ratatui::layout::Rect)
     let invitation = if pairing.reveal_ticket {
         app.pairing_invitation().unwrap_or_default()
     } else {
-        Zeroizing::new("<writable ticket hidden>".to_owned())
+        Zeroizing::new("<invitation hidden>".to_owned())
     };
     let installer_command = if pairing.reveal_ticket {
         app.user_syncd_command().map_or_else(
@@ -1359,14 +1379,14 @@ fn render_pairing(frame: &mut Frame<'_>, app: &App, area: ratatui::layout::Rect)
     let text = format!(
         "Add this workspace to xo-syncd\n\n\
          Workspace ID: {}\n\
-         Writable ticket: {}\n\n\
+         Invitation: {}\n\n\
          User-unit installer: {}\n\n\
-         Run the installer on the daemon host, or enter the workspace ID and ticket at \
+         Run the installer on the daemon host, or enter the workspace ID and invitation at \
          http://127.0.0.1:9464/setup. A remote operator page can be reached with an SSH \
-         port forward. The daemon connects back automatically; no return ticket is needed.\n\n\
-         c: copy ticket · U: copy user-unit installer · F2: show/hide ticket · \
+         port forward. Approve the daemon's peer ID and fingerprint from this peer.\n\n\
+         c: copy invitation · U: copy user-unit installer · F2: show/hide invitation · \
          Enter/Esc: close\n\n\
-         The invitation is a writable capability. Keep it private.{error}",
+         Verify the visible peer ID and fingerprint before approval.{error}",
         app.workspace_id,
         invitation.as_str(),
         installer_command
@@ -1556,8 +1576,8 @@ mod tests {
         assert!(screen.contains("Add this workspace to xo-syncd"));
         assert!(screen.contains("http://127.0.0.1:9464/setup"));
         assert!(screen.contains("Workspace ID: workspace123"));
-        assert!(screen.contains("no return ticket is needed"));
-        assert!(screen.contains("<writable ticket hidden>"));
+        assert!(screen.contains("Approve the daemon's peer ID"));
+        assert!(screen.contains("<invitation hidden>"));
         assert!(!screen.contains("operator.token"));
         assert!(!screen.contains("client-secret-ticket"));
     }

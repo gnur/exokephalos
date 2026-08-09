@@ -18,12 +18,12 @@ native = [
     "dep:tempfile",
     "dep:zeroize",
 ]
+peer-protocol = ["dep:base64", "dep:iroh"]
 iroh-sync = [
     "native",
+    "peer-protocol",
     "dep:futures-lite",
-    "dep:iroh",
-    "dep:iroh-blobs",
-    "dep:iroh-docs",
+    "dep:hostname",
     "dep:iroh-gossip",
     "dep:tokio",
 ]
@@ -40,9 +40,8 @@ blake3.workspace = true
 ciborium.workspace = true
 ed25519-dalek.workspace = true
 futures-lite = { workspace = true, optional = true }
+hostname = { workspace = true, optional = true }
 iroh = { workspace = true, optional = true }
-iroh-blobs = { workspace = true, optional = true }
-iroh-docs = { workspace = true, optional = true }
 iroh-gossip = { workspace = true, optional = true }
 notify = { workspace = true, optional = true }
 rand.workspace = true

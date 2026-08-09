@@ -32,7 +32,12 @@ enum Command {
         state_dir: PathBuf,
     },
     /// Import a writable workspace ticket into an offline peer state directory.
-    ImportTicket { state_dir: PathBuf, ticket: String },
+    ImportTicket {
+        #[arg(long)]
+        peer_id: Option<String>,
+        state_dir: PathBuf,
+        ticket: String,
+    },
     /// Create and verify an offline backup of a stopped peer state directory.
     Backup {
         state_dir: PathBuf,
@@ -46,8 +51,6 @@ enum Command {
     Invite {
         state_dir: PathBuf,
         workspace: String,
-        #[arg(long)]
-        read_only: bool,
     },
     /// List replicated workspace devices.
     DeviceList {
@@ -60,10 +63,28 @@ enum Command {
         workspace: String,
         endpoint: String,
     },
-    /// Checkpoint accepted state into a fresh namespace and print reinvitations.
-    RotateNamespace {
+    /// List active, removed, rejected, and pending workspace peers.
+    PeerList {
         state_dir: PathBuf,
         workspace: String,
+    },
+    /// Approve a pending membership-key fingerprint.
+    ApprovePeer {
+        state_dir: PathBuf,
+        workspace: String,
+        fingerprint: String,
+    },
+    /// Reject a pending membership-key fingerprint.
+    RejectPeer {
+        state_dir: PathBuf,
+        workspace: String,
+        fingerprint: String,
+    },
+    /// Permanently remove an active membership-key fingerprint.
+    RemovePeer {
+        state_dir: PathBuf,
+        workspace: String,
+        fingerprint: String,
     },
     /// Print record and projection diagnostics for a workspace.
     Diagnostics {
@@ -101,8 +122,17 @@ async fn main() -> Result<()> {
             println!("assets={}", imported.assets);
             println!("configs={}", imported.configs);
         }
-        Command::ImportTicket { state_dir, ticket } => {
-            let imported = import_ticket(&state_dir, &ticket).await?;
+        Command::ImportTicket {
+            peer_id,
+            state_dir,
+            ticket,
+        } => {
+            let imported = import_ticket_with_peer(
+                &state_dir,
+                &ticket,
+                peer_id.map(xo_core::PeerId::parse).transpose()?,
+            )
+            .await?;
             println!("workspace_id={}", imported.workspace_id);
             println!("ticket={}", imported.ticket);
         }
@@ -124,14 +154,13 @@ async fn main() -> Result<()> {
         Command::Invite {
             state_dir,
             workspace,
-            read_only,
         } => {
             let node = IrohNode::persistent(state_dir).await?;
             let workspace = node
                 .open_workspace_str(&workspace)
                 .await?
                 .context("workspace is not present in this peer")?;
-            println!("ticket={}", workspace.share(!read_only).await?);
+            println!("ticket={}", workspace.share(true).await?);
             node.shutdown().await?;
         }
         Command::DeviceList {
@@ -155,11 +184,32 @@ async fn main() -> Result<()> {
         } => {
             retire_device(&state_dir, &workspace, &endpoint).await?;
         }
-        Command::RotateNamespace {
+        Command::PeerList {
             state_dir,
             workspace,
         } => {
-            rotate_namespace(&state_dir, &workspace).await?;
+            peer_list(&state_dir, &workspace).await?;
+        }
+        Command::ApprovePeer {
+            state_dir,
+            workspace,
+            fingerprint,
+        } => {
+            decide_peer(&state_dir, &workspace, &fingerprint, true).await?;
+        }
+        Command::RejectPeer {
+            state_dir,
+            workspace,
+            fingerprint,
+        } => {
+            decide_peer(&state_dir, &workspace, &fingerprint, false).await?;
+        }
+        Command::RemovePeer {
+            state_dir,
+            workspace,
+            fingerprint,
+        } => {
+            remove_peer(&state_dir, &workspace, &fingerprint).await?;
         }
         Command::Diagnostics {
             state_dir,
@@ -254,30 +304,85 @@ async fn retire_device(state_dir: &Path, workspace_id: &str, endpoint: &str) -> 
     Ok(())
 }
 
-async fn rotate_namespace(state_dir: &Path, workspace_id: &str) -> Result<()> {
+async fn peer_list(state_dir: &Path, workspace_id: &str) -> Result<()> {
     let node = IrohNode::persistent(state_dir).await?;
     let workspace = node
         .open_workspace_str(workspace_id)
         .await?
         .context("workspace is not present in this peer")?;
-    let wall_clock_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system clock is before Unix epoch")?
-        .as_millis()
-        .try_into()
-        .context("system time does not fit in an HLC timestamp")?;
-    let rotation = xo_core::rotation::rotate_workspace(&node, &workspace, wall_clock_ms).await?;
-    println!("archived_workspace_id={}", rotation.archived_workspace_id);
-    println!("workspace_id={}", rotation.workspace_id);
-    println!("ticket={}", rotation.writable_ticket);
-    println!("copied_notes={}", rotation.copied_notes);
-    println!("copied_assets={}", rotation.copied_assets);
-    println!("copied_configs={}", rotation.copied_configs);
-    for endpoint in rotation.reinvite_endpoints {
-        println!("reinvite_endpoint={endpoint}");
+    for request in workspace.pending_requests().await {
+        println!(
+            "{}",
+            serde_json::json!({
+                "peer_id": request.peer_id.to_string(),
+                "fingerprint": xo_core::membership::public_key_fingerprint(&request.public_key),
+                "status": "pending",
+                "endpoint_id": request.endpoint_id,
+            })
+        );
     }
-    node.shutdown().await?;
-    Ok(())
+    for member in workspace.members().await {
+        println!(
+            "{}",
+            serde_json::json!({
+                "peer_id": member.peer_id.to_string(),
+                "fingerprint": xo_core::membership::public_key_fingerprint(&member.public_key),
+                "status": format!("{:?}", member.status).to_lowercase(),
+                "endpoint_ids": member.endpoint_ids,
+            })
+        );
+    }
+    node.shutdown().await
+}
+
+async fn decide_peer(
+    state_dir: &Path,
+    workspace_id: &str,
+    fingerprint: &str,
+    approve: bool,
+) -> Result<()> {
+    let node = IrohNode::persistent(state_dir).await?;
+    let workspace = node
+        .open_workspace_str(workspace_id)
+        .await?
+        .context("workspace is not present in this peer")?;
+    let request = workspace
+        .pending_requests()
+        .await
+        .into_iter()
+        .find(|request| {
+            xo_core::membership::public_key_fingerprint(&request.public_key) == fingerprint
+        })
+        .context("pending peer fingerprint is unavailable")?;
+    if approve {
+        workspace.approve_peer(&request.public_key).await?;
+        println!("approved={fingerprint}");
+    } else {
+        workspace.reject_peer(&request.public_key).await?;
+        println!("rejected={fingerprint}");
+    }
+    node.shutdown().await
+}
+
+async fn remove_peer(state_dir: &Path, workspace_id: &str, fingerprint: &str) -> Result<()> {
+    let node = IrohNode::persistent(state_dir).await?;
+    let workspace = node
+        .open_workspace_str(workspace_id)
+        .await?
+        .context("workspace is not present in this peer")?;
+    let member = workspace
+        .members()
+        .await
+        .into_iter()
+        .find(|member| {
+            xo_core::membership::public_key_fingerprint(&member.public_key) == fingerprint
+        })
+        .context("active peer fingerprint is unavailable")?;
+    workspace
+        .remove_peer(&member.public_key, Some("removed by xo-admin".into()))
+        .await?;
+    println!("removed={fingerprint}");
+    node.shutdown().await
 }
 
 #[derive(Debug)]
@@ -295,9 +400,21 @@ struct TicketImportResult {
     ticket: String,
 }
 
+#[cfg(test)]
 async fn import_ticket(state_dir: &Path, ticket: &str) -> Result<TicketImportResult> {
+    import_ticket_with_peer(state_dir, ticket, None).await
+}
+
+async fn import_ticket_with_peer(
+    state_dir: &Path,
+    ticket: &str,
+    peer_id: Option<xo_core::PeerId>,
+) -> Result<TicketImportResult> {
     validate_writable_ticket(ticket)?;
-    let node = IrohNode::persistent(state_dir).await?;
+    let node = match peer_id {
+        Some(peer_id) => IrohNode::persistent_with_peer(state_dir, peer_id).await?,
+        None => IrohNode::persistent(state_dir).await?,
+    };
     let workspace = node.import_writable_workspace_synced(ticket).await?;
     let result = TicketImportResult {
         workspace_id: workspace.id().to_string(),
@@ -800,23 +917,23 @@ mod tests {
     async fn ticket_import_is_idempotent_and_reconnects_after_restart() -> Result<()> {
         let _guard = IROH_TEST_LOCK.lock().await;
         let directory = tempfile::tempdir()?;
-        let source = IrohNode::persistent(directory.path().join("source")).await?;
+        let source = IrohNode::persistent_with_peer(
+            directory.path().join("source"),
+            xo_core::PeerId::parse("admin-source")?,
+        )
+        .await?;
         let workspace = source.create_workspace().await?;
         let workspace_id = workspace.id().to_string();
         let source_ticket = workspace.share(true).await?;
-        let read_only_ticket = workspace.share(false).await?;
         let target_state = directory.path().join("target");
-
-        let read_only_state = directory.path().join("read-only-target");
-        assert!(
-            import_ticket(&read_only_state, &read_only_ticket)
-                .await
-                .is_err()
-        );
-        assert!(!read_only_state.exists());
-        let read_only_target = IrohNode::persistent(&read_only_state).await?;
-        assert!(read_only_target.workspace_ids().await?.is_empty());
-        read_only_target.shutdown().await?;
+        assert!(import_ticket(&target_state, &source_ticket).await.is_err());
+        let request = workspace
+            .pending_requests()
+            .await
+            .into_iter()
+            .next()
+            .context("pending xo-admin import")?;
+        workspace.approve_peer(&request.public_key).await?;
 
         let first = import_ticket(&target_state, &source_ticket).await?;
         let repeated = import_ticket(&target_state, &source_ticket).await?;

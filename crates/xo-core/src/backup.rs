@@ -341,12 +341,15 @@ mod tests {
 
     #[cfg(feature = "iroh-sync")]
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn restored_peer_serves_blobs_and_rejoins_an_active_peer() -> anyhow::Result<()> {
         let _guard = crate::iroh_node::IROH_TEST_LOCK.lock().await;
 
         let directory = tempfile::tempdir()?;
         let active_dir = directory.path().join("active");
-        let active = IrohNode::persistent(&active_dir).await?;
+        let active =
+            IrohNode::persistent_with_peer(&active_dir, crate::PeerId::parse("backup-active")?)
+                .await?;
         let workspace = active.create_workspace().await?;
         let workspace_id = workspace.id();
         let active_records = WorkspaceRecords::new(&workspace);
@@ -375,7 +378,12 @@ mod tests {
             .await?;
         let ticket = workspace.share(true).await?;
         let replica_dir = directory.path().join("replica");
-        let replica = IrohNode::persistent(&replica_dir).await?;
+        let replica =
+            IrohNode::persistent_with_peer(&replica_dir, crate::PeerId::parse("backup-replica")?)
+                .await?;
+        assert!(replica.import_workspace(&ticket).await.is_err());
+        let request = workspace.pending_requests().await.remove(0);
+        workspace.approve_peer(&request.public_key).await?;
         let imported = replica.import_workspace(&ticket).await?;
         let replica_records = WorkspaceRecords::new(&imported);
         assert_eq!(wait_for_asset(replica_records).await?, b"backed up blob");
@@ -395,9 +403,11 @@ mod tests {
         create_backup(&replica_dir, &backup)?;
         let restored_dir = directory.path().join("restored");
         restore_backup(&backup, &restored_dir)?;
-        let restored = IrohNode::persistent(&restored_dir).await?;
+        let restored =
+            IrohNode::persistent_with_peer(&restored_dir, crate::PeerId::parse("backup-replica")?)
+                .await?;
         let restored_workspace = restored
-            .open_workspace(workspace_id)
+            .open_workspace(&workspace_id)
             .await?
             .expect("restored workspace");
         assert_eq!(
@@ -405,9 +415,11 @@ mod tests {
             b"backed up blob"
         );
 
-        let active = IrohNode::persistent(&active_dir).await?;
+        let active =
+            IrohNode::persistent_with_peer(&active_dir, crate::PeerId::parse("backup-active")?)
+                .await?;
         let workspace = active
-            .open_workspace(workspace_id)
+            .open_workspace(&workspace_id)
             .await?
             .expect("active workspace");
         let after_id = WorkspaceRecords::new(&workspace)

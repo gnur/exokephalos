@@ -1,4 +1,4 @@
-//! Typed exokephalos records stored in an Iroh Docs workspace.
+//! Typed exokephalos records stored directly in an Automerge workspace.
 
 use std::collections::BTreeMap;
 
@@ -500,7 +500,7 @@ impl<'a> WorkspaceRecords<'a> {
         }
     }
 
-    /// Resolve every note from Docs/Blobs while retaining invalid-record diagnostics.
+    /// Resolve every note from Automerge while retaining invalid-record diagnostics.
     pub async fn snapshot(&self) -> Result<WorkspaceSnapshot, RecordError> {
         let mut groups = BTreeMap::<NoteId, NoteRecords>::new();
         let mut snapshot = WorkspaceSnapshot {
@@ -828,11 +828,10 @@ mod tests {
             .put_descriptor(&WorkspaceDescriptor {
                 schema: CURRENT_SCHEMA,
                 workspace_id: crate::WorkspaceId::new(workspace.id().to_string()),
-                docs_ticket: workspace.share(false).await?,
+                invitation: workspace.share(true).await?,
                 bootstrap_peers: vec![node.endpoint_id().to_string()],
                 relay_mode: "default".to_owned(),
                 encrypted_workspace_key: None,
-                read_only: true,
             })
             .await?;
         Ok(())
@@ -921,7 +920,9 @@ mod tests {
         let _guard = crate::iroh_node::IROH_TEST_LOCK.lock().await;
         let first_dir = tempfile::tempdir()?;
         let second_dir = tempfile::tempdir()?;
-        let first = IrohNode::persistent(first_dir.path()).await?;
+        let first =
+            IrohNode::persistent_with_peer(first_dir.path(), crate::PeerId::parse("asset-first")?)
+                .await?;
         let workspace = first.create_workspace().await?;
         WorkspaceRecords::new(&workspace)
             .put_asset(
@@ -933,7 +934,14 @@ mod tests {
             .await?;
         let ticket = workspace.share(true).await?;
 
-        let second = IrohNode::persistent(second_dir.path()).await?;
+        let second = IrohNode::persistent_with_peer(
+            second_dir.path(),
+            crate::PeerId::parse("asset-second")?,
+        )
+        .await?;
+        assert!(second.import_workspace(&ticket).await.is_err());
+        let request = workspace.pending_requests().await.remove(0);
+        workspace.approve_peer(&request.public_key).await?;
         let imported = second.import_workspace(&ticket).await?;
         let records = WorkspaceRecords::new(&imported);
         let mut replicated = None;
@@ -1010,11 +1018,14 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let a_dir = directory.path().join("a");
         let b_dir = directory.path().join("b");
-        let a = IrohNode::persistent(&a_dir).await?;
+        let a = IrohNode::persistent_with_peer(&a_dir, crate::PeerId::parse("retire-a")?).await?;
         let workspace_a = a.create_workspace().await?;
         let workspace_id = workspace_a.id();
         let ticket = workspace_a.share(true).await?;
-        let b = IrohNode::persistent(&b_dir).await?;
+        let b = IrohNode::persistent_with_peer(&b_dir, crate::PeerId::parse("retire-b")?).await?;
+        assert!(b.import_workspace(&ticket).await.is_err());
+        let request = workspace_a.pending_requests().await.remove(0);
+        workspace_a.approve_peer(&request.public_key).await?;
         let workspace_b = b.import_workspace(&ticket).await?;
         let records_b = WorkspaceRecords::new(&workspace_b);
         let author_b = records_b.actor_id();
@@ -1038,8 +1049,8 @@ mod tests {
         a.shutdown().await?;
         drop((workspace_a, workspace_b, a, b));
 
-        let a = IrohNode::persistent(&a_dir).await?;
-        let workspace_a = a.open_workspace(workspace_id).await?.expect("workspace A");
+        let a = IrohNode::persistent_with_peer(&a_dir, crate::PeerId::parse("retire-a")?).await?;
+        let workspace_a = a.open_workspace(&workspace_id).await?.expect("workspace A");
         let records_a = WorkspaceRecords::new(&workspace_a);
         let cutoff = Hlc {
             physical_ms: 200,
@@ -1056,8 +1067,8 @@ mod tests {
         drop((workspace_a, a));
 
         // B has not received the retirement and can still create a signed offline write.
-        let b = IrohNode::persistent(&b_dir).await?;
-        let workspace_b = b.open_workspace(workspace_id).await?.expect("workspace B");
+        let b = IrohNode::persistent_with_peer(&b_dir, crate::PeerId::parse("retire-b")?).await?;
+        let workspace_b = b.open_workspace(&workspace_id).await?.expect("workspace B");
         let after =
             isolated_revision_at(author_b, "after retirement", 300, Some(before_id.clone()));
         let after_id = WorkspaceRecords::new(&workspace_b)
@@ -1066,11 +1077,11 @@ mod tests {
         b.shutdown().await?;
         drop((workspace_b, b));
 
-        let a = IrohNode::persistent(&a_dir).await?;
-        let workspace_a = a.open_workspace(workspace_id).await?.expect("workspace A");
+        let a = IrohNode::persistent_with_peer(&a_dir, crate::PeerId::parse("retire-a")?).await?;
+        let workspace_a = a.open_workspace(&workspace_id).await?.expect("workspace A");
         let reconnect = workspace_a.share(true).await?;
-        let b = IrohNode::persistent(&b_dir).await?;
-        let workspace_b = b.open_workspace(workspace_id).await?.expect("workspace B");
+        let b = IrohNode::persistent_with_peer(&b_dir, crate::PeerId::parse("retire-b")?).await?;
+        let workspace_b = b.open_workspace(&workspace_id).await?.expect("workspace B");
         workspace_b.start_sync(&reconnect).await?;
         let records_a = WorkspaceRecords::new(&workspace_a);
         let resolved = wait_for_retained_revision(records_a, &before_id).await?;
@@ -1207,8 +1218,14 @@ mod tests {
         let workspace_id = workspace_a.id();
         let ticket = workspace_a.share(true).await?;
         let b = IrohNode::persistent_with_relay_map(b_dir.path(), relay_map.clone()).await?;
+        assert!(b.import_workspace(&ticket).await.is_err());
+        let request = workspace_a.pending_requests().await.remove(0);
+        workspace_a.approve_peer(&request.public_key).await?;
         b.import_workspace(&ticket).await?;
         let c = IrohNode::persistent_with_relay_map(c_dir.path(), relay_map.clone()).await?;
+        assert!(c.import_workspace(&ticket).await.is_err());
+        let request = workspace_a.pending_requests().await.remove(0);
+        workspace_a.approve_peer(&request.public_key).await?;
         c.import_workspace(&ticket).await?;
         c.shutdown().await?;
         b.shutdown().await?;
@@ -1216,7 +1233,7 @@ mod tests {
         drop((workspace_a, a, b, c));
 
         let b = IrohNode::persistent_with_relay_map(b_dir.path(), relay_map.clone()).await?;
-        let workspace_b = b.open_workspace(workspace_id).await?.expect("workspace B");
+        let workspace_b = b.open_workspace(&workspace_id).await?.expect("workspace B");
         let records_b = WorkspaceRecords::new(&workspace_b);
         records_b
             .commit_revision(&isolated_revision(records_b.actor_id(), "offline B"))
@@ -1225,7 +1242,7 @@ mod tests {
         drop((workspace_b, b));
 
         let c = IrohNode::persistent_with_relay_map(c_dir.path(), relay_map.clone()).await?;
-        let workspace_c = c.open_workspace(workspace_id).await?.expect("workspace C");
+        let workspace_c = c.open_workspace(&workspace_id).await?.expect("workspace C");
         let records_c = WorkspaceRecords::new(&workspace_c);
         records_c
             .commit_revision(&isolated_revision(records_c.actor_id(), "offline C"))
@@ -1234,11 +1251,11 @@ mod tests {
         drop((workspace_c, c));
 
         let a = IrohNode::persistent_with_relay_map(a_dir.path(), relay_map.clone()).await?;
-        let workspace_a = a.open_workspace(workspace_id).await?.expect("workspace A");
+        let workspace_a = a.open_workspace(&workspace_id).await?.expect("workspace A");
         let b = IrohNode::persistent_with_relay_map(b_dir.path(), relay_map.clone()).await?;
-        let workspace_b = b.open_workspace(workspace_id).await?.expect("workspace B");
+        let workspace_b = b.open_workspace(&workspace_id).await?.expect("workspace B");
         let c = IrohNode::persistent_with_relay_map(c_dir.path(), relay_map.clone()).await?;
-        let workspace_c = c.open_workspace(workspace_id).await?.expect("workspace C");
+        let workspace_c = c.open_workspace(&workspace_id).await?.expect("workspace C");
 
         let ticket_a = workspace_a.share(true).await?;
         let ticket_b = workspace_b.share(true).await?;

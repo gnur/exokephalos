@@ -18,15 +18,13 @@ pub mod iroh_node;
 pub mod local_index;
 pub mod markdown;
 pub mod membership;
-#[cfg(feature = "iroh-sync")]
+#[cfg(feature = "peer-protocol")]
 pub mod peer_protocol;
 #[cfg(feature = "native")]
 pub mod projection;
 #[cfg(feature = "iroh-sync")]
 pub mod records;
 pub mod resolution;
-#[cfg(feature = "iroh-sync")]
-pub mod rotation;
 #[cfg(feature = "steel")]
 pub mod steel_runtime;
 #[cfg(feature = "native")]

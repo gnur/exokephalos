@@ -299,6 +299,8 @@ async fn hydrate(
         .map(|note| (note.id.clone(), note))
         .collect();
     app.devices = snapshot.devices;
+    app.members = session.members().await;
+    app.pending_members = session.pending_membership_requests().await;
     app.diagnostics = snapshot.diagnostics;
     app.operations = session.sync_state.ready()?;
     app.sync = Some(session.sync_state.status()?);
@@ -475,6 +477,7 @@ async fn event_loop(
                     app.message = conflict_summary(app);
                 }
                 KeyCode::Char(value) if leader_command(value) == Some(LeaderCommand::Devices) => {
+                    app.selected = 0;
                     app.mode = Mode::Devices;
                     app.message = device_summary(app);
                 }
@@ -800,6 +803,48 @@ async fn event_loop(
                             }
                         }
                     }
+                }
+                _ => {}
+            },
+            Mode::Devices => match key.code {
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let count = app.pending_members.len() + app.members.len();
+                    if count > 0 {
+                        app.selected = (app.selected + 1).min(count - 1);
+                    }
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    app.selected = app.selected.saturating_sub(1);
+                }
+                KeyCode::Char('a') if app.selected < app.pending_members.len() => {
+                    let request = app.pending_members[app.selected].clone();
+                    session.approve_member(&request.public_key).await?;
+                    refresh_workspace(app, session).await?;
+                    app.message = format!("approved peer {}", request.peer_id);
+                }
+                KeyCode::Char('r') if app.selected < app.pending_members.len() => {
+                    let request = app.pending_members[app.selected].clone();
+                    session.reject_member(&request.public_key).await?;
+                    refresh_workspace(app, session).await?;
+                    app.message = format!("rejected peer {}", request.peer_id);
+                }
+                KeyCode::Char('x') if app.selected >= app.pending_members.len() => {
+                    let index = app.selected - app.pending_members.len();
+                    if let Some(member) = app.members.get(index).cloned() {
+                        if xo_core::membership::public_key_fingerprint(&member.public_key)
+                            == session.membership_fingerprint()
+                        {
+                            app.message = "cannot remove the current peer".into();
+                        } else {
+                            session.remove_member(&member.public_key).await?;
+                            refresh_workspace(app, session).await?;
+                            app.message = format!("removed peer {}", member.peer_id);
+                        }
+                    }
+                }
+                KeyCode::Esc => {
+                    app.mode = Mode::Normal;
+                    app.message.clear();
                 }
                 _ => {}
             },

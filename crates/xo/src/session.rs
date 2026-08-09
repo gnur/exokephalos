@@ -87,7 +87,7 @@ impl WorkspaceSession {
             .with_context(|| format!("create state directory {}", state_dir.display()))?;
         let lock = WorkspaceLock::acquire(state_dir)?;
         let membership = xo_core::membership::load_or_create_identity(state_dir, &peer_id)?;
-        let node = IrohNode::persistent(state_dir).await?;
+        let node = IrohNode::persistent_with_peer(state_dir, peer_id).await?;
         let (workspace, reopened) =
             select_workspace(&node, state_dir, workspace_id, ticket).await?;
         if let Some(ticket) = ticket {
@@ -134,6 +134,28 @@ impl WorkspaceSession {
     #[must_use]
     pub fn membership_fingerprint(&self) -> String {
         self.membership.fingerprint()
+    }
+
+    pub async fn pending_membership_requests(&self) -> Vec<xo_core::peer_protocol::JoinRequest> {
+        self.workspace.pending_requests().await
+    }
+
+    pub async fn members(&self) -> Vec<xo_core::membership::Member> {
+        self.workspace.members().await
+    }
+
+    pub async fn approve_member(&self, public_key: &[u8; 32]) -> Result<()> {
+        self.workspace.approve_peer(public_key).await
+    }
+
+    pub async fn reject_member(&self, public_key: &[u8; 32]) -> Result<()> {
+        self.workspace.reject_peer(public_key).await
+    }
+
+    pub async fn remove_member(&self, public_key: &[u8; 32]) -> Result<()> {
+        self.workspace
+            .remove_peer(public_key, Some("removed from xo TUI".to_owned()))
+            .await
     }
 
     #[must_use]
@@ -601,11 +623,12 @@ mod tests {
     #[tokio::test]
     async fn tui_peer_receives_replicated_views_subviews_and_items() -> Result<()> {
         let directory = tempfile::tempdir()?;
-        let mut source = WorkspaceSession::open(
+        let mut source = WorkspaceSession::open_with_peer(
             &directory.path().join("source-state"),
             None,
             None,
             directory.path().join("source-notes"),
+            xo_core::PeerId::parse("source")?,
         )
         .await?;
         let behavior = library_behavior();
@@ -620,11 +643,26 @@ mod tests {
         source.save(&reading_book()).await?;
         let ticket = source.writable_invitation().await?;
 
-        let mut peer = WorkspaceSession::open(
-            &directory.path().join("peer-state"),
+        let peer_state = directory.path().join("peer-state");
+        assert!(
+            WorkspaceSession::open_with_peer(
+                &peer_state,
+                None,
+                Some(&ticket),
+                directory.path().join("peer-notes"),
+                xo_core::PeerId::parse("peer")?,
+            )
+            .await
+            .is_err()
+        );
+        let request = source.workspace.pending_requests().await.remove(0);
+        source.workspace.approve_peer(&request.public_key).await?;
+        let mut peer = WorkspaceSession::open_with_peer(
+            &peer_state,
             None,
             Some(&ticket),
             directory.path().join("peer-notes"),
+            xo_core::PeerId::parse("peer")?,
         )
         .await?;
         let mut replicated_snapshot = None;
@@ -691,18 +729,31 @@ mod tests {
     #[tokio::test]
     async fn tui_pairing_invitation_connects_a_sync_peer() -> Result<()> {
         let directory = tempfile::tempdir()?;
-        let mut session = WorkspaceSession::open(
+        let mut session = WorkspaceSession::open_with_peer(
             &directory.path().join("client"),
             None,
             None,
             directory.path().join("projection"),
+            xo_core::PeerId::parse("client")?,
         )
         .await?;
         session.behavior().await?;
         let workspace_id = session.workspace_id();
         let client_ticket = session.writable_invitation().await?;
 
-        let server = IrohNode::persistent(directory.path().join("server")).await?;
+        let server = IrohNode::persistent_with_peer(
+            directory.path().join("server"),
+            xo_core::PeerId::parse("server")?,
+        )
+        .await?;
+        assert!(
+            server
+                .import_writable_workspace(&client_ticket)
+                .await
+                .is_err()
+        );
+        let request = session.workspace.pending_requests().await.remove(0);
+        session.workspace.approve_peer(&request.public_key).await?;
         let server_workspace = server.import_writable_workspace(&client_ticket).await?;
         assert_eq!(server_workspace.id().to_string(), workspace_id);
         let server_ticket = server_workspace.share(true).await?;
@@ -737,7 +788,9 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let primary_state = directory.path().join("primary");
         let central_state = directory.path().join("central");
-        let primary = IrohNode::persistent(&primary_state).await?;
+        let primary =
+            IrohNode::persistent_with_peer(&primary_state, xo_core::PeerId::parse("primary")?)
+                .await?;
         let workspace = primary.create_workspace().await?;
         let primary_records = WorkspaceRecords::new(&workspace);
         let base = NoteRevision {
@@ -761,7 +814,12 @@ mod tests {
         let base_id = primary_records.commit_revision(&base).await?;
         let workspace_id = workspace.id().to_string();
         let ticket = workspace.share(true).await?;
-        let central = IrohNode::persistent(&central_state).await?;
+        let central =
+            IrohNode::persistent_with_peer(&central_state, xo_core::PeerId::parse("central")?)
+                .await?;
+        assert!(central.import_workspace(&ticket).await.is_err());
+        let request = workspace.pending_requests().await.remove(0);
+        workspace.approve_peer(&request.public_key).await?;
         let central_workspace = central.import_workspace(&ticket).await?;
         wait_until(|| async {
             WorkspaceRecords::new(&central_workspace)
@@ -775,18 +833,21 @@ mod tests {
         central.shutdown().await?;
         primary.shutdown().await?;
 
-        let mut session = WorkspaceSession::open(
+        let mut session = WorkspaceSession::open_with_peer(
             &primary_state,
             Some(&workspace_id),
             None,
             directory.path().join("projection"),
+            xo_core::PeerId::parse("primary")?,
         )
         .await?;
         let mut offline_note = session.snapshot().await?.notes[0].clone();
         offline_note.body = "offline primary edit".into();
         session.save(&offline_note).await?;
 
-        let central = IrohNode::persistent(&central_state).await?;
+        let central =
+            IrohNode::persistent_with_peer(&central_state, xo_core::PeerId::parse("central")?)
+                .await?;
         let central_workspace = central
             .open_workspace_str(&workspace_id)
             .await?

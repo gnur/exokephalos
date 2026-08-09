@@ -231,6 +231,14 @@ impl PersistentAutomergeStore {
         self.flush()
     }
 
+    pub fn apply_changes(
+        &mut self,
+        changes: impl IntoIterator<Item = automerge::Change>,
+    ) -> anyhow::Result<()> {
+        self.store.apply_changes(changes)?;
+        self.flush()
+    }
+
     #[must_use]
     pub fn snapshot(&mut self) -> Vec<u8> {
         self.store.save()

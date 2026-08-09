@@ -9,6 +9,7 @@ CLIENT_STATE_DIR="${HOME}/.local/share/xo"
 SYNC_STATE_DIR="${XO_SYNCD_STATE_DIR:-${HOME}/.local/share/xo-syncd}"
 WORKSPACE_ID="${XO_WORKSPACE_ID:-}"
 SYNC_TICKET="${XO_SYNC_TICKET:-}"
+SYNCD_PEER_ID="${XO_SYNCD_PEER_ID:-}"
 SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
 
 log() {
@@ -169,18 +170,34 @@ prompt_sync_workspace() {
     WORKSPACE_ID="$(prompt_choice "Workspace ID" "")"
   fi
   if [[ -z "${SYNC_TICKET}" ]]; then
-    SYNC_TICKET="$(prompt_secret "Writable workspace ticket")"
+    SYNC_TICKET="$(prompt_secret "Workspace invitation")"
+  fi
+  if [[ -z "${SYNCD_PEER_ID}" ]]; then
+    local default_peer
+    default_peer="$(printf '%s-syncd' "$(hostname)" | cut -c1-64)"
+    SYNCD_PEER_ID="$(prompt_choice "xo-syncd peer ID" "${default_peer}")"
   fi
   [[ -n "${WORKSPACE_ID}" ]] || fatal "A workspace ID is required for xo-syncd setup."
-  [[ -n "${SYNC_TICKET}" ]] || fatal "A writable workspace ticket is required for xo-syncd setup."
+  [[ -n "${SYNC_TICKET}" ]] || fatal "A workspace invitation is required for xo-syncd setup."
+  [[ "${SYNCD_PEER_ID}" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || fatal "The xo-syncd peer ID is invalid."
 }
 
 import_sync_ticket() {
   log "Importing workspace ${WORKSPACE_ID} into ${SYNC_STATE_DIR}..."
-  local output imported_workspace
-  output="$("${INSTALL_DIR}/xo-admin" import-ticket "${SYNC_STATE_DIR}" "${SYNC_TICKET}")" || {
-    fatal "Could not import the writable ticket. Check that its source peer is online and reachable."
-  }
+  local output imported_workspace attempt
+  if ! output="$("${INSTALL_DIR}/xo-admin" import-ticket --peer-id "${SYNCD_PEER_ID}" "${SYNC_STATE_DIR}" "${SYNC_TICKET}" 2>&1)"; then
+    if [[ "${output}" != *"pending approval"* ]]; then
+      fatal "Could not submit the workspace invitation: ${output}"
+    fi
+    log "Admission requested for ${SYNCD_PEER_ID}. Approve its fingerprint from an active xo peer."
+    for attempt in $(seq 1 120); do
+      sleep 2
+      if output="$("${INSTALL_DIR}/xo-admin" import-ticket --peer-id "${SYNCD_PEER_ID}" "${SYNC_STATE_DIR}" "${SYNC_TICKET}" 2>&1)"; then
+        break
+      fi
+    done
+    [[ "${output}" == workspace_id=* ]] || fatal "Timed out waiting for workspace membership approval."
+  fi
   imported_workspace="$(printf '%s\n' "${output}" | awk -F= '$1 == "workspace_id" { print $2; exit }')"
   if [[ "${imported_workspace}" != "${WORKSPACE_ID}" ]]; then
     fatal "The ticket belongs to workspace ${imported_workspace:-<unknown>}, not ${WORKSPACE_ID}."

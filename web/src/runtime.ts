@@ -74,6 +74,18 @@ export class XoRuntime {
     return this.#call<string>('share-ticket');
   }
 
+  approvePeer(fingerprint: string) {
+    return this.#call<RuntimeReport>('approve-peer', fingerprint);
+  }
+
+  rejectPeer(fingerprint: string) {
+    return this.#call<RuntimeReport>('reject-peer', fingerprint);
+  }
+
+  removePeer(fingerprint: string) {
+    return this.#call<RuntimeReport>('remove-peer', fingerprint);
+  }
+
   wipeLocalData() {
     return this.#call<void>('wipe-local-data');
   }

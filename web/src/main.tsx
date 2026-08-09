@@ -319,6 +319,9 @@ function App() {
         onMutate={(input) => runWorkspace((runtime) => runtime.mutateNote(input))}
         onRefresh={() => void runWorkspace((runtime) => runtime.refreshSync())}
         onUpdate={() => void applyUpdate()}
+        onApprovePeer={(fingerprint) => void runWorkspace((runtime) => runtime.approvePeer(fingerprint))}
+        onRejectPeer={(fingerprint) => void runWorkspace((runtime) => runtime.rejectPeer(fingerprint))}
+        onRemovePeer={(fingerprint) => void runWorkspace((runtime) => runtime.removePeer(fingerprint))}
         onWipe={() => void wipeBrowserData()}
       />
     );
@@ -366,7 +369,7 @@ function App() {
           <NavItem icon={<Boxes />} label="Steel plugins" />
           <NavItem icon={<Settings />} label="Settings" />
         </nav>
-        <div className="privacy-note"><LockKeyhole /><span>Identity and writable capability are encrypted locally in IndexedDB.</span></div>
+        <div className="privacy-note"><LockKeyhole /><span>Endpoint and membership identities plus the invitation are encrypted locally in IndexedDB.</span></div>
       </aside>
       {menuOpen ? <button className="scrim" onClick={() => setMenuOpen(false)} aria-label="Close navigation" /> : null}
 
@@ -405,6 +408,7 @@ function App() {
               await runtime.setPeerId(report?.peerId ?? peerIdInput);
               return runtime.joinWorkspace(ticketInput);
             })}
+            onRetryApproval={() => void runWorkspace((runtime) => runtime.refreshSync())}
             installPrompt={installPrompt}
             onInstall={() => void install()}
             onCheckForUpdates={() => void checkForUpdates()}
@@ -416,7 +420,7 @@ function App() {
   );
 }
 
-function Onboarding({ state, report, error, busy, peerId, onPeerId, ticket, onTicket, onCreate, onJoin, installPrompt, onInstall, onCheckForUpdates }: {
+function Onboarding({ state, report, error, busy, peerId, onPeerId, ticket, onTicket, onCreate, onJoin, onRetryApproval, installPrompt, onInstall, onCheckForUpdates }: {
   state: RuntimeState;
   report?: RuntimeReport;
   error: string;
@@ -427,6 +431,7 @@ function Onboarding({ state, report, error, busy, peerId, onPeerId, ticket, onTi
   onTicket: (ticket: string) => void;
   onCreate: () => void;
   onJoin: () => void;
+  onRetryApproval: () => void;
   installPrompt?: InstallPrompt;
   onInstall: () => void;
   onCheckForUpdates: () => void;
@@ -439,7 +444,9 @@ function Onboarding({ state, report, error, busy, peerId, onPeerId, ticket, onTi
           <h1>Your knowledge,<br /><em>entirely client-side.</em></h1>
           <p className="lede">Create or join an authenticated Automerge workspace. Iroh QUIC, Gossip, Steel, and recovery run in this browser worker.</p>
           {!report?.peerId ? <label className="ticket-form"><span>Peer ID</span><input value={peerId} onChange={(event) => onPeerId(event.target.value)} placeholder="erwin-phone" aria-label="Peer ID" /></label> : <p>Peer ID: <strong>{report.peerId}</strong></p>}
+          {report?.syncError?.includes('pending approval') ? <p className="error-message">This peer is pending approval from an active workspace member.</p> : null}
           <div className="hero-actions">
+            {report?.syncError?.includes('pending approval') ? <button className="primary" disabled={busy} onClick={onRetryApproval}><RefreshCw className={busy ? 'spin' : ''} /> Check approval</button> : null}
             <button className="primary" disabled={busy || state !== 'ready' || (!report?.peerId && !peerId.trim())} onClick={onCreate}>{busy ? <LoaderCircle className="spin" /> : <Plus />} Create workspace</button>
             {installPrompt ? <button className="secondary" onClick={onInstall}><Download /> Install xo</button> : <button className="secondary" onClick={onCheckForUpdates}>Check for updates</button>}
           </div>
@@ -448,9 +455,9 @@ function Onboarding({ state, report, error, busy, peerId, onPeerId, ticket, onTi
       </section>
 
       <section className="join-section">
-        <div><p className="eyebrow"><KeyRound /> Existing workspace</p><h2>Join with a writable ticket</h2><p>Tickets stay encrypted in this browser. Network traffic is relay-only and end-to-end encrypted by Iroh.</p></div>
+        <div><p className="eyebrow"><KeyRound /> Existing workspace</p><h2>Join with an invitation</h2><p>Invitations stay encrypted in this browser. Network traffic is relay-only and end-to-end encrypted by Iroh.</p></div>
         <div className="ticket-form">
-          <textarea value={ticket} onChange={(event) => onTicket(event.target.value)} placeholder="Paste the writable Iroh Docs ticket from xo or xo-syncd" aria-label="Writable workspace ticket" />
+          <textarea value={ticket} onChange={(event) => onTicket(event.target.value)} placeholder="Paste the Automerge workspace invitation from xo or xo-syncd" aria-label="Workspace invitation" />
           <button className="primary" disabled={busy || !ticket.trim() || state !== 'ready' || (!report?.peerId && !peerId.trim())} onClick={onJoin}>{busy ? <LoaderCircle className="spin" /> : <Radio />} Join and synchronize</button>
         </div>
       </section>
@@ -461,7 +468,7 @@ function Onboarding({ state, report, error, busy, peerId, onPeerId, ticket, onTi
           <StatusCard icon={<Code2 />} title="Rust + WebAssembly" description="The xo-web facade runs only inside the dedicated worker." ready={state === 'ready'} />
           <StatusCard icon={<Database />} title="Encrypted recovery" description="Identity, capability, records, and pending writes survive in IndexedDB." ready={Boolean(report?.indexedDb)} />
           <StatusCard icon={<Sparkles />} title="Sandboxed Steel" description={`A fresh Steel VM executes in Wasm${report ? ` and returned ${report.steelResult}` : ''}.`} ready={Boolean(report?.runtime.steel)} />
-          <StatusCard icon={<WifiOff />} title="Iroh Docs" description="Browser Docs, Blobs, and Gossip connect through an end-to-end encrypted relay." ready={Boolean(report?.runtime.iroh)} />
+          <StatusCard icon={<WifiOff />} title="Automerge + Iroh" description="Signed Automerge changes synchronize over authenticated, end-to-end encrypted Iroh QUIC." ready={Boolean(report?.runtime.iroh)} />
         </div>
       </section>
     </>

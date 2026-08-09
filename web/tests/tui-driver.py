@@ -79,6 +79,7 @@ def stop(*_args):
 signal.signal(signal.SIGTERM, stop)
 signal.signal(signal.SIGINT, stop)
 opened_devices = False
+selected_notes_view = False
 last_approval_key = 0.0
 transcript = bytearray()
 status = 1
@@ -109,6 +110,13 @@ try:
                         ready.set()
                     if b"approved peer" in transcript:
                         approval_finished.set()
+            if b"[Space] menu" in transcript and not ready.is_set() and not selected_notes_view:
+                # The CI fixture defaults to Library. Exercise the real `g` view
+                # switcher and select the unique Notes match before declaring ready.
+                os.write(terminal, b"g")
+                time.sleep(0.2)
+                os.write(terminal, b"n")
+                selected_notes_view = True
             if approval_requested.is_set() and not opened_devices:
                 os.write(terminal, b" ")
                 time.sleep(0.2)

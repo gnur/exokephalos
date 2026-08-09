@@ -130,7 +130,9 @@ finally:
     if not approval_finished.is_set():
         approval_finished.set()
     try:
-        os.write(terminal, b"\x1bq")
+        os.write(terminal, b"\x1b")
+        time.sleep(0.2)
+        os.write(terminal, b"q")
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             waited, _ = os.waitpid(pid, os.WNOHANG)

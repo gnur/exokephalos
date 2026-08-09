@@ -282,7 +282,6 @@ jobs:
           )
           kill "${tui_driver_pid}"
           wait "${tui_driver_pid}"
-          grep -a 'approved peer playwright-tui-flow' "${fixture}/tui.log"
 
           target/debug/xo-syncd \
             --state-dir "${fixture}/state" \

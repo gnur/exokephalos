@@ -870,7 +870,9 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         .find(|view| view.id == app.active_view)
         .map_or(app.active_view.as_str(), |view| view.name.as_str());
     let subviews = app.subview_header();
-    let header = if subviews.is_empty() {
+    let header = if app.mode == Mode::Devices {
+        format!("xo {} · Devices and peers", xo_core::version::VERSION)
+    } else if subviews.is_empty() {
         format!("xo {} · {}", xo_core::version::VERSION, view_name)
     } else {
         format!(
@@ -893,9 +895,13 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     } else {
         app.leader_key.to_string()
     };
-    let mut footer = format!(
-        "[{leader}] menu · [g] views · [/] search · [e/Enter] edit · [c/C] create/encrypted · [d] delete · [u] restore · [q] quit"
-    );
+    let mut footer = if app.mode == Mode::Devices {
+        "[j/k] select · [a] approve · [r] reject · [x] remove · [Esc] close".to_owned()
+    } else {
+        format!(
+            "[{leader}] menu · [g] views · [/] search · [e/Enter] edit · [c/C] create/encrypted · [d] delete · [u] restore · [q] quit"
+        )
+    };
     if !app.message.is_empty() {
         footer.push_str(" · ");
         footer.push_str(&app.message);
@@ -1011,6 +1017,10 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     }
     if app.mode == Mode::MobilePairing {
         render_mobile_pairing(frame, app, content_area);
+        return;
+    }
+    if app.mode == Mode::Devices {
+        render_devices(frame, app, content_area);
         return;
     }
     let pane_constraints = if app.tags_visible {
@@ -1164,43 +1174,6 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                     .join("\n\n"),
             ),
         ),
-        Mode::Devices => {
-            let pending = app.pending_members.iter().map(|request| {
-                format!(
-                    "PENDING  {}  {}\n  endpoint {}",
-                    request.peer_id,
-                    xo_core::membership::public_key_fingerprint(&request.public_key),
-                    request.endpoint_id
-                )
-            });
-            let active = app.members.iter().map(|member| {
-                format!(
-                    "{:?}  {}  {}\n  endpoints {}",
-                    member.status,
-                    member.peer_id,
-                    xo_core::membership::public_key_fingerprint(&member.public_key),
-                    member
-                        .endpoint_ids
-                        .iter()
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            });
-            (
-                "Peers (j/k select · a approve · r reject · x remove · Esc close)",
-                Text::from(
-                    pending
-                        .chain(active)
-                        .enumerate()
-                        .map(|(index, value)| {
-                            format!("{} {value}", if index == app.selected { ">" } else { " " })
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n\n"),
-                ),
-            )
-        }
         Mode::Sync => (
             "Synchronization (R retries)",
             Text::from(format!(
@@ -1257,6 +1230,63 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     if app.mode == Mode::Leader {
         render_leader_menu(frame);
     }
+}
+
+fn render_devices(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let pending = app.pending_members.iter().map(|request| {
+        format!(
+            "PENDING  {}  {}\n  endpoint {}",
+            request.peer_id,
+            xo_core::membership::public_key_fingerprint(&request.public_key),
+            request.endpoint_id
+        )
+    });
+    let members = app.members.iter().map(|member| {
+        format!(
+            "{:?}  {}  {}\n  endpoints {}",
+            member.status,
+            member.peer_id,
+            xo_core::membership::public_key_fingerprint(&member.public_key),
+            member
+                .endpoint_ids
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    });
+    let entries = pending.chain(members).collect::<Vec<_>>();
+    let selected = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let items = if entries.is_empty() {
+        vec![ListItem::new("No devices or pending peers.")]
+    } else {
+        entries
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                ListItem::new(format!(
+                    "{} {value}",
+                    if index == app.selected { ">" } else { " " }
+                ))
+                .style(if index == app.selected {
+                    selected
+                } else {
+                    Style::default()
+                })
+            })
+            .collect()
+    };
+    frame.render_widget(
+        List::new(items).block(
+            Block::default()
+                .title("Devices and peers")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        ),
+        area,
+    );
 }
 
 fn render_leader_menu(frame: &mut Frame<'_>) {
@@ -1488,6 +1518,28 @@ mod tests {
         assert!(screen.contains("[e/Enter] edit"));
         assert!(!screen.contains("Offline"));
         assert!(!screen.contains("↑↓/jk"));
+    }
+
+    #[test]
+    fn devices_mode_replaces_the_note_workspace_with_a_full_screen_list() {
+        let mut app = fixture();
+        app.mode = Mode::Devices;
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(screen.contains("Devices and peers"));
+        assert!(screen.contains("No devices or pending peers"));
+        assert!(screen.contains("[j/k] select"));
+        assert!(!screen.contains("First"));
+        assert!(!screen.contains("Preview"));
+        assert!(!screen.contains("Tags ·"));
+        assert!(!screen.contains("Notes ·"));
     }
 
     #[test]

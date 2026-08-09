@@ -443,7 +443,7 @@ function Onboarding({ state, report, error, busy, peerId, onPeerId, ticket, onTi
           <p className="eyebrow"><Sparkles /> direct browser Iroh</p>
           <h1>Your knowledge,<br /><em>entirely client-side.</em></h1>
           <p className="lede">Create or join an authenticated Automerge workspace. Iroh QUIC, Gossip, Steel, and recovery run in this browser worker.</p>
-          {!report?.peerId ? <label className="ticket-form"><span>Peer ID</span><input value={peerId} onChange={(event) => onPeerId(event.target.value)} placeholder="erwin-phone" aria-label="Peer ID" /></label> : <p>Peer ID: <strong>{report.peerId}</strong></p>}
+          {!report?.peerId ? <label className="ticket-form"><span>Peer ID (required)</span><small>Choose a unique name for this browser, such as “erwin-phone”. You must set it before creating or joining a workspace.</small><input value={peerId} onChange={(event) => onPeerId(event.target.value)} placeholder="erwin-phone" aria-label="Peer ID" required /></label> : <p>Peer ID: <strong>{report.peerId}</strong></p>}
           {report?.syncError?.includes('pending approval') ? <p className="error-message">This peer is pending approval from an active workspace member.</p> : null}
           <div className="hero-actions">
             {report?.syncError?.includes('pending approval') ? <button className="primary" disabled={busy} onClick={onRetryApproval}><RefreshCw className={busy ? 'spin' : ''} /> Check approval</button> : null}
@@ -455,7 +455,7 @@ function Onboarding({ state, report, error, busy, peerId, onPeerId, ticket, onTi
       </section>
 
       <section className="join-section">
-        <div><p className="eyebrow"><KeyRound /> Existing workspace</p><h2>Join with an invitation</h2><p>Invitations stay encrypted in this browser. Network traffic is relay-only and end-to-end encrypted by Iroh.</p></div>
+        <div><p className="eyebrow"><KeyRound /> Existing workspace</p><h2>Join with an invitation</h2><p><strong>A Peer ID is required before joining.</strong> Enter a unique name for this browser in the Peer ID field above, then paste the invitation. Invitations stay encrypted in this browser.</p></div>
         <div className="ticket-form">
           <textarea value={ticket} onChange={(event) => onTicket(event.target.value)} placeholder="Paste the Automerge workspace invitation from xo or xo-syncd" aria-label="Workspace invitation" />
           <button className="primary" disabled={busy || !ticket.trim() || state !== 'ready' || (!report?.peerId && !peerId.trim())} onClick={onJoin}>{busy ? <LoaderCircle className="spin" /> : <Radio />} Join and synchronize</button>

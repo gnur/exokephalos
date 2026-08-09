@@ -562,8 +562,13 @@ function errorMessage(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
+// wasm-bindgen holds a mutable borrow of async Rust objects until each Promise
+// settles. Worker message handlers can otherwise overlap (for example the
+// periodic sync refresh and an editor save), which traps as recursive use of
+// the same object. Keep all runtime operations in arrival order.
+let requestQueue = Promise.resolve();
 scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
-  void respond(event.data);
+  requestQueue = requestQueue.then(() => respond(event.data));
 });
 
 async function respond(request: WorkerRequest) {

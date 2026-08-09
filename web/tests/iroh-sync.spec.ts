@@ -53,6 +53,8 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
 
   await page.goto('/');
   await expect(page.getByText('Runtime ready')).toBeVisible();
+  await expect(page.getByText('A Peer ID is required before joining.')).toBeVisible();
+  await expect(page.getByText('You must set it before creating or joining a workspace.')).toBeVisible();
   await configurePeer(page, 'playwright-primary');
   await expect(page.getByText('relay-only E2EE')).toBeVisible();
   const versionResponse = await request.get('/version.json');

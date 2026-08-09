@@ -278,11 +278,22 @@ fn mutation_contents(
                 .revisions
                 .get(&current.winning_revision)
                 .context("winning revision is unavailable")?;
-            let created = string_field(&previous.frontmatter, "created").unwrap_or_default();
+            let created = if let Some(created) = string_field(&previous.frontmatter, "created")
+                .filter(|value| !value.trim().is_empty())
+            {
+                created.to_owned()
+            } else {
+                let instant = time::OffsetDateTime::from_unix_timestamp_nanos(
+                    i128::from(previous.hlc.physical_ms) * 1_000_000,
+                )?;
+                let local_offset = time::UtcOffset::from_whole_seconds(local_offset_seconds)
+                    .context("browser time zone offset is invalid")?;
+                xo_core::timestamp::format(instant.to_offset(local_offset))?
+            };
             let frontmatter = xo_core::markdown::required_frontmatter(
                 parsed.frontmatter.unwrap_or_default(),
                 id.as_str(),
-                created,
+                &created,
             );
             Ok((id, frontmatter, parsed.body, false))
         }

@@ -3,6 +3,11 @@ import type { Page } from '@playwright/test';
 
 const nativeTicket = process.env.XO_IROH_TICKET;
 
+async function configurePeer(page: Page, peerId: string) {
+  const input = page.getByLabel('Peer ID');
+  if (await input.isVisible()) await input.fill(peerId);
+}
+
 async function selectWorkspaceNavigation(page: Page, name: string) {
   const button = page.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name, exact: true });
   const menu = page.getByRole('button', { name: 'Open navigation' });
@@ -18,6 +23,7 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
 
   await page.goto('/');
   await expect(page.getByText('Runtime ready')).toBeVisible();
+  await configurePeer(page, 'playwright-primary');
   await expect(page.getByText('relay-only E2EE')).toBeVisible();
   const versionResponse = await request.get('/version.json');
   const deployed = await versionResponse.json() as { version: string };
@@ -97,6 +103,7 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
 test('wipes the browser client from settings and returns to onboarding', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByText('Runtime ready')).toBeVisible();
+  await configurePeer(page, 'playwright-wipe');
   await page.getByRole('button', { name: 'Create workspace' }).click();
   await page.getByRole('button', { name: 'Open navigation' }).click();
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
@@ -111,6 +118,7 @@ test('wipes the browser client from settings and returns to onboarding', async (
 test('creates a local item without attempting to synchronize with itself', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByText('Runtime ready')).toBeVisible();
+  await configurePeer(page, 'playwright-local');
   await page.getByRole('button', { name: 'Create workspace' }).click();
   await page.getByRole('button', { name: 'New note' }).click();
   await page.getByLabel('Title', { exact: true }).fill('Local item');
@@ -124,6 +132,8 @@ test('creates a local item without attempting to synchronize with itself', async
 test('prevents mobile focus zoom and horizontal page overflow', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
+  await expect(page.getByText('Runtime ready')).toBeVisible();
+  await configurePeer(page, 'playwright-mobile');
   await expect(page.locator('meta[name="viewport"]')).toHaveAttribute('content', /maximum-scale=1, user-scalable=no/);
   await page.getByRole('button', { name: 'Create workspace' }).click();
   await page.getByRole('button', { name: 'New note' }).click();
@@ -142,6 +152,8 @@ test('offers an update only when an existing workspace is running an outdated ve
     });
   });
   await page.goto('/');
+  await expect(page.getByText('Runtime ready')).toBeVisible();
+  await configurePeer(page, 'playwright-update');
   await page.getByRole('button', { name: 'Create workspace' }).click();
   await page.getByRole('button', { name: 'New note' }).click();
   await page.getByLabel('Title', { exact: true }).fill('Update fixture');
@@ -188,6 +200,7 @@ test('receives native items and replicated views and subviews', async ({ page })
   test.skip(!nativeTicket, 'XO_IROH_TICKET is required for the networked convergence test');
   await page.goto('/');
   await expect(page.getByText('Runtime ready')).toBeVisible();
+  await configurePeer(page, 'playwright-native');
   await page.getByLabel('Writable workspace ticket').fill(nativeTicket!);
   await page.getByRole('button', { name: 'Join and synchronize' }).click();
   await expect(page.getByRole('button', { name: 'New note' })).toBeVisible();
@@ -221,6 +234,7 @@ test('converges two browser peers through a native Iroh document peer', async ({
   try {
     await first.goto('/');
     await expect(first.getByText('Runtime ready')).toBeVisible();
+    await configurePeer(first, 'playwright-browser-one');
     await first.getByLabel('Writable workspace ticket').fill(nativeTicket!);
     await first.getByRole('button', { name: 'Join and synchronize' }).click();
     await expect(first.getByRole('button', { name: 'New note' })).toBeVisible();
@@ -233,6 +247,9 @@ test('converges two browser peers through a native Iroh document peer', async ({
     await expect(first.getByText(title, { exact: true }).first()).toBeVisible();
 
     await second.goto(`/#ticket=${encodeURIComponent(nativeTicket!)}`);
+    await expect(second.getByText('Runtime ready')).toBeVisible();
+    await configurePeer(second, 'playwright-browser-two');
+    await second.getByRole('button', { name: 'Join and synchronize' }).click();
     await expect(second.getByRole('button', { name: 'New note' })).toBeVisible();
     await expect(second).toHaveURL(/\/views\//);
     expect(new URL(second.url()).hash).toBe('');

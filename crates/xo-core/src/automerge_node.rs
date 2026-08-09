@@ -181,6 +181,11 @@ impl AutomergeNode {
         self.identity.fingerprint()
     }
 
+    #[must_use]
+    pub fn membership_public_key(&self) -> [u8; 32] {
+        self.identity.public_key()
+    }
+
     pub async fn workspace_ids(&self) -> Vec<String> {
         self.workspaces.read().await.keys().cloned().collect()
     }
@@ -221,7 +226,7 @@ impl AutomergeNode {
             gossip_sender: Mutex::new(None),
         });
         state.refresh_registry().await?;
-        write_workspace_metadata(&directory, &state)?;
+        write_workspace_metadata(&directory, &state).await?;
         self.workspaces.write().await.insert(id, state.clone());
         let workspace = self.workspace(state);
         workspace.start_gossip().await?;
@@ -305,7 +310,7 @@ impl AutomergeNode {
             gossip_topic: invitation.gossip_topic,
             gossip_sender: Mutex::new(None),
         });
-        write_workspace_metadata(&directory, &state)?;
+        write_workspace_metadata(&directory, &state).await?;
         self.workspaces
             .write()
             .await
@@ -622,6 +627,27 @@ impl AutomergeWorkspace {
         Ok(())
     }
 
+    pub async fn add_invitation_peers(&self, invitation: &WorkspaceInvitation) -> Result<()> {
+        if invitation.workspace_id != self.state.id {
+            bail!("invitation belongs to a different workspace");
+        }
+        let mut peers = self.state.peers.write().await;
+        peers.extend(
+            invitation
+                .bootstrap_peers
+                .iter()
+                .cloned()
+                .map(|peer| (peer.id, peer)),
+        );
+        drop(peers);
+        self.sync().await
+    }
+
+    #[must_use]
+    pub fn author_fingerprint(&self) -> String {
+        self.identity.fingerprint()
+    }
+
     pub async fn members(&self) -> Vec<crate::membership::Member> {
         self.state
             .registry
@@ -805,12 +831,12 @@ async fn load_workspaces(
     Ok(())
 }
 
-fn write_workspace_metadata(directory: &Path, state: &WorkspaceState) -> Result<()> {
+async fn write_workspace_metadata(directory: &Path, state: &WorkspaceState) -> Result<()> {
     let metadata = WorkspaceMetadata {
         workspace_id: state.id.clone(),
         genesis_fingerprint: state.genesis_fingerprint.clone(),
         gossip_topic: state.gossip_topic,
-        peers: Vec::new(),
+        peers: state.peers.read().await.values().cloned().collect(),
     };
     let temporary = directory.join("metadata.json.tmp");
     std::fs::write(&temporary, serde_json::to_vec_pretty(&metadata)?)?;

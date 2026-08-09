@@ -105,6 +105,7 @@ export interface WorkspaceOutcome {
 
 export interface RuntimeReport {
   runtime: RuntimeInfo;
+  peerId?: string;
   indexedDb: boolean;
   steelResult: string;
   restoredAt?: string;
@@ -120,6 +121,7 @@ export interface RuntimeReport {
 export type WorkerMethod =
   | 'initialize'
   | 'steel-probe'
+  | 'set-peer-id'
   | 'create-workspace'
   | 'join-workspace'
   | 'put-entry'

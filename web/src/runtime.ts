@@ -38,6 +38,10 @@ export class XoRuntime {
     return this.#call<RuntimeReport>('initialize');
   }
 
+  setPeerId(peerId: string) {
+    return this.#call<RuntimeReport>('set-peer-id', peerId);
+  }
+
   runSteel(source: string) {
     return this.#call<string>('steel-probe', source);
   }

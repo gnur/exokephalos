@@ -120,6 +120,7 @@ function App() {
   const [online, setOnline] = useState(navigator.onLine);
   const [installPrompt, setInstallPrompt] = useState<InstallPrompt>();
   const [ticketInput, setTicketInput] = useState('');
+  const [peerIdInput, setPeerIdInput] = useState('');
   const [updateAvailable, setUpdateAvailable] = useState(updateIsAvailable);
   const [activeView, setActiveView] = useState(initialRoute.current.view);
   const [activeSubview, setActiveSubview] = useState<string | undefined>(initialRoute.current.subview);
@@ -132,10 +133,12 @@ function App() {
     void (async () => {
       const setupTicket = scannedWorkspaceTicket;
       let next = await runtime.initialize();
-      if (setupTicket) {
+      if (setupTicket && next.peerId) {
         next = await runtime.joinWorkspace(setupTicket);
         scannedWorkspaceTicket = undefined;
         clearWorkspaceTicket();
+      } else if (setupTicket) {
+        setTicketInput(setupTicket);
       }
       if (!active) return;
       setReport(next);
@@ -156,7 +159,7 @@ function App() {
     const joinFromLocation = () => {
       const ticket = workspaceTicketFromLocation();
       const runtime = runtimeRef.current;
-      if (!ticket || !runtime) return;
+      if (!ticket || !runtime || !report?.peerId) return;
       setBusy(true);
       void runtime.joinWorkspace(ticket).then((next) => {
         clearWorkspaceTicket();
@@ -169,7 +172,7 @@ function App() {
     };
     window.addEventListener('hashchange', joinFromLocation);
     return () => window.removeEventListener('hashchange', joinFromLocation);
-  }, []);
+  }, [report?.peerId]);
 
   useEffect(() => {
     if (state !== 'ready' || !report?.status.workspaceId) return;
@@ -390,10 +393,18 @@ function App() {
             report={report}
             error={error}
             busy={busy}
+            peerId={peerIdInput}
+            onPeerId={setPeerIdInput}
             ticket={ticketInput}
             onTicket={setTicketInput}
-            onCreate={() => void runWorkspace((runtime) => runtime.createWorkspace())}
-            onJoin={() => void runWorkspace((runtime) => runtime.joinWorkspace(ticketInput))}
+            onCreate={() => void runWorkspace(async (runtime) => {
+              await runtime.setPeerId(report?.peerId ?? peerIdInput);
+              return runtime.createWorkspace();
+            })}
+            onJoin={() => void runWorkspace(async (runtime) => {
+              await runtime.setPeerId(report?.peerId ?? peerIdInput);
+              return runtime.joinWorkspace(ticketInput);
+            })}
             installPrompt={installPrompt}
             onInstall={() => void install()}
             onCheckForUpdates={() => void checkForUpdates()}
@@ -405,11 +416,13 @@ function App() {
   );
 }
 
-function Onboarding({ state, report, error, busy, ticket, onTicket, onCreate, onJoin, installPrompt, onInstall, onCheckForUpdates }: {
+function Onboarding({ state, report, error, busy, peerId, onPeerId, ticket, onTicket, onCreate, onJoin, installPrompt, onInstall, onCheckForUpdates }: {
   state: RuntimeState;
   report?: RuntimeReport;
   error: string;
   busy: boolean;
+  peerId: string;
+  onPeerId: (peerId: string) => void;
   ticket: string;
   onTicket: (ticket: string) => void;
   onCreate: () => void;
@@ -424,9 +437,10 @@ function Onboarding({ state, report, error, busy, ticket, onTicket, onCreate, on
         <div>
           <p className="eyebrow"><Sparkles /> direct browser Iroh</p>
           <h1>Your knowledge,<br /><em>entirely client-side.</em></h1>
-          <p className="lede">Create a new Iroh document or join xo-syncd with a writable ticket. Docs, Blobs, Gossip, Steel, and recovery all run in this browser worker.</p>
+          <p className="lede">Create or join an authenticated Automerge workspace. Iroh QUIC, Gossip, Steel, and recovery run in this browser worker.</p>
+          {!report?.peerId ? <label className="ticket-form"><span>Peer ID</span><input value={peerId} onChange={(event) => onPeerId(event.target.value)} placeholder="erwin-phone" aria-label="Peer ID" /></label> : <p>Peer ID: <strong>{report.peerId}</strong></p>}
           <div className="hero-actions">
-            <button className="primary" disabled={busy || state !== 'ready'} onClick={onCreate}>{busy ? <LoaderCircle className="spin" /> : <Plus />} Create workspace</button>
+            <button className="primary" disabled={busy || state !== 'ready' || (!report?.peerId && !peerId.trim())} onClick={onCreate}>{busy ? <LoaderCircle className="spin" /> : <Plus />} Create workspace</button>
             {installPrompt ? <button className="secondary" onClick={onInstall}><Download /> Install xo</button> : <button className="secondary" onClick={onCheckForUpdates}>Check for updates</button>}
           </div>
         </div>
@@ -437,7 +451,7 @@ function Onboarding({ state, report, error, busy, ticket, onTicket, onCreate, on
         <div><p className="eyebrow"><KeyRound /> Existing workspace</p><h2>Join with a writable ticket</h2><p>Tickets stay encrypted in this browser. Network traffic is relay-only and end-to-end encrypted by Iroh.</p></div>
         <div className="ticket-form">
           <textarea value={ticket} onChange={(event) => onTicket(event.target.value)} placeholder="Paste the writable Iroh Docs ticket from xo or xo-syncd" aria-label="Writable workspace ticket" />
-          <button className="primary" disabled={busy || !ticket.trim() || state !== 'ready'} onClick={onJoin}>{busy ? <LoaderCircle className="spin" /> : <Radio />} Join and synchronize</button>
+          <button className="primary" disabled={busy || !ticket.trim() || state !== 'ready' || (!report?.peerId && !peerId.trim())} onClick={onJoin}>{busy ? <LoaderCircle className="spin" /> : <Radio />} Join and synchronize</button>
         </div>
       </section>
 

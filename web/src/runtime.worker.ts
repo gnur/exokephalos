@@ -33,6 +33,7 @@ const VAULT_KEY_ID = 'browser-key';
 const VAULT_STATE_ID = 'identity';
 
 interface BrowserIdentity {
+  peerId?: string;
   endpointSecret: string;
   authorSecret: string;
   ticket?: string;
@@ -178,6 +179,7 @@ async function saveIdentity(next: BrowserIdentity) {
 
 async function initializeIroh() {
   if (!identity) throw new Error('browser identity is unavailable');
+  if (!identity.peerId) return;
   node = await IrohDocNode.spawn(
     decodeBase64(identity.endpointSecret),
     decodeBase64(identity.authorSecret),
@@ -191,6 +193,19 @@ async function initializeIroh() {
   } catch (cause) {
     lastSyncError = errorMessage(cause);
   }
+}
+
+async function setPeerId(value: string) {
+  const peerId = value.trim();
+  if (!/^[A-Za-z0-9._-]{1,64}$/.test(peerId)) {
+    throw new Error("Peer ID must contain 1–64 letters, digits, '.', '_', or '-' characters");
+  }
+  if (identity?.peerId && identity.peerId !== peerId) {
+    throw new Error('Wipe this browser identity before changing its peer ID');
+  }
+  await saveIdentity({ ...requireIdentity(), peerId });
+  await initializeIroh();
+  return report();
 }
 
 async function createWorkspace() {
@@ -349,11 +364,14 @@ async function cachedEntries() {
 }
 
 async function report(): Promise<RuntimeReport> {
-  const status = JSON.parse(await requireNode().statusJson()) as SyncStatus;
+  const status = node
+    ? JSON.parse(await node.statusJson()) as SyncStatus
+    : { endpointId: '', authorId: '', peers: 0, writable: false };
   const entries = await cachedEntries();
   const workspace = status.workspaceId ? resolvedWorkspace(entries) : undefined;
   return {
     runtime: JSON.parse(runtime_info()) as RuntimeInfo,
+    peerId: identity?.peerId,
     indexedDb: true,
     steelResult: run_steel('(+ 20 22)'),
     restoredAt,
@@ -435,6 +453,9 @@ async function handle(request: WorkerRequest): Promise<unknown> {
     case 'steel-probe':
       if (typeof request.payload !== 'string') throw new Error('Steel source must be a string');
       return run_steel(request.payload);
+    case 'set-peer-id':
+      if (typeof request.payload !== 'string') throw new Error('Peer ID must be a string');
+      return setPeerId(request.payload);
     case 'create-workspace':
       return createWorkspace();
     case 'join-workspace':

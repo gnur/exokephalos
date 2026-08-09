@@ -21,7 +21,7 @@ aes-gcm = "0.10.3"
 anyhow = "1.0.98"
 argon2 = "0.5.3"
 # 0.7+ requires a sha2 0.11 release incompatible with Iroh 0.98's pinned RC.
-automerge = "0.6.1"
+automerge = { version = "0.6.1", features = ["wasm"] }
 base64 = "0.22.1"
 blake3 = "1.8.2"
 bytes = "1.12.1"

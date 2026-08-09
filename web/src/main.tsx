@@ -436,6 +436,18 @@ function Onboarding({ state, report, error, busy, peerId, onPeerId, ticket, onTi
   onInstall: () => void;
   onCheckForUpdates: () => void;
 }) {
+  if (state === 'starting') {
+    return (
+      <section className="hero" aria-live="polite">
+        <div>
+          <p className="eyebrow"><LoaderCircle className="spin" /> restoring local state</p>
+          <h1>Opening your<br /><em>browser workspace.</em></h1>
+          <p className="lede">Restoring the encrypted identity and Automerge replica from IndexedDB before connecting to peers.</p>
+        </div>
+        <RuntimeCard state={state} report={report} error={error} />
+      </section>
+    );
+  }
   return (
     <>
       <section className="hero">

@@ -228,7 +228,7 @@ test('checks the deployed version every ten minutes', async ({ page, request }) 
   await expect(page.getByText('A newer xo release is available.')).toBeVisible();
 });
 
-test('imports notes, starts the actual TUI, and synchronizes them to the PWA', async ({ page }) => {
+test('imports notes, starts the actual TUI, synchronizes to the PWA, and survives refresh', async ({ page }) => {
   test.setTimeout(240_000);
   test.skip(!nativeTicket || !tuiApprovalUrl, 'the native TUI fixture is required');
   await page.goto('/');
@@ -242,6 +242,14 @@ test('imports notes, starts the actual TUI, and synchronizes them to the PWA', a
   const imported = page.locator('.note-list-item').filter({ hasText: 'Browser fixture' });
   await expect(imported).toBeVisible({ timeout: 60_000 });
   await imported.click();
+  await expect(page.locator('.markdown-preview')).toContainText('created by a native peer');
+
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'New note' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Join and synchronize' })).toHaveCount(0);
+  await selectWorkspaceNavigation(page, 'Notes');
+  await expect(page.getByText('Browser fixture', { exact: true }).first()).toBeVisible();
+  await page.getByText('Browser fixture', { exact: true }).first().click();
   await expect(page.locator('.markdown-preview')).toContainText('created by a native peer');
 });
 

@@ -215,12 +215,12 @@ test('checks the deployed version every ten minutes', async ({ page, request }) 
   await expect(page.getByText('A newer xo release is available.')).toBeVisible();
 });
 
-test('receives native items and replicated views and subviews', async ({ page }) => {
+test('receives native items and replicated views and subviews', async ({ page, browserName }) => {
   test.setTimeout(180_000);
   test.skip(!nativeTicket, 'XO_IROH_TICKET is required for the networked convergence test');
   await page.goto('/');
   await expect(page.getByText('Runtime ready')).toBeVisible();
-  await configurePeer(page, 'playwright-native');
+  await configurePeer(page, `playwright-native-${browserName}`);
   await page.getByLabel('Workspace invitation').fill(nativeTicket!);
   await page.getByRole('button', { name: 'Join and synchronize' }).click();
   await approvePendingNativePeer(page);

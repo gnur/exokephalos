@@ -283,6 +283,7 @@ jobs:
           python3 tests/tui-driver.py \
             --port 19465 \
             --log "${fixture}/tui.log" \
+            --ready-text "TUI Reading Fixture" \
             -- env HOME="${fixture}/home" ../target/debug/xo \
               --state-dir "${fixture}/state" \
               --workspace "${workspace_id}" \

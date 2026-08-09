@@ -20,12 +20,14 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--bind", default="127.0.0.1")
 parser.add_argument("--port", type=int, required=True)
 parser.add_argument("--log", required=True)
+parser.add_argument("--ready-text", default="Browser fixture")
 parser.add_argument("command", nargs=argparse.REMAINDER)
 args = parser.parse_args()
 if args.command and args.command[0] == "--":
     args.command = args.command[1:]
 if not args.command:
     parser.error("a TUI command is required after --")
+ready_text = args.ready_text.encode()
 
 approval_requested = threading.Event()
 approval_finished = threading.Event()
@@ -103,7 +105,7 @@ try:
                     transcript.extend(data)
                     if len(transcript) > 1_000_000:
                         del transcript[:-500_000]
-                    if b"Browser fixture" in transcript:
+                    if ready_text in transcript:
                         ready.set()
                     if b"approved peer" in transcript:
                         approval_finished.set()

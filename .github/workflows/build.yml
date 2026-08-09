@@ -175,7 +175,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --locked -p xo-admin -p xo-syncd
+          cargo build --locked -p xo -p xo-admin -p xo-syncd
           fixture=$(mktemp -d)
           mkdir -p "${fixture}/source"
           cat > "${fixture}/source/fixture.md" <<'EOF'
@@ -272,6 +272,37 @@ jobs:
           XO_IROH_TICKET="${ticket}" XO_OPERATOR_TOKEN="${operator_token}" npx playwright test \
             --project=firefox --project=mobile-webkit \
             --grep 'creates a local item|prevents mobile|receives native items'
+
+          # Exercise the user-facing path explicitly: imported state -> real xo TUI in a
+          # pseudo-terminal -> browser join approved with the TUI's Space/i/a keys.
+          kill "${syncd_pid}"
+          wait "${syncd_pid}" || true
+          mkdir -p "${fixture}/home/.config/xo"
+          HOME="${fixture}/home" ../target/debug/xo config-init \
+            > "${fixture}/home/.config/xo/config.scm"
+          python3 tests/tui-driver.py \
+            --port 19465 \
+            --log "${fixture}/tui.log" \
+            -- env HOME="${fixture}/home" ../target/debug/xo \
+              --state-dir "${fixture}/state" \
+              --workspace "${workspace_id}" \
+              --projection "${fixture}/projection" &
+          tui_driver_pid=$!
+          trap 'kill ${tui_driver_pid} 2>/dev/null || true' EXIT
+          for attempt in {1..120}; do
+            if curl --fail --silent http://127.0.0.1:19465/healthz > /dev/null; then
+              break
+            fi
+            sleep 0.5
+          done
+          curl --fail --silent http://127.0.0.1:19465/healthz > /dev/null
+          XO_IROH_TICKET="${ticket}" \
+            XO_TUI_APPROVAL_URL="http://127.0.0.1:19465/approve" \
+            npx playwright test --project=chromium \
+              --grep 'imports notes, starts the actual TUI'
+          kill "${tui_driver_pid}"
+          wait "${tui_driver_pid}"
+          grep -a 'approved peer playwright-tui-flow' "${fixture}/tui.log"
 
       - name: Package static PWA
         run: tar -C web/dist -czf xo-web.tar.gz .

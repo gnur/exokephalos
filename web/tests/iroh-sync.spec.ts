@@ -3,9 +3,20 @@ import type { Page } from '@playwright/test';
 
 const nativeTicket = process.env.XO_IROH_TICKET;
 const operatorToken = process.env.XO_OPERATOR_TOKEN;
+const tuiApprovalUrl = process.env.XO_TUI_APPROVAL_URL;
 
 async function approvePendingNativePeer(page: Page) {
-  if (!operatorToken) throw new Error('XO_OPERATOR_TOKEN is required for admission tests');
+  if (tuiApprovalUrl) {
+    const response = await fetch(tuiApprovalUrl, { method: 'POST' });
+    if (!response.ok || !((await response.json()) as { approved: boolean }).approved) {
+      throw new Error('the TUI did not approve the browser membership request');
+    }
+    const retry = page.getByRole('button', { name: 'Check approval' });
+    await expect(retry).toBeVisible({ timeout: 120_000 });
+    await retry.click();
+    return;
+  }
+  if (!operatorToken) throw new Error('XO_OPERATOR_TOKEN or XO_TUI_APPROVAL_URL is required for admission tests');
   let approved = 0;
   for (let attempt = 0; attempt < 120 && approved === 0; attempt += 1) {
     const response = await fetch('http://127.0.0.1:19464/v1/members/approve-pending', {
@@ -213,6 +224,23 @@ test('checks the deployed version every ten minutes', async ({ page, request }) 
   deployedVersion = '20991231T235959Z';
   await page.clock.fastForward(10 * 60 * 1_000);
   await expect(page.getByText('A newer xo release is available.')).toBeVisible();
+});
+
+test('imports notes, starts the actual TUI, and synchronizes them to the PWA', async ({ page }) => {
+  test.setTimeout(240_000);
+  test.skip(!nativeTicket || !tuiApprovalUrl, 'the native TUI fixture is required');
+  await page.goto('/');
+  await expect(page.getByText('Runtime ready')).toBeVisible();
+  await configurePeer(page, 'playwright-tui-flow');
+  await page.getByLabel('Workspace invitation').fill(nativeTicket!);
+  await page.getByRole('button', { name: 'Join and synchronize' }).click();
+  await approvePendingNativePeer(page);
+  await expect(page.getByRole('button', { name: 'New note' })).toBeVisible();
+  await selectWorkspaceNavigation(page, 'Notes');
+  const imported = page.locator('.note-list-item').filter({ hasText: 'Browser fixture' });
+  await expect(imported).toBeVisible({ timeout: 60_000 });
+  await imported.click();
+  await expect(page.locator('.markdown-preview')).toContainText('created by a native peer');
 });
 
 test('receives native items and replicated views and subviews', async ({ page, browserName }) => {

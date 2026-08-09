@@ -39,6 +39,9 @@ struct Cli {
     /// Override the persistent Iroh state directory from config.scm.
     #[arg(long)]
     state_dir: Option<PathBuf>,
+    /// Override the required human-readable peer ID (defaults to the host name).
+    #[arg(long)]
+    peer_id: Option<String>,
     /// Override the workspace ID from config.scm.
     #[arg(long, conflicts_with = "ticket")]
     workspace: Option<String>,
@@ -106,11 +109,12 @@ async fn main() -> Result<()> {
             item_type,
         }) => {
             let config = configured(&cli)?;
-            let session = WorkspaceSession::open(
+            let session = WorkspaceSession::open_with_peer(
                 &config.state_dir,
                 config.workspace.as_deref(),
                 cli.ticket.as_deref(),
-                config.projection,
+                config.projection.clone(),
+                config.resolved_peer_id()?,
             )
             .await?;
             let result =
@@ -131,11 +135,12 @@ async fn main() -> Result<()> {
                 _ => anyhow::bail!("unknown bundled plugin {name:?}"),
             };
             let config = configured(&cli)?;
-            let mut session = WorkspaceSession::open(
+            let mut session = WorkspaceSession::open_with_peer(
                 &config.state_dir,
                 config.workspace.as_deref(),
                 cli.ticket.as_deref(),
-                config.projection,
+                config.projection.clone(),
+                config.resolved_peer_id()?,
             )
             .await?;
             // Establish the main workspace descriptor before adding a module,
@@ -151,9 +156,10 @@ async fn main() -> Result<()> {
                 &config.state_dir,
                 config.workspace.as_deref(),
                 cli.ticket.as_deref(),
-                config.projection,
+                config.projection.clone(),
                 &config.pwa_url,
                 &config.leader_key,
+                config.resolved_peer_id()?,
             )
             .await?;
         }
@@ -163,11 +169,12 @@ async fn main() -> Result<()> {
 
 async fn import_command(cli: &Cli, source: &std::path::Path, item_type: &str) -> Result<()> {
     let config = configured(cli)?;
-    let mut session = WorkspaceSession::open(
+    let mut session = WorkspaceSession::open_with_peer(
         &config.state_dir,
         config.workspace.as_deref(),
         cli.ticket.as_deref(),
-        config.projection,
+        config.projection.clone(),
+        config.resolved_peer_id()?,
     )
     .await?;
     let interactive = io::stderr().is_terminal();
@@ -213,14 +220,17 @@ async fn import_command(cli: &Cli, source: &std::path::Path, item_type: &str) ->
 
 fn configured(cli: &Cli) -> Result<XoConfig> {
     let home = home_dir()?;
-    Ok(XoConfig::load(&config_path(&home), &home)?.apply(
+    let config = XoConfig::load(&config_path(&home), &home)?.apply(
         CliOverrides {
             state_dir: cli.state_dir.clone(),
+            peer_id: cli.peer_id.clone(),
             workspace: cli.workspace.clone(),
             projection: cli.projection.clone(),
         },
         &home,
-    ))
+    );
+    config.resolved_peer_id()?;
+    Ok(config)
 }
 
 async fn run_tui(
@@ -230,8 +240,10 @@ async fn run_tui(
     projection: PathBuf,
     pwa_url: &str,
     leader_key: &str,
+    peer_id: xo_core::PeerId,
 ) -> Result<()> {
-    let mut session = WorkspaceSession::open(state_dir, workspace, ticket, projection).await?;
+    let mut session =
+        WorkspaceSession::open_with_peer(state_dir, workspace, ticket, projection, peer_id).await?;
     let workspace_events = session.subscribe().await?;
     let behavior = session.behavior().await?;
     let snapshot = session.snapshot().await?;

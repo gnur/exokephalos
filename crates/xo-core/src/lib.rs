@@ -1,5 +1,7 @@
 //! Shared domain, storage, and synchronization contracts for exokephalos.
 
+pub mod authenticated_change;
+pub mod automerge_store;
 #[cfg(feature = "native")]
 pub mod backup;
 pub mod behavior;
@@ -13,6 +15,7 @@ pub mod iroh_node;
 #[cfg(feature = "native")]
 pub mod local_index;
 pub mod markdown;
+pub mod membership;
 #[cfg(feature = "native")]
 pub mod projection;
 #[cfg(feature = "iroh-sync")]
@@ -38,6 +41,7 @@ pub use domain::{
     NoteId, NoteRevision, RevisionId, SchemaVersion, Tombstone, WorkspaceDescriptor, WorkspaceId,
 };
 pub use hlc::{Hlc, HlcClock};
+pub use membership::{MembershipIdentity, PeerId};
 pub use resolution::{ResolvedNote, RevisionGraphError, resolve_heads, validate_revision_graph};
 
 /// Version of the replicated record schema written by this build.

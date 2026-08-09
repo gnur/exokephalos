@@ -12,6 +12,8 @@ pub struct XoConfig {
     pub schema: u16,
     pub state_dir: PathBuf,
     #[serde(default)]
+    pub peer_id: Option<String>,
+    #[serde(default)]
     pub workspace: Option<String>,
     pub projection: PathBuf,
     pub pwa_url: String,
@@ -27,6 +29,7 @@ impl Default for XoConfig {
         Self {
             schema: schema(),
             state_dir: PathBuf::from("~/.local/share/xo"),
+            peer_id: None,
             workspace: None,
             projection: PathBuf::from("~/notes"),
             pwa_url: "https://xo.exokephalos.dev/".to_owned(),
@@ -38,6 +41,7 @@ impl Default for XoConfig {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CliOverrides {
     pub state_dir: Option<PathBuf>,
+    pub peer_id: Option<String>,
     pub workspace: Option<String>,
     pub projection: Option<PathBuf>,
 }
@@ -61,6 +65,9 @@ impl XoConfig {
         }
         validate_pwa_url(&config.pwa_url)?;
         validate_leader_key(&config.leader_key)?;
+        if let Some(peer_id) = &config.peer_id {
+            xo_core::PeerId::parse(peer_id.clone()).context("validate peer-id")?;
+        }
         config.state_dir = expand_home(&config.state_dir, home);
         config.projection = expand_home(&config.projection, home);
         Ok(config)
@@ -71,6 +78,9 @@ impl XoConfig {
         if let Some(value) = overrides.state_dir {
             self.state_dir = expand_home(&value, home);
         }
+        if let Some(value) = overrides.peer_id {
+            self.peer_id = Some(value);
+        }
         if let Some(value) = overrides.workspace {
             self.workspace = Some(value);
         }
@@ -78,6 +88,19 @@ impl XoConfig {
             self.projection = expand_home(&value, home);
         }
         self
+    }
+
+    pub fn resolved_peer_id(&self) -> Result<xo_core::PeerId> {
+        let value = self.peer_id.clone().map_or_else(
+            || {
+                hostname::get()
+                    .context("read system hostname")?
+                    .into_string()
+                    .map_err(|_| anyhow::anyhow!("system hostname is not valid UTF-8"))
+            },
+            Ok,
+        )?;
+        xo_core::PeerId::parse(value).context("validate peer-id")
     }
 
     pub fn document(&self) -> Result<String> {
@@ -90,12 +113,14 @@ impl XoConfig {
              (xo-config\n\
              \x20 (schema {})\n\
              \x20 (state-dir {})\n\
+             \x20 (peer-id {})\n\
              \x20 (workspace {})\n\
              \x20 (projection {})\n\
              \x20 (pwa-url {})\n\
              \x20 (leader-key {}))\n",
             self.schema,
             string(&self.state_dir.to_string_lossy())?,
+            optional(self.peer_id.as_deref())?,
             optional(self.workspace.as_deref())?,
             string(&self.projection.to_string_lossy())?,
             string(&self.pwa_url)?,
@@ -225,12 +250,14 @@ mod tests {
         let config = XoConfig::default().apply(
             CliOverrides {
                 state_dir: Some("~/state".into()),
+                peer_id: Some("alice-laptop".into()),
                 workspace: Some("workspace-id".into()),
                 projection: Some("~/knowledge".into()),
             },
             Path::new("/users/alice"),
         );
         assert_eq!(config.state_dir, Path::new("/users/alice/state"));
+        assert_eq!(config.peer_id.as_deref(), Some("alice-laptop"));
         assert_eq!(config.workspace.as_deref(), Some("workspace-id"));
         assert_eq!(config.projection, Path::new("/users/alice/knowledge"));
     }

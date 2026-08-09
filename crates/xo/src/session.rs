@@ -57,6 +57,7 @@ pub struct WorkspaceSession {
     clock: HlcClock,
     projection: ProjectionState,
     pub sync_state: SyncStateStore,
+    membership: xo_core::MembershipIdentity,
     _lock: WorkspaceLock,
 }
 
@@ -67,9 +68,25 @@ impl WorkspaceSession {
         ticket: Option<&str>,
         projection: PathBuf,
     ) -> Result<Self> {
+        let host = hostname::get()
+            .context("read system hostname")?
+            .into_string()
+            .map_err(|_| anyhow::anyhow!("system hostname is not valid UTF-8"))?;
+        let peer_id = xo_core::PeerId::parse(host).context("validate host peer ID")?;
+        Self::open_with_peer(state_dir, workspace_id, ticket, projection, peer_id).await
+    }
+
+    pub async fn open_with_peer(
+        state_dir: &Path,
+        workspace_id: Option<&str>,
+        ticket: Option<&str>,
+        projection: PathBuf,
+        peer_id: xo_core::PeerId,
+    ) -> Result<Self> {
         std::fs::create_dir_all(state_dir)
             .with_context(|| format!("create state directory {}", state_dir.display()))?;
         let lock = WorkspaceLock::acquire(state_dir)?;
+        let membership = xo_core::membership::load_or_create_identity(state_dir, &peer_id)?;
         let node = IrohNode::persistent(state_dir).await?;
         let (workspace, reopened) =
             select_workspace(&node, state_dir, workspace_id, ticket).await?;
@@ -85,7 +102,7 @@ impl WorkspaceSession {
                 schema: CURRENT_SCHEMA,
                 endpoint_id: node.endpoint_id().to_string(),
                 author_id: actor.clone(),
-                label: device_label(),
+                label: membership.peer_id().to_string(),
                 capabilities: BTreeSet::from(["write".to_owned(), "tui".to_owned()]),
                 last_seen_ms: Some(now_ms()?),
                 retired_at: None,
@@ -104,8 +121,19 @@ impl WorkspaceSession {
             actor: actor.clone(),
             clock,
             sync_state,
+            membership,
             _lock: lock,
         })
+    }
+
+    #[must_use]
+    pub fn peer_id(&self) -> &xo_core::PeerId {
+        self.membership.peer_id()
+    }
+
+    #[must_use]
+    pub fn membership_fingerprint(&self) -> String {
+        self.membership.fingerprint()
     }
 
     #[must_use]
@@ -408,12 +436,6 @@ async fn open_active_workspace(node: &IrohNode, state_dir: &Path) -> Result<Opti
         .await?
         .with_context(|| format!("active workspace {active} is not present in this peer"))
         .map(Some)
-}
-
-fn device_label() -> String {
-    std::env::var("HOSTNAME")
-        .or_else(|_| std::env::var("COMPUTERNAME"))
-        .map_or_else(|_| "xo TUI".to_owned(), |host| format!("xo TUI on {host}"))
 }
 
 fn now_ms() -> Result<u64> {

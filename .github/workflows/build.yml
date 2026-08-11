@@ -384,7 +384,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - trusted_runner: '["self-hosted","Linux","X64"]'
+          - trusted_runner: '["ubuntu-24.04"]'
             pull_request_runner: '["ubuntu-24.04"]'
             target: x86_64-unknown-linux-gnu
             package: xo-x86_64-unknown-linux-gnu.tar.gz

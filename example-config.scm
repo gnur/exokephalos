@@ -22,14 +22,7 @@
       (descending #t)
       (preview #f)
       (predicate
-        (all
-          (field-equals "type" "note")
-          (not
-            (any
-              (has-tag "read")
-              (has-tag "to-read")
-              (has-tag "reading")
-              (has-tag "stopped-reading")))))
+          (field-equals "type" "note"))
       (subviews
         (subview
           (id "all")
@@ -57,11 +50,7 @@
       (descending #t)
       (preview #f)
       (predicate
-        (any
-          (has-tag "read")
-          (has-tag "to-read")
-          (has-tag "reading")
-          (has-tag "stopped-reading")))
+          (field-equals "type" "book"))
       (subviews
         (subview
           (id "all")

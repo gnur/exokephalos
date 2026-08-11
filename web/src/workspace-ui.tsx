@@ -207,7 +207,8 @@ export function WorkspaceExperience({
     window.history.pushState(null, '', subview ? `${path}?subview=${encodeURIComponent(subview)}` : path);
   }
 
-  const statusMessage = error || report.syncError || queryError;
+  const statusMessage = error || report.syncError || queryError
+    || (report.status.restoring ? 'Showing durable notes while Iroh synchronization starts.' : '');
   const screenTitle = pane === 'settings'
     ? 'Settings'
     : pane === 'tags'

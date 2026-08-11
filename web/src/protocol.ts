@@ -95,6 +95,7 @@ export interface SyncStatus {
   authorId: string;
   peers: number;
   writable: boolean;
+  restoring?: boolean;
   pendingApproval?: boolean;
 }
 

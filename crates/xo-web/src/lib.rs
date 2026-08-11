@@ -32,6 +32,16 @@ pub fn runtime_info() -> String {
     .to_string()
 }
 
+/// Read the workspace identifier without opening an Iroh endpoint.
+#[wasm_bindgen]
+pub fn invitation_workspace_id(ticket: &str) -> Result<String, JsValue> {
+    invitation_workspace_id_inner(ticket).map_err(|error| JsValue::from_str(&format!("{error:#}")))
+}
+
+fn invitation_workspace_id_inner(ticket: &str) -> anyhow::Result<String> {
+    Ok(xo_core::peer_protocol::WorkspaceInvitation::decode(ticket)?.workspace_id)
+}
+
 /// Execute Steel in a fresh sandboxed VM owned by the calling Web Worker.
 ///
 /// The UI can terminate that worker if source does not complete. No filesystem,
@@ -108,6 +118,11 @@ mod tests {
         assert_eq!(info["version"], env!("XO_BUILD_VERSION"));
         assert_eq!(info["steel"], true);
         assert_eq!(info["iroh"], true);
+    }
+
+    #[test]
+    fn invalid_invitation_cannot_supply_a_cached_workspace_id() {
+        assert!(invitation_workspace_id_inner("not-an-invitation").is_err());
     }
 
     #[test]

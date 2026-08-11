@@ -106,11 +106,11 @@ pub struct App {
 impl App {
     pub fn new(behavior: WorkspaceBehavior, notes: Vec<Note>) -> Self {
         let active_view = behavior.default_view.clone();
-        let tags_visible = behavior
-            .views
-            .iter()
-            .find(|view| view.id == active_view)
-            .is_none_or(|view| view.show_tags);
+        let active_view_descriptor = behavior.views.iter().find(|view| view.id == active_view);
+        let tags_visible = active_view_descriptor.is_none_or(|view| view.show_tags);
+        let active_subview = active_view_descriptor
+            .and_then(|view| view.subviews.first())
+            .map(|subview| subview.id.clone());
         Self {
             workspace_id: String::new(),
             behavior,
@@ -125,7 +125,7 @@ impl App {
             operations: vec![],
             sync: None,
             active_view,
-            active_subview: None,
+            active_subview,
             search: String::new(),
             selected_tags: BTreeSet::new(),
             tags_visible,
@@ -267,15 +267,13 @@ impl App {
     }
     pub fn set_view(&mut self, id: &str) {
         id.clone_into(&mut self.active_view);
-        self.active_subview = None;
+        let view = self.behavior.views.iter().find(|view| view.id == id);
+        self.active_subview = view
+            .and_then(|view| view.subviews.first())
+            .map(|subview| subview.id.clone());
         self.selected = 0;
         self.tag_index = 0;
-        self.tags_visible = self
-            .behavior
-            .views
-            .iter()
-            .find(|view| view.id == id)
-            .is_none_or(|view| view.show_tags);
+        self.tags_visible = view.is_none_or(|view| view.show_tags);
         if !self.tags_visible && self.pane == Pane::Tags {
             self.pane = Pane::Notes;
         }
@@ -1726,7 +1724,8 @@ mod tests {
         );
         assert!(app.choose_main_view_key('b'));
         assert_eq!(app.active_view, "books");
-        assert!(app.active_subview.is_none());
+        assert_eq!(app.active_subview.as_deref(), Some("reading"));
+        assert_eq!(app.subview_header(), "[Reading]");
 
         app.goto_input = "ne".into();
         assert!(app.goto_is_unambiguous());

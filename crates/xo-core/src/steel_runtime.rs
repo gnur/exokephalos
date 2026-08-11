@@ -1396,12 +1396,22 @@ mod tests {
         behavior.apply_action(&mut note, "mark-done", now).unwrap();
         assert!(Predicate::HasTag { tag: "done".into() }.matches(&note));
 
+        let mut tagged_note = note.clone();
+        tagged_note.frontmatter.insert(
+            "tags".into(),
+            FrontmatterValue::Sequence(vec![FrontmatterValue::String("to-read".into())]),
+        );
+        assert!(behavior.action(Some(&tagged_note), "start-book").is_err());
+
         let mut book = crate::Note {
             id: crate::NoteId::new("bcdefgh"),
-            frontmatter: BTreeMap::from([(
-                "tags".into(),
-                FrontmatterValue::Sequence(vec![FrontmatterValue::String("to-read".into())]),
-            )]),
+            frontmatter: BTreeMap::from([
+                ("type".into(), FrontmatterValue::String("book".into())),
+                (
+                    "tags".into(),
+                    FrontmatterValue::Sequence(vec![FrontmatterValue::String("to-read".into())]),
+                ),
+            ]),
             body: String::new(),
             path: "bcd/bcdefgh-book.md".into(),
         };
@@ -1410,6 +1420,8 @@ mod tests {
             book.frontmatter.get("started"),
             Some(&FrontmatterValue::String(now.into()))
         );
+        assert!(behavior.action(Some(&book), "start-book").is_err());
+        assert!(behavior.action(Some(&book), "finish-book").is_ok());
         behavior
             .apply_action(&mut book, "finish-book", now)
             .unwrap();
@@ -1417,6 +1429,7 @@ mod tests {
             book.frontmatter.get("finished"),
             Some(&FrontmatterValue::String(now.into()))
         );
+        assert!(behavior.action(Some(&book), "finish-book").is_err());
     }
 
     #[test]

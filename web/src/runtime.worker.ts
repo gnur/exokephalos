@@ -2,6 +2,7 @@
 
 import init, {
   IrohDocNode,
+  invitation_workspace_id,
   prepare_note_mutation,
   query_workspace,
   run_steel,
@@ -38,6 +39,7 @@ interface BrowserIdentity {
   endpointSecret: string;
   authorSecret: string;
   ticket?: string;
+  workspaceId?: string;
 }
 
 interface PendingWrite {
@@ -63,6 +65,8 @@ interface VaultStateRecord {
 let wasmReady: Promise<void> | undefined;
 let database: IDBDatabase | undefined;
 let node: IrohDocNode | undefined;
+let nodeReady = false;
+let nodeInitialization: Promise<void> | undefined;
 let identity: BrowserIdentity | undefined;
 let restoredAt: string | undefined;
 let lastSyncError: string | undefined;
@@ -181,31 +185,42 @@ async function saveIdentity(next: BrowserIdentity) {
 async function initializeIroh() {
   if (!identity) throw new Error('browser identity is unavailable');
   if (!identity.peerId) return;
+  nodeReady = false;
   node = await IrohDocNode.spawn(
     decodeBase64(identity.endpointSecret),
     decodeBase64(identity.authorSecret),
     identity.peerId,
   );
-  if (!identity.ticket) return;
-  try {
+  if (identity.ticket) {
     const replica = await getRecord<{ id: string; value: string }>(REPLICA_STORE, 'active');
     if (replica?.value) {
       await node.restoreReplica(identity.ticket, replica.value);
-      try {
-        await node.refreshSync();
-        lastSyncError = undefined;
-      } catch (cause) {
-        lastSyncError = errorMessage(cause);
-      }
+      lastSyncError = undefined;
     } else {
       const outcome = JSON.parse(await node.joinWorkspace(identity.ticket)) as WorkspaceOutcome;
       lastSyncError = outcome.syncError;
     }
     await restoreDurableBrowserEntries();
-    await syncPendingWrites();
-  } catch (cause) {
-    lastSyncError = errorMessage(cause);
   }
+  nodeReady = true;
+}
+
+function startIrohInitialization() {
+  nodeInitialization ??= initializeIroh().catch((_cause: unknown) => {
+    nodeReady = false;
+    lastSyncError = 'Iroh startup did not complete; showing durable notes and retrying automatically.';
+  });
+  return nodeInitialization;
+}
+
+async function awaitIrohInitialization() {
+  await startIrohInitialization();
+  if (!nodeReady) {
+    node = undefined;
+    nodeInitialization = undefined;
+    await startIrohInitialization();
+  }
+  if (!nodeReady) throw new Error(lastSyncError ?? 'Iroh runtime is unavailable');
 }
 
 async function setPeerId(value: string) {
@@ -217,13 +232,14 @@ async function setPeerId(value: string) {
     throw new Error('Wipe this browser identity before changing its peer ID');
   }
   await saveIdentity({ ...requireIdentity(), peerId });
-  await initializeIroh();
+  nodeInitialization = undefined;
+  await awaitIrohInitialization();
   return report();
 }
 
 async function createWorkspace() {
   const outcome = JSON.parse(await requireNode().createWorkspace()) as WorkspaceOutcome;
-  await saveIdentity({ ...requireIdentity(), ticket: outcome.ticket });
+  await saveIdentity({ ...requireIdentity(), ticket: outcome.ticket, workspaceId: outcome.workspaceId });
   lastSyncError = undefined;
   await persistActiveReplica();
   return report();
@@ -241,7 +257,7 @@ async function joinWorkspace(ticket: string) {
     await transactionComplete(tx);
     workspaceCache = undefined;
   }
-  await saveIdentity({ ...requireIdentity(), ticket: outcome.ticket });
+  await saveIdentity({ ...requireIdentity(), ticket: outcome.ticket, workspaceId: outcome.workspaceId });
   lastSyncError = outcome.syncError;
   await persistActiveReplica();
   try {
@@ -257,7 +273,17 @@ function requireIdentity() {
   return identity;
 }
 
+function workspaceIdFromTicket(ticket?: string) {
+  if (!ticket) return undefined;
+  try {
+    return invitation_workspace_id(ticket);
+  } catch {
+    return undefined;
+  }
+}
+
 async function enqueueWrite(input: PutEntryInput) {
+  await awaitIrohInitialization();
   const key = input.key.trim();
   if (!key) throw new Error('Document key is required');
   const status = JSON.parse(await requireNode().statusJson()) as SyncStatus;
@@ -274,6 +300,7 @@ async function enqueueWrite(input: PutEntryInput) {
 }
 
 async function mutateNote(input: NoteMutationInput) {
+  await awaitIrohInitialization();
   const entries = await cachedEntries();
   const status = JSON.parse(await requireNode().statusJson()) as SyncStatus;
   const prepared = JSON.parse(prepare_note_mutation(
@@ -333,6 +360,7 @@ async function syncPendingWrites() {
 
 async function refreshSync() {
   try {
+    await awaitIrohInitialization();
     const published = await publishPendingWrites();
     await requireNode().refreshSync();
     if (await hasRemotePeers()) await confirmPendingWrites(published);
@@ -388,15 +416,23 @@ async function cachedEntries() {
 }
 
 async function report(): Promise<RuntimeReport> {
-  const status = node
+  const cachedWorkspaceId = identity?.workspaceId ?? workspaceIdFromTicket(identity?.ticket);
+  const status = nodeReady && node
     ? JSON.parse(await node.statusJson()) as SyncStatus
-    : { endpointId: '', authorId: '', peers: 0, writable: false };
+    : {
+        endpointId: '',
+        workspaceId: cachedWorkspaceId,
+        authorId: '',
+        peers: 0,
+        writable: false,
+        restoring: Boolean(cachedWorkspaceId),
+      };
   const entries = await cachedEntries();
   const workspace = status.workspaceId ? resolvedWorkspace(entries) : undefined;
-  const members = status.workspaceId
+  const members = status.workspaceId && nodeReady
     ? JSON.parse(await requireNode().membersJson())
     : [];
-  const pendingMembers = status.workspaceId
+  const pendingMembers = status.workspaceId && nodeReady
     ? JSON.parse(await requireNode().pendingMembersJson())
     : [];
   return {
@@ -463,6 +499,8 @@ async function wipeLocalData() {
   database?.close();
   database = undefined;
   node = undefined;
+  nodeReady = false;
+  nodeInitialization = undefined;
   identity = undefined;
   workspaceCache = undefined;
   await new Promise<void>((resolve, reject) => {
@@ -477,7 +515,7 @@ async function handle(request: WorkerRequest): Promise<unknown> {
   if (request.method === 'initialize') {
     await initializeWasm();
     await initializePersistence();
-    await initializeIroh();
+    void startIrohInitialization();
     return report();
   }
   await initializeWasm();
@@ -505,19 +543,23 @@ async function handle(request: WorkerRequest): Promise<unknown> {
     case 'refresh-sync':
       return refreshSync();
     case 'share-ticket': {
+      await awaitIrohInitialization();
       const ticket = await requireNode().shareTicket();
       await saveIdentity({ ...requireIdentity(), ticket });
       return ticket;
     }
     case 'approve-peer':
+      await awaitIrohInitialization();
       await requireNode().approvePeer(request.payload as string);
       await persistActiveReplica();
       return report();
     case 'reject-peer':
+      await awaitIrohInitialization();
       await requireNode().rejectPeer(request.payload as string);
       await persistActiveReplica();
       return report();
     case 'remove-peer': {
+      await awaitIrohInitialization();
       await requireNode().removePeer(request.payload as string);
       const ticket = await requireNode().shareTicket();
       await saveIdentity({ ...requireIdentity(), ticket });

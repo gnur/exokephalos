@@ -111,7 +111,10 @@
     (action
       (id "finish-book")
       (description "Mark book as finished reading")
-      (predicate (has-tag "reading"))
+      (predicate
+        (all
+          (field-equals "type" "book")
+          (has-tag "reading")))
       (effects
         (remove-tag "reading")
         (add-tag "read")
@@ -119,7 +122,10 @@
     (action
       (id "start-book")
       (description "Start reading this book")
-      (predicate (has-tag "to-read"))
+      (predicate
+        (all
+          (field-equals "type" "book")
+          (has-tag "to-read")))
       (effects
         (remove-tag "to-read")
         (add-tag "reading")

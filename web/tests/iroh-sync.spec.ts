@@ -245,8 +245,11 @@ test('imports notes, starts the actual TUI, synchronizes to the PWA, and survive
   await expect(page.locator('.markdown-preview')).toContainText('created by a native peer');
 
   await page.reload();
-  await expect(page.getByRole('button', { name: 'New note' })).toBeVisible();
+  await expect(page.locator('.markdown-preview')).toContainText('created by a native peer', { timeout: 10_000 });
   await expect(page.getByRole('button', { name: 'Join and synchronize' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'New note' })).toBeEnabled({ timeout: 120_000 });
+  await expect(page.getByText('Runtime unavailable')).toHaveCount(0);
+  await expect(page.getByText('unreachable executed')).toHaveCount(0);
   await selectWorkspaceNavigation(page, 'Notes');
   await expect(page.getByText('Browser fixture', { exact: true }).first()).toBeVisible();
   await page.getByText('Browser fixture', { exact: true }).first().click();

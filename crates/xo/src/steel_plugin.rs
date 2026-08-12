@@ -390,24 +390,24 @@ mod tests {
         assert_eq!(result.choices[0].note.body, "Humanity's first colony.");
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore = "requires HARDCOVER_TOKEN and the live Hardcover API"]
-    async fn hardcover_live_search_uses_configured_token() {
+    fn hardcover_live_search_uses_configured_token() {
         assert!(
             std::env::var("HARDCOVER_TOKEN").is_ok_and(|token| !token.trim().is_empty()),
             "HARDCOVER_TOKEN must be set for the live integration test"
         );
-        let result = execute(
+        let result = execute_blocking(
             include_str!("../../../plugins/hardcover.scm").into(),
-            "xo-plugin-run".into(),
+            "xo-plugin-run",
             "The Hobbit Tolkien".into(),
             BTreeSet::from([
                 Capability::CreateNote,
                 Capability::Network,
                 Capability::ReadSecret,
             ]),
+            Arc::new(NativeSteelHostServices),
         )
-        .await
         .unwrap();
         assert!(
             !result.choices.is_empty(),

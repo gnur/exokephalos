@@ -145,6 +145,9 @@ fn execute_blocking(
 }
 
 fn post_json(raw_url: &str, raw_headers: &str, body: &str) -> Result<String> {
+    // reqwest deliberately uses rustls-no-provider because Iroh also owns TLS
+    // configuration. Select ring explicitly before constructing its client.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     if body.len() > MAX_HTTP_BODY_BYTES {
         bail!("HTTP request body exceeds {MAX_HTTP_BODY_BYTES} bytes");
     }

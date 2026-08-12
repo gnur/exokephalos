@@ -7166,6 +7166,7 @@ dependencies = [
  "ratatui",
  "reqwest 0.13.4",
  "rpassword",
+ "rustls",
  "serde",
  "serde_json",
  "steel-core",

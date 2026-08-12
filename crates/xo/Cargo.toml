@@ -19,6 +19,7 @@ quick_html2md.workspace = true
 qrcode.workspace = true
 ratatui.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
 rpassword.workspace = true
 serde.workspace = true
 serde_json.workspace = true

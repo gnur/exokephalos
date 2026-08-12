@@ -4,7 +4,7 @@ use std::io::{self, IsTerminal as _, Write as _, stdout};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use app::{App, Mode, external_edit_with, render, required_frontmatter};
+use app::{App, Mode, external_edit_with, external_edit_with_suffix, render, required_frontmatter};
 use base64::Engine as _;
 use clap::{Parser, Subcommand};
 use crossterm::event::{
@@ -714,14 +714,23 @@ async fn event_loop(
                         clear_plugin_state(app);
                         continue;
                     };
-                    let source = session.config_source(&path).await?;
-                    suspend_tui(terminal)?;
-                    let result =
-                        execute_steel_plugin(source, entrypoint, input, capabilities).await;
-                    resume_tui(terminal)?;
+                    let source = session
+                        .config_source(&path)
+                        .await
+                        .with_context(|| format!("load Steel plugin {path}"));
+                    let result = match source {
+                        Ok(source) => {
+                            suspend_tui(terminal)?;
+                            let result =
+                                execute_steel_plugin(source, entrypoint, input, capabilities).await;
+                            resume_tui(terminal)?;
+                            result
+                        }
+                        Err(error) => Err(error),
+                    };
                     match result {
                         Ok(result) if result.choices.is_empty() => {
-                            app.message = "plugin returned no results".into();
+                            app.message = "Notice: Hardcover returned no matching books".into();
                             clear_plugin_state(app);
                         }
                         Ok(result) => {
@@ -730,7 +739,7 @@ async fn event_loop(
                             app.mode = Mode::PluginResults;
                         }
                         Err(error) => {
-                            app.message = format!("Steel plugin failed: {error:#}");
+                            app.message = format!("Notice: Hardcover search failed: {error:#}");
                             clear_plugin_state(app);
                         }
                     }
@@ -995,7 +1004,7 @@ async fn capture_url(session: &mut WorkspaceSession, raw_url: &str) -> Result<No
 async fn edit_workspace_config(session: &mut WorkspaceSession) -> Result<()> {
     let source = session.workspace_config_source().await?;
     let editor = std::env::var_os("EDITOR").unwrap_or_else(|| "vi".into());
-    let edited = external_edit_with(&editor, &[], source.as_bytes())?;
+    let edited = external_edit_with_suffix(&editor, &[], source.as_bytes(), ".xo.scm")?;
     let source = String::from_utf8(edited).context("workspace configuration is not UTF-8")?;
     session.save_workspace_config(&source).await
 }

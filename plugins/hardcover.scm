@@ -125,7 +125,8 @@
                    "variables" (hash "query" input "perPage" 5 "page" 1)))]
          [headers
            (value->jsexpr-string
-             (hash "Authorization" (xo-secret "HARDCOVER_TOKEN")
+             (hash "Authorization"
+                   (string-append "Bearer " (xo-secret "HARDCOVER_TOKEN"))
                    "Content-Type" "application/json"
                    "User-Agent" "exokephalos-steel/1.0"))]
          [response

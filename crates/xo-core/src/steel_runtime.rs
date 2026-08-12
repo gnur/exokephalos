@@ -1482,6 +1482,8 @@ mod tests {
             search.plugin,
             Some(ActionPlugin::Steel { ref path, .. }) if path == "plugins/hardcover.scm"
         ));
+        assert_eq!(search.predicate, Predicate::Always);
+        assert!(behavior.action(None, "hardcover-search").is_ok());
         assert_eq!(behavior.actions.len(), 1);
         assert!(
             behavior

@@ -298,7 +298,7 @@ mod tests {
         fn post_json(&self, url: &str, headers: &str, body: &str) -> Result<String> {
             assert_eq!(url, "https://api.hardcover.app/v1/graphql");
             let headers: serde_json::Value = serde_json::from_str(headers)?;
-            assert_eq!(headers["Authorization"], "fixture-token");
+            assert_eq!(headers["Authorization"], "Bearer fixture-token");
             let body: serde_json::Value = serde_json::from_str(body)?;
             assert_eq!(body["variables"]["query"], "Genesis");
             Ok(serde_json::json!({
@@ -319,6 +319,36 @@ mod tests {
             })
             .to_string())
         }
+    }
+
+    struct FailingHardcoverFixture;
+
+    impl SteelHostServices for FailingHardcoverFixture {
+        fn read_secret(&self, _name: &str) -> Result<String> {
+            Ok("fixture-token".into())
+        }
+
+        fn post_json(&self, _url: &str, _headers: &str, _body: &str) -> Result<String> {
+            bail!("fixture Hardcover outage")
+        }
+    }
+
+    #[tokio::test]
+    async fn hardcover_errors_are_returned_to_the_tui() {
+        let error = execute_with_host(
+            include_str!("../../../plugins/hardcover.scm").into(),
+            "xo-plugin-run".into(),
+            "Genesis".into(),
+            BTreeSet::from([
+                Capability::CreateNote,
+                Capability::Network,
+                Capability::ReadSecret,
+            ]),
+            Arc::new(FailingHardcoverFixture),
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("fixture Hardcover outage"));
     }
 
     #[tokio::test]
@@ -358,6 +388,35 @@ mod tests {
             ))
         );
         assert_eq!(result.choices[0].note.body, "Humanity's first colony.");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires HARDCOVER_TOKEN and the live Hardcover API"]
+    async fn hardcover_live_search_uses_configured_token() {
+        assert!(
+            std::env::var("HARDCOVER_TOKEN").is_ok_and(|token| !token.trim().is_empty()),
+            "HARDCOVER_TOKEN must be set for the live integration test"
+        );
+        let result = execute(
+            include_str!("../../../plugins/hardcover.scm").into(),
+            "xo-plugin-run".into(),
+            "The Hobbit Tolkien".into(),
+            BTreeSet::from([
+                Capability::CreateNote,
+                Capability::Network,
+                Capability::ReadSecret,
+            ]),
+        )
+        .await
+        .unwrap();
+        assert!(
+            !result.choices.is_empty(),
+            "live Hardcover search was empty"
+        );
+        assert!(result.choices.iter().all(|choice| {
+            choice.note.frontmatter.get("type")
+                == Some(&xo_core::domain::FrontmatterValue::String("book".into()))
+        }));
     }
 
     #[test]

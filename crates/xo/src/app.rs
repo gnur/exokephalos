@@ -726,8 +726,17 @@ fn note_tags(note: &Note) -> Vec<String> {
 }
 
 pub fn external_edit_with(program: &OsStr, args: &[&OsStr], initial: &[u8]) -> Result<Vec<u8>> {
+    external_edit_with_suffix(program, args, initial, ".xo.md")
+}
+
+pub fn external_edit_with_suffix(
+    program: &OsStr,
+    args: &[&OsStr],
+    initial: &[u8],
+    suffix: &str,
+) -> Result<Vec<u8>> {
     let mut file = TempFileBuilder::new()
-        .suffix(".xo.md")
+        .suffix(suffix)
         .tempfile()
         .context("create secure editor file")?;
     file.write_all(initial)?;
@@ -900,12 +909,21 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             "[{leader}] menu · [g] views · [/] search · [e/Enter] edit · [c/C] create/encrypted · [d] delete · [u] restore · [q] quit"
         )
     };
-    if !app.message.is_empty() {
+    if app.message.starts_with("Notice:") {
+        footer.clone_from(&app.message);
+    } else if !app.message.is_empty() {
         footer.push_str(" · ");
         footer.push_str(&app.message);
     }
+    let footer_style = if app.message.starts_with("Notice:") {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
     frame.render_widget(
-        Paragraph::new(footer).style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(footer).style(footer_style),
         vertical[vertical.len() - 1],
     );
     if has_input {
@@ -1435,7 +1453,8 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use xo_core::behavior::{
-        ActionDescriptor, ActionEffect, Capability, Predicate, SubviewDescriptor, ViewDescriptor,
+        ActionDescriptor, ActionEffect, ActionPlugin, Capability, Predicate, SubviewDescriptor,
+        ViewDescriptor,
     };
 
     fn fixture() -> App {
@@ -1516,6 +1535,49 @@ mod tests {
         assert!(screen.contains("[e/Enter] edit"));
         assert!(!screen.contains("Offline"));
         assert!(!screen.contains("↑↓/jk"));
+    }
+
+    #[test]
+    fn plugin_failure_notice_remains_visible_after_returning_to_the_workspace() {
+        let mut app = fixture();
+        app.message = "Notice: Hardcover search failed: token unavailable".into();
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(screen.contains("Notice: Hardcover search failed"));
+    }
+
+    #[test]
+    fn global_steel_plugin_action_is_available_with_or_without_a_selected_note() {
+        let mut app = fixture();
+        app.behavior.actions.push(ActionDescriptor {
+            id: "hardcover-search".into(),
+            description: "Search Hardcover".into(),
+            predicate: Predicate::Always,
+            effects: vec![],
+            plugin: Some(ActionPlugin::Steel {
+                path: "plugins/hardcover.scm".into(),
+                entrypoint: "xo-plugin-run".into(),
+                prompt: "Book title or author".into(),
+                capabilities: BTreeSet::from([
+                    Capability::CreateNote,
+                    Capability::Network,
+                    Capability::ReadSecret,
+                ]),
+            }),
+        });
+        app.action_query = "hardcover".into();
+        assert_eq!(app.matching_actions()[0].id, "hardcover-search");
+
+        app.search = "no selected note".into();
+        assert!(app.selected_note().is_none());
+        assert_eq!(app.matching_actions()[0].id, "hardcover-search");
     }
 
     #[test]
@@ -1895,6 +1957,16 @@ mod tests {
         ];
         let edited = external_edit_with(OsStr::new("sh"), &args, b"initial").unwrap();
         assert_eq!(edited, b"changed");
+
+        let config_args = [
+            OsStr::new("-c"),
+            OsStr::new("case \"$1\" in *.xo.scm) ;; *) exit 9;; esac; printf config > \"$1\""),
+            OsStr::new("_"),
+        ];
+        let edited =
+            external_edit_with_suffix(OsStr::new("sh"), &config_args, b"initial", ".xo.scm")
+                .unwrap();
+        assert_eq!(edited, b"config");
     }
 
     #[test]

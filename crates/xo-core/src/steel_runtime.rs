@@ -11,6 +11,7 @@ use std::fmt::Write as _;
 use serde::Deserialize;
 use steel::rvals::SteelVal;
 use steel::steel_vm::engine::Engine;
+#[cfg(not(target_arch = "wasm32"))]
 use steel::steel_vm::interrupt::InterruptHandler;
 use steel::steel_vm::register_fn::RegisterFn;
 use thiserror::Error;
@@ -22,6 +23,7 @@ use crate::behavior::{
 use crate::domain::FrontmatterValue;
 
 pub const MAX_CONFIG_BYTES: usize = 1_048_576;
+#[cfg(not(target_arch = "wasm32"))]
 const PLUGIN_MANIFEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Debug, Error)]
@@ -124,11 +126,7 @@ fn merge_plugin(
             "xo-http-post-json",
             |_url: String, _headers: String, _body: String| String::new(),
         );
-    let interrupt = InterruptHandler::new(&mut engine, PLUGIN_MANIFEST_TIMEOUT);
-    let result = interrupt.run_with_timeout(|| {
-        engine.run(source.to_owned())?;
-        engine.call_function_by_name_with_args("xo-plugin-manifest", vec![])
-    });
+    let result = evaluate_plugin_manifest(&mut engine, source);
     let json = match result {
         Ok(SteelVal::StringV(value)) => value.to_string(),
         Ok(_) => {
@@ -174,6 +172,30 @@ fn merge_plugin(
         });
     }
     Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn evaluate_plugin_manifest(
+    engine: &mut Engine,
+    source: &str,
+) -> Result<SteelVal, steel::SteelErr> {
+    let interrupt = InterruptHandler::new(engine, PLUGIN_MANIFEST_TIMEOUT);
+    interrupt.run_with_timeout(|| {
+        engine.run(source.to_owned())?;
+        engine.call_function_by_name_with_args("xo-plugin-manifest", vec![])
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn evaluate_plugin_manifest(
+    engine: &mut Engine,
+    source: &str,
+) -> Result<SteelVal, steel::SteelErr> {
+    // std::thread is unavailable in browser workers, so Steel's native
+    // InterruptHandler cannot be constructed. The plugin is size-bounded and
+    // this entire runtime already lives in a disposable dedicated Web Worker.
+    engine.run(source.to_owned())?;
+    engine.call_function_by_name_with_args("xo-plugin-manifest", vec![])
 }
 
 /// Evaluate the native `~/.config/xo/config.scm` schema.

@@ -257,6 +257,8 @@ jobs:
             (templates)
             (capability-grants))
           EOF
+          mkdir -p "${fixture}/source/plugins"
+          cp plugins/hardcover.scm "${fixture}/source/plugins/hardcover.scm"
           target/debug/xo-admin import-workspace \
             "${fixture}/source" "${fixture}/state" > "${fixture}/import.out"
           ticket=$(grep '^ticket=' "${fixture}/import.out" | cut -d= -f2-)

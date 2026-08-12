@@ -7,7 +7,7 @@ ARG XO_VERSION
 ENV XO_VERSION=$XO_VERSION
 WORKDIR /source
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends clang \
+    && apt-get install --yes --no-install-recommends binaryen clang \
     && rm -rf /var/lib/apt/lists/* \
     && rustup target add wasm32-unknown-unknown \
     && cargo install wasm-pack --version 0.13.1 --locked

@@ -34,10 +34,5 @@ wasm-bindgen.workspace = true
 wasm-bindgen-futures = "0.4"
 xo-core = { path = "../xo-core", default-features = false, features = ["peer-protocol", "steel"] }
 
-# Avoid a build-time Binaryen download in release/container builds. Rust's
-# release optimizer still runs; this removes a flaky external wasm-opt fetch.
-[package.metadata.wasm-pack.profile.release]
-wasm-opt = false
-
 [lints]
 workspace = true

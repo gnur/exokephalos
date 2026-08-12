@@ -6,7 +6,7 @@
   "{\"schema\":1,\"actions\":[{\"id\":\"hardcover-search\",\"description\":\"Search Hardcover\",\"prompt\":\"Book title or author\",\"entrypoint\":\"xo-plugin-run\",\"capabilities\":[\"create-note\",\"network\",\"read-secret\"]}]}")
 
 (define graphql-query
-  "query SearchBooks($query: String!, $perPage: Int!, $page: Int!) { search(query: $query, query_type: \"Book\", per_page: $perPage, page: $page) { results } }")
+  "query SearchBooks($query: String!, $perPage: Int!, $page: Int!) { search(query: $query, query_type: \"book\", per_page: $perPage, page: $page) { results } }")
 
 (define (get object key fallback)
   (cond [(not (hash? object)) fallback]
@@ -125,8 +125,7 @@
                    "variables" (hash "query" input "perPage" 5 "page" 1)))]
          [headers
            (value->jsexpr-string
-             (hash "Authorization"
-                   (string-append "Bearer " (xo-secret "HARDCOVER_TOKEN"))
+             (hash "Authorization" (xo-secret "HARDCOVER_TOKEN")
                    "Content-Type" "application/json"
                    "User-Agent" "exokephalos-steel/1.0"))]
          [response

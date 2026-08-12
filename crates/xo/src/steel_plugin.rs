@@ -301,7 +301,7 @@ mod tests {
         fn post_json(&self, url: &str, headers: &str, body: &str) -> Result<String> {
             assert_eq!(url, "https://api.hardcover.app/v1/graphql");
             let headers: serde_json::Value = serde_json::from_str(headers)?;
-            assert_eq!(headers["Authorization"], "Bearer fixture-token");
+            assert_eq!(headers["Authorization"], "fixture-token");
             let body: serde_json::Value = serde_json::from_str(body)?;
             assert_eq!(body["variables"]["query"], "Genesis");
             Ok(serde_json::json!({

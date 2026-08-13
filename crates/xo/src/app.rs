@@ -72,6 +72,7 @@ pub struct App {
     pub devices: Vec<DeviceRecord>,
     pub members: Vec<Member>,
     pub pending_members: Vec<JoinRequest>,
+    pub self_fingerprint: String,
     pub diagnostics: Vec<Diagnostic>,
     pub operations: Vec<DurableOperation>,
     pub sync: Option<SyncStatus>,
@@ -121,6 +122,7 @@ impl App {
             devices: vec![],
             members: vec![],
             pending_members: vec![],
+            self_fingerprint: String::new(),
             diagnostics: vec![],
             operations: vec![],
             sync: None,
@@ -1249,51 +1251,94 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
 }
 
 fn render_devices(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let pending = app.pending_members.iter().map(|request| {
-        format!(
-            "PENDING  {}  {}\n  endpoint {}",
-            request.peer_id,
-            xo_core::membership::public_key_fingerprint(&request.public_key),
-            request.endpoint_id
-        )
-    });
-    let members = app.members.iter().map(|member| {
-        format!(
-            "{:?}  {}  {}\n  endpoints {}",
-            member.status,
-            member.peer_id,
-            xo_core::membership::public_key_fingerprint(&member.public_key),
-            member
-                .endpoint_ids
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    });
-    let entries = pending.chain(members).collect::<Vec<_>>();
     let selected = Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD);
-    let items = if entries.is_empty() {
-        vec![ListItem::new("No devices or pending peers.")]
-    } else {
-        entries
-            .into_iter()
-            .enumerate()
-            .map(|(index, value)| {
+    let mut items = Vec::new();
+    let mut section = |title: &'static str, rows: Vec<(usize, String, String, String)>| {
+        items.push(ListItem::new(Line::styled(
+            title,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )));
+        items.push(ListItem::new(
+            "  PEER ID              FINGERPRINT       ENDPOINTS",
+        ));
+        if rows.is_empty() {
+            items.push(ListItem::new("  —                    —                 —"));
+        }
+        for (index, peer_id, fingerprint, endpoints) in rows {
+            items.push(
                 ListItem::new(format!(
-                    "{} {value}",
-                    if index == app.selected { ">" } else { " " }
+                    "{} {:<20} {:<17} {}",
+                    if index == app.selected { ">" } else { " " },
+                    peer_id,
+                    fingerprint.chars().take(16).collect::<String>(),
+                    endpoints
                 ))
                 .style(if index == app.selected {
                     selected
                 } else {
                     Style::default()
-                })
+                }),
+            );
+        }
+        items.push(ListItem::new(""));
+    };
+    let pending_len = app.pending_members.len();
+    section(
+        "PENDING APPROVAL",
+        app.pending_members
+            .iter()
+            .enumerate()
+            .map(|(index, request)| {
+                (
+                    index,
+                    request.peer_id.to_string(),
+                    xo_core::membership::public_key_fingerprint(&request.public_key),
+                    request.endpoint_id.to_string(),
+                )
+            })
+            .collect(),
+    );
+    let member_rows = |wanted: fn(&Member, &str) -> bool| {
+        app.members
+            .iter()
+            .enumerate()
+            .filter(|(_, member)| wanted(member, &app.self_fingerprint))
+            .map(|(index, member)| {
+                (
+                    pending_len + index,
+                    member.peer_id.to_string(),
+                    xo_core::membership::public_key_fingerprint(&member.public_key),
+                    member
+                        .endpoint_ids
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                )
             })
             .collect()
     };
+    section(
+        "THIS TUI",
+        member_rows(|member, own| {
+            xo_core::membership::public_key_fingerprint(&member.public_key) == own
+        }),
+    );
+    section(
+        "ACTIVE CLIENTS",
+        member_rows(|member, own| {
+            member.status == xo_core::membership::MemberStatus::Active
+                && xo_core::membership::public_key_fingerprint(&member.public_key) != own
+        }),
+    );
+    section(
+        "REMOVED CLIENTS",
+        member_rows(|member, _| member.status != xo_core::membership::MemberStatus::Active),
+    );
     frame.render_widget(
         List::new(items).block(
             Block::default()
@@ -1594,7 +1639,10 @@ mod tests {
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
         assert!(screen.contains("Devices and peers"));
-        assert!(screen.contains("No devices or pending peers"));
+        assert!(screen.contains("THIS TUI"));
+        assert!(screen.contains("ACTIVE CLIENTS"));
+        assert!(screen.contains("REMOVED CLIENTS"));
+        assert!(screen.contains("PEER ID"));
         assert!(screen.contains("[j/k] select"));
         assert!(!screen.contains("First"));
         assert!(!screen.contains("Preview"));

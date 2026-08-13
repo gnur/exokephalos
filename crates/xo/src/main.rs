@@ -301,6 +301,7 @@ async fn hydrate(
     app.devices = snapshot.devices;
     app.members = session.members().await;
     app.pending_members = session.pending_membership_requests().await;
+    app.self_fingerprint = session.membership_fingerprint();
     app.diagnostics = snapshot.diagnostics;
     app.operations = session.sync_state.ready()?;
     app.sync = Some(session.sync_state.status()?);

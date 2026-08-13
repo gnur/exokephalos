@@ -303,7 +303,7 @@ function App() {
     return (
       <WorkspaceExperience
         report={report}
-        busy={busy || Boolean(report.status.restoring)}
+        busy={busy}
         error={error}
         activeView={activeView}
         activeSubview={activeSubview}

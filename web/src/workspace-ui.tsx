@@ -83,6 +83,7 @@ export function WorkspaceExperience({
   const [draft, setDraft] = useState('');
   const [createTitle, setCreateTitle] = useState('');
   const [queryError, setQueryError] = useState('');
+  const [saving, setSaving] = useState(false);
   const [ticketVisible, setTicketVisible] = useState(false);
 
   const workspace = report.workspace;
@@ -134,7 +135,12 @@ export function WorkspaceExperience({
   useEffect(() => {
     if (!activeView) return;
     let active = true;
-    const base: NoteQueryInput = { view: activeView, subview: activeSubview, search, tags: [] };
+    // Never leave the previous view's rows visible while its replacement is loading.
+    setNotes([]);
+    setUnfilteredNotes([]);
+    const base: NoteQueryInput = search.trim()
+      ? { view: 'all', search, tags: [] }
+      : { view: activeView, subview: activeSubview, search, tags: [] };
     void Promise.all([onQuery({ ...base, tags: selectedTags }), onQuery(base)])
       .then(([next, unfiltered]) => {
         if (!active) return;
@@ -179,16 +185,18 @@ export function WorkspaceExperience({
   }
 
   async function saveDraft() {
-    const saved = await onMutate({
-      operation: 'save',
+    const input = {
+      operation: 'save' as const,
       noteId: editingId,
       title: createTitle,
       markdown: draft,
-    });
-    if (!saved) return;
+    };
     setEditing(false);
-    setSelectedId(saved.mutatedNoteId);
-    setPane('detail');
+    setPane('items');
+    setSaving(true);
+    const saved = await onMutate(input);
+    if (saved) setSelectedId(saved.mutatedNoteId);
+    setSaving(false);
   }
 
   async function remove(note: WorkspaceNote) {
@@ -227,7 +235,9 @@ export function WorkspaceExperience({
         <img className="brand-logo" src="/logo.svg" alt="" aria-hidden="true" />
       </header>
 
-      {!navigator.onLine || statusMessage ? (
+      {saving || report.pendingWrites ? (
+        <div className="sync-warning" role="status"><RefreshCw className={saving ? 'spin' : ''} /> <span>{saving ? 'Saving locally…' : `${report.pendingWrites} saved change${report.pendingWrites === 1 ? '' : 's'} waiting to sync`}</span></div>
+      ) : !navigator.onLine || statusMessage ? (
         <div className="sync-warning" role="status"><CloudOff /> <span>{statusMessage || 'sync offline'}</span></div>
       ) : null}
       {updateAvailable ? (
@@ -362,7 +372,7 @@ function ItemsPane({ notes, viewName, subviewName, showTags, sortField, selected
               {groupedNotes.map((note) => (
                 <button key={note.id} className="item-row note-list-item" onClick={() => onSelect(note)}>
                   <strong>{noteTitle(note)}</strong>
-                  <span>{noteField(note, 'type') || note.path}</span>
+                  <span>{noteField(note, 'type') || note.path} · {noteDate(note)}</span>
                   <span className="row-tags">{note.conflict ? <i>conflict</i> : null}{noteTags(note).map((tag) => <i key={tag}>{tag}</i>)}</span>
                 </button>
               ))}
@@ -475,6 +485,13 @@ function noteField(note: WorkspaceNote, field?: string) {
 function noteTitle(note?: WorkspaceNote, field = 'title') {
   if (!note) return 'Items';
   return noteField(note, field) || noteField(note, 'title') || 'Untitled';
+}
+
+function noteDate(note: WorkspaceNote) {
+  const value = noteField(note, 'created');
+  if (!value) return 'creation date unknown';
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleDateString();
 }
 
 function noteTags(note: WorkspaceNote) {

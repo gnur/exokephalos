@@ -94,9 +94,11 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   await page.getByLabel('Title', { exact: true }).fill('Web Playwright');
   await page.getByLabel('Frontmatter and Markdown').fill('---\ntitle: Web Playwright\ntype: \ntags: [browser, test]\n---\nsurvives browser recovery');
   await page.getByRole('button', { name: 'Save note' }).click();
+  await expect(page.locator('.notes-toolbar')).toBeVisible();
   await expect(page.getByText('Web Playwright', { exact: true }).first()).toBeVisible();
-  await expect(page).toHaveURL(/\/views\/notes\//);
+  await expect(page).toHaveURL(/\/views\/notes(?:\?|$)/);
   await expect(page.getByRole('button', { name: 'Update', exact: true })).toHaveCount(0);
+  await page.getByText('Web Playwright', { exact: true }).first().click();
   await expect(page.locator('.markdown-preview')).toContainText('survives browser recovery');
   await expect(page.locator('.frontmatter-grid')).toContainText('type');
   await expect(page.locator('.frontmatter-grid')).toContainText('note');
@@ -108,6 +110,8 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   await page.getByRole('button', { name: 'Edit' }).click();
   await page.getByLabel('Frontmatter and Markdown').fill('---\ntitle: Web Playwright\ntype: note\ntags: [browser, edited]\n---\nedited and survives browser recovery');
   await page.getByRole('button', { name: 'Save note' }).click();
+  await expect(page.locator('.notes-toolbar')).toBeVisible();
+  await page.getByText('Web Playwright', { exact: true }).first().click();
   await expect(page.locator('.markdown-preview')).toContainText('edited and survives browser recovery');
   await selectWorkspaceNavigation(page, 'All');
   await expect(page.getByRole('heading', { name: String(new Date().getFullYear()) })).toBeVisible();
@@ -128,6 +132,12 @@ test('creates a relay-backed Iroh document and recovers an offline write', async
   await expect(page.getByText('Web Playwright', { exact: true }).first()).toBeVisible();
   await page.getByText('Web Playwright', { exact: true }).first().click();
   await expect(page.locator('.markdown-preview')).toContainText('edited and survives browser recovery');
+  await page.getByRole('button', { name: 'Items' }).click();
+  await page.getByRole('button', { name: 'New note' }).click();
+  await page.getByLabel('Title', { exact: true }).fill('Offline creation');
+  await page.getByRole('button', { name: 'Save note' }).click();
+  await expect(page.getByText('Offline creation', { exact: true })).toBeVisible();
+  await expect(page.getByText(/saved change.*waiting to sync/)).toBeVisible();
 
   expect(consoleErrors.filter((message) => !message.includes('net::ERR_INTERNET_DISCONNECTED'))).toEqual([]);
 });
@@ -156,6 +166,7 @@ test('creates a local item without attempting to synchronize with itself', async
   await page.getByLabel('Title', { exact: true }).fill('Local item');
   await page.getByRole('button', { name: 'Save note' }).click();
   await expect(page.getByText('Local item', { exact: true }).first()).toBeVisible();
+  await page.getByText('Local item', { exact: true }).first().click();
   await expect(page.locator('.frontmatter-grid')).toContainText('note');
   await page.waitForTimeout(3_500);
   await expect(page.getByText(/initial document sync failed/i)).toHaveCount(0);

@@ -40,6 +40,7 @@ interface BrowserIdentity {
   authorSecret: string;
   ticket?: string;
   workspaceId?: string;
+  authorId?: string;
 }
 
 interface PendingWrite {
@@ -191,6 +192,10 @@ async function initializeIroh() {
     decodeBase64(identity.authorSecret),
     identity.peerId,
   );
+  const spawnedStatus = JSON.parse(await node.statusJson()) as SyncStatus;
+  if (identity.authorId !== spawnedStatus.authorId) {
+    await saveIdentity({ ...requireIdentity(), authorId: spawnedStatus.authorId });
+  }
   if (identity.ticket) {
     const replica = await getRecord<{ id: string; value: string }>(REPLICA_STORE, 'active');
     if (replica?.value) {
@@ -300,23 +305,25 @@ async function enqueueWrite(input: PutEntryInput) {
 }
 
 async function mutateNote(input: NoteMutationInput) {
-  await awaitIrohInitialization();
   const entries = await cachedEntries();
-  const status = JSON.parse(await requireNode().statusJson()) as SyncStatus;
+  const authorId = identity?.authorId
+    ?? (nodeReady ? (JSON.parse(await requireNode().statusJson()) as SyncStatus).authorId : undefined);
+  if (!authorId) throw new Error('Open this workspace online once before creating offline notes');
   const prepared = JSON.parse(prepare_note_mutation(
     JSON.stringify(entries),
-    status.authorId,
+    authorId,
     JSON.stringify(input),
     BigInt(Date.now()),
     -new Date().getTimezoneOffset() * 60,
   )) as PreparedMutation;
-  await enqueuePreparedWrites(prepared.writes, status.authorId);
-  try {
-    await publishPendingWrites();
-    await refreshEntryCache();
-    lastSyncError = undefined;
-  } catch (cause) {
-    lastSyncError = errorMessage(cause);
+  await enqueuePreparedWrites(prepared.writes, authorId);
+  // Local durability is the save boundary. Replication is best-effort and must
+  // never delay returning to the note overview, especially while offline.
+  if (nodeReady) {
+    void publishPendingWrites()
+      .then(() => refreshEntryCache())
+      .then(() => { lastSyncError = undefined; })
+      .catch((cause: unknown) => { lastSyncError = errorMessage(cause); });
   }
   return { ...await report(), mutatedNoteId: prepared.noteId };
 }

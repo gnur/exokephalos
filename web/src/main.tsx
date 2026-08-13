@@ -109,6 +109,15 @@ function clearWorkspaceTicket() {
   window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
 }
 
+const PEER_ADJECTIVES = ['smart', 'clever', 'funny', 'incredible', 'blue', 'green'] as const;
+const PEER_SUBJECTS = ['xo', 'exokephalos', 'zettelkasten', 'sandbox', 'browser', 'client'] as const;
+
+function randomPeerId() {
+  const random = new Uint32Array(2);
+  crypto.getRandomValues(random);
+  return `${PEER_ADJECTIVES[random[0] % PEER_ADJECTIVES.length]}-${PEER_SUBJECTS[random[1] % PEER_SUBJECTS.length]}`;
+}
+
 function App() {
   const runtimeRef = useRef<XoRuntime | undefined>(undefined);
   const initialRoute = useRef(workspaceRouteState());
@@ -120,7 +129,7 @@ function App() {
   const [online, setOnline] = useState(navigator.onLine);
   const [installPrompt, setInstallPrompt] = useState<InstallPrompt>();
   const [ticketInput, setTicketInput] = useState('');
-  const [peerIdInput, setPeerIdInput] = useState('');
+  const [peerIdInput, setPeerIdInput] = useState(randomPeerId);
   const [updateAvailable, setUpdateAvailable] = useState(updateIsAvailable);
   const [activeView, setActiveView] = useState(initialRoute.current.view);
   const [activeSubview, setActiveSubview] = useState<string | undefined>(initialRoute.current.subview);
@@ -455,7 +464,7 @@ function Onboarding({ state, report, error, busy, peerId, onPeerId, ticket, onTi
           <p className="eyebrow"><Sparkles /> direct browser Iroh</p>
           <h1>Your knowledge,<br /><em>entirely client-side.</em></h1>
           <p className="lede">Create or join an authenticated Automerge workspace. Iroh QUIC, Gossip, Steel, and recovery run in this browser worker.</p>
-          {!report?.peerId ? <label className="ticket-form"><span>Peer ID (required)</span><small>Choose a unique name for this browser, such as “erwin-phone”. You must set it before creating or joining a workspace.</small><input value={peerId} onChange={(event) => onPeerId(event.target.value)} placeholder="erwin-phone" aria-label="Peer ID" required /></label> : <p>Peer ID: <strong>{report.peerId}</strong></p>}
+          {!report?.peerId ? <label className="ticket-form"><span>Peer ID (required)</span><small>A random client name has been generated for this browser. You can change it before creating or joining a workspace.</small><input value={peerId} onChange={(event) => onPeerId(event.target.value)} placeholder="smart-browser" aria-label="Peer ID" required /></label> : <p>Peer ID: <strong>{report.peerId}</strong></p>}
           {report?.syncError?.includes('pending approval') ? <p className="error-message">This peer is pending approval from an active workspace member.</p> : null}
           <div className="hero-actions">
             {report?.syncError?.includes('pending approval') ? <button className="primary" disabled={busy} onClick={onRetryApproval}><RefreshCw className={busy ? 'spin' : ''} /> Check approval</button> : null}

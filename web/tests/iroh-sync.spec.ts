@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 
 const nativeTicket = process.env.XO_IROH_TICKET;
+const runPublicIrohTests = process.env.XO_RUN_PUBLIC_IROH_TESTS === '1';
 const operatorToken = process.env.XO_OPERATOR_TOKEN;
 const tuiApprovalUrl = process.env.XO_TUI_APPROVAL_URL;
 
@@ -260,7 +261,7 @@ test('checks the deployed version every ten minutes', async ({ page, request }) 
 
 test('imports notes, starts the actual TUI, synchronizes to the PWA, and survives refresh', async ({ page }) => {
   test.setTimeout(240_000);
-  test.skip(!nativeTicket, 'the native TUI fixture is required');
+  test.skip(!nativeTicket || !runPublicIrohTests, 'requires opt-in public Iroh relay/discovery services');
   await page.goto('/');
   await expect(page.getByText('Runtime ready')).toBeVisible();
   await configurePeer(page, 'playwright-tui-flow');
@@ -287,7 +288,7 @@ test('imports notes, starts the actual TUI, synchronizes to the PWA, and survive
 
 test('receives native items and replicated views and subviews', async ({ page, browserName }) => {
   test.setTimeout(180_000);
-  test.skip(!nativeTicket, 'XO_IROH_TICKET is required for the networked convergence test');
+  test.skip(!nativeTicket || !runPublicIrohTests, 'requires opt-in public Iroh relay/discovery services');
   await page.goto('/');
   await expect(page.getByText('Runtime ready')).toBeVisible();
   await configurePeer(page, `playwright-native-${browserName}`);
@@ -314,7 +315,7 @@ test('receives native items and replicated views and subviews', async ({ page, b
 
 test('converges two browser peers through a native Iroh document peer', async ({ browser }) => {
   test.setTimeout(240_000);
-  test.skip(!nativeTicket, 'XO_IROH_TICKET is required for the networked convergence test');
+  test.skip(!nativeTicket || !runPublicIrohTests, 'requires opt-in public Iroh relay/discovery services');
   const firstContext = await browser.newContext();
   const secondContext = await browser.newContext();
   const first = await firstContext.newPage();

@@ -166,7 +166,7 @@ curl -sSL https://xo.exokephalos.dev/install.sh | bash
 
 The installer detects your OS and CPU architecture (Linux x86-64/ARM64 or macOS Apple Silicon), fetches the latest release archive from GitHub, extracts the binaries to `~/.local/bin`, generates `~/.config/xo/config.scm` with `xo config-init`, and prompts you to configure `xo` and/or `xo-syncd`. The TUI uses `~/.local/share/xo`; the systemd user daemon uses the separate `~/.local/share/xo-syncd` state directory.
 
-Native multi-peer CI tests use an ephemeral in-process Iroh relay, while public N0 relay coverage remains an opt-in network test.
+Native multi-peer CI tests use an ephemeral in-process Iroh relay, while public N0 relay coverage remains an opt-in network test enabled with `XO_RUN_PUBLIC_IROH_TESTS=1`.
 
 When systemd setup is selected, the installer prompts for both the workspace ID and workspace invitation before importing and starting the daemon. To seed it directly from a TUI invitation, provide both values:
 

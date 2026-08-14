@@ -44,7 +44,11 @@ async function ensureAutomaticAdmission(page: Page) {
     // though the active peer durably recorded the automatic admission.
     await page.getByRole('button', { name: 'Join and synchronize' }).click();
   }
-  await expect(newNote).toBeVisible({ timeout: 120_000 });
+  try {
+    await expect(newNote).toBeVisible({ timeout: 20_000 });
+  } catch {
+    throw new Error(`admission did not complete; page: ${await page.locator('body').innerText()}`);
+  }
 }
 
 async function configurePeer(page: Page, peerId: string) {

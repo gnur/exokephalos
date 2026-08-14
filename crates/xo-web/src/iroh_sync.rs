@@ -350,13 +350,7 @@ impl IrohDocNode {
             .extend(&relay_map_for_nodes(&invitation.bootstrap_peers));
         let response = self.request_join(&invitation).await.map_err(js_error)?;
         self.invitation = Some(invitation.clone());
-        if matches!(
-            response,
-            JoinResponse::Pending | JoinResponse::Approved { .. }
-        ) {
-            // Admission is always confirmed by a follow-up request. This keeps
-            // the browser's polling path deterministic even when the active
-            // peer records the approval during the first round trip.
+        if matches!(response, JoinResponse::Pending) {
             self.pending_approval = true;
             return json(&WorkspaceOutcome {
                 workspace_id: invitation.workspace_id,
@@ -1027,9 +1021,9 @@ impl ProtocolHandler for BrowserJoin {
                     )?;
                     workspace.sign_local().await?;
                     workspace.refresh_registry().await?;
-                    JoinResponse::Approved {
-                        membership_event: encode(&event)?,
-                    }
+                    // The approval is durable. The candidate confirms it with
+                    // its periodic authenticated admission request.
+                    JoinResponse::Pending
                 }
             };
             write_frame(&mut send, &encode(&response)?).await?;

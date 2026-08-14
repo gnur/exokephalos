@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock as StdRwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result, bail};
 use futures_lite::StreamExt as _;
@@ -394,10 +394,15 @@ impl AutomergeNode {
             now_ms()?,
         )?;
         let mut last_error = None;
-        for peer in &invitation.bootstrap_peers {
-            match self.send_join_request(peer.clone(), &request).await {
-                Ok(response) => return Ok(response),
-                Err(error) => last_error = Some(error),
+        for attempt in 0..5 {
+            for peer in &invitation.bootstrap_peers {
+                match self.send_join_request(peer.clone(), &request).await {
+                    Ok(JoinResponse::Pending) if attempt < 4 => {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
+                    Ok(response) => return Ok(response),
+                    Err(error) => last_error = Some(error),
+                }
             }
         }
         Err(last_error.context("no invitation bootstrap peer accepted the join request")?)
@@ -930,9 +935,9 @@ impl JoinProtocol {
                 let _ = workspace
                     .events
                     .send(AutomergeWorkspaceEvent::MembershipChanged);
-                JoinResponse::Approved {
-                    membership_event: encode(&event)?,
-                }
+                // The approval is durable. Returning Pending makes clients
+                // confirm it with a second authenticated request.
+                JoinResponse::Pending
             }
         };
         write_frame(&mut send, &encode(&response)?).await?;

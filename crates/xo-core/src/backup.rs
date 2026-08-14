@@ -381,9 +381,6 @@ mod tests {
         let replica =
             IrohNode::persistent_with_peer(&replica_dir, crate::PeerId::parse("backup-replica")?)
                 .await?;
-        assert!(replica.import_workspace(&ticket).await.is_err());
-        let request = workspace.pending_requests().await.remove(0);
-        workspace.approve_peer(&request.public_key).await?;
         let imported = replica.import_workspace(&ticket).await?;
         let replica_records = WorkspaceRecords::new(&imported);
         assert_eq!(wait_for_asset(replica_records).await?, b"backed up blob");

@@ -10,7 +10,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use tempfile::Builder as TempFileBuilder;
 use xo::steel_plugin::PluginChoice;
 use xo_core::behavior::{Query, WorkspaceBehavior};
@@ -156,12 +156,19 @@ impl App {
     }
 
     pub fn active_sort_field(&self) -> &str {
-        self.behavior
+        let view = self
+            .behavior
             .views
             .iter()
-            .find(|view| view.id == self.active_view)
-            .and_then(|view| view.sort_field.as_deref())
-            .unwrap_or("created")
+            .find(|view| view.id == self.active_view);
+        view.and_then(|view| {
+            self.active_subview
+                .as_deref()
+                .and_then(|id| view.subviews.iter().find(|subview| subview.id == id))
+                .and_then(|subview| subview.sort_field.as_deref())
+                .or(view.sort_field.as_deref())
+        })
+        .unwrap_or("created")
     }
 
     pub fn visible_notes(&self) -> Vec<&Note> {
@@ -1107,6 +1114,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     let sort_field = app.active_sort_field();
     let mut previous_year = None;
     let mut note_items = Vec::new();
+    let mut selected_row = None;
     for (index, note) in app.visible_notes().iter().enumerate() {
         let year =
             xo_core::behavior::sort_year(note, sort_field).unwrap_or_else(|| "No year".to_owned());
@@ -1124,6 +1132,9 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             Some(FrontmatterValue::String(value)) => value.clone(),
             _ => note.id.to_string(),
         };
+        if Some(index) == selected_index {
+            selected_row = Some(note_items.len());
+        }
         note_items.push(
             ListItem::new(format!(
                 "{} {title}",
@@ -1140,7 +1151,8 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             }),
         );
     }
-    frame.render_widget(
+    let mut list_state = ListState::default().with_selected(selected_row);
+    frame.render_stateful_widget(
         List::new(note_items).block(
             Block::default()
                 .title(format!("Notes · {} visible", app.visible_notes().len()))
@@ -1152,6 +1164,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 }),
         ),
         panes[notes_pane],
+        &mut list_state,
     );
     let (right_title, right_text) = match app.mode {
         Mode::Conflicts => (
@@ -1807,6 +1820,7 @@ mod tests {
                 subviews: vec![SubviewDescriptor {
                     id: "reading".into(),
                     name: "Reading".into(),
+                    sort_field: None,
                     predicate: Predicate::Always,
                 }],
             },

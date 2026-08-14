@@ -376,7 +376,7 @@ async fn handle_setup(request: Request<Incoming>, state: &OperatorState) -> Resp
             return setup_page(
                 StatusCode::ACCEPTED,
                 Some(
-                    "Membership request submitted. Approve this peer from an active workspace; setup will finish automatically.",
+                    "Membership request submitted; setup is polling for the signed automatic admission.",
                 ),
                 None,
             );
@@ -836,11 +836,9 @@ mod tests {
             ),
         )
         .await;
-        assert!(connected.starts_with("HTTP/1.1 202"));
-        assert!(connected.contains("Membership request submitted"));
+        assert!(connected.starts_with("HTTP/1.1 200"));
+        assert!(connected.contains("Daemon connected"));
         assert!(!connected.contains(&ticket));
-        let request = workspace.pending_requests().await.remove(0);
-        workspace.approve_peer(&request.public_key).await.unwrap();
         let mut configured = false;
         for _ in 0..100 {
             if daemon.workspace_ids().await.unwrap() == vec![workspace_id.clone()] {
@@ -849,7 +847,10 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
-        assert!(configured, "approved daemon did not complete setup");
+        assert!(
+            configured,
+            "automatically admitted daemon did not complete setup"
+        );
 
         shutdown_tx.send(()).unwrap();
         server.await.unwrap().unwrap();

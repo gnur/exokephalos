@@ -56,8 +56,9 @@ protocols, so a browser synchronizes with native peers without a gateway.
 
 The synchronized content travels over Iroh's end-to-end encrypted connections.
 Relays provide connectivity but cannot read or resolve notes. Invitations carry
-discovery information only: a new Ed25519 membership key remains quarantined
-until an active member approves it. Every Automerge change is signed, and
+discovery information only: an invitation peer validates a new Ed25519
+membership key and records its signed approval automatically. Every Automerge
+change is signed, and
 removed keys are permanently denied after their accepted causal frontier.
 Read-only membership and bearer write capabilities are intentionally unsupported.
 
@@ -204,9 +205,10 @@ ten minutes. Only a changed deployment produces an explicit **Update** button.
 
 Press `Space`, then `m` in the TUI to create an invitation and display a QR code.
 Scanning it opens `https://xo.exokephalos.dev/`, submits the browser's visible
-peer ID and Ed25519 fingerprint for approval, and stores its encrypted identity
-and durable Automerge replica. Approve it with `Space`, then `i`; synchronization
-starts immediately afterward and the invitation is removed from the address bar. Invitation fragments are also handled when an already-open PWA receives
+peer ID and Ed25519 fingerprint for automatic admission, and stores its
+encrypted identity and durable Automerge replica. The PWA polls while admission
+is pending; synchronization starts immediately afterward and the invitation is
+removed from the address bar. Invitation fragments are also handled when an already-open PWA receives
 a new setup link; a sleeping peer no longer makes the invitation itself time out. The capability is encoded in the URL
 fragment, so it is not included in the HTTP request. Treat the QR code and copied
 setup link as secrets. On reload, cached records are immediately available and
@@ -293,8 +295,8 @@ offline.
 
 A workspace invitation contains its protocol version, workspace ID, bootstrap
 addresses, Gossip topic, and genesis-key fingerprint. A candidate submits its
-peer ID, membership public key, and endpoint binding, then waits for approval
-from any active member. Known peers and the durable Automerge replica survive
+peer ID, membership public key, and endpoint binding, then polls until automatic
+admission is visible from an active invitation peer. Known peers and the durable Automerge replica survive
 restart, so the invitation is not needed for every launch.
 
 Synchronization is peer-to-peer and eventually consistent. Iroh attempts a
@@ -458,8 +460,8 @@ configs=0
 ```
 
 Save both `workspace_id` and `ticket`. An invitation lets a candidate contact
-the workspace but does not grant membership. An active peer must approve the
-candidate's peer ID and Ed25519 fingerprint.
+the workspace, and an active invitation peer automatically grants membership to
+the candidate's peer ID and Ed25519 fingerprint.
 
 The state directory contains endpoint and membership identities, the Automerge
 snapshot, and signed changes. Back it up and protect the identity files.
@@ -776,9 +778,11 @@ The configuration uses native declarative Steel similar to:
       (capabilities create-note network))))
 ```
 
-Each view may choose any frontmatter field with `(sort-field "field-name")`
-and reverse its ordering with `(descending #t)`. When omitted, `sort-field`
-defaults to `created`. The TUI and PWA insert year headers from the leading ISO
+Each view and subview may choose any frontmatter field with `(sort-field
+"field-name")`; a subview without one inherits its parent view's field. Views
+can reverse their ordering with `(descending #t)`. When neither level specifies
+`sort-field`, it defaults to `created`. The TUI and PWA insert year headers from
+the leading ISO
 year in the selected sort field; missing or non-date values appear under **No
 year**.
 

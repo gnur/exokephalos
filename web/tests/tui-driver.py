@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the real xo TUI in a PTY and expose admission approval for Playwright."""
+"""Run the real xo TUI in a PTY while Playwright exercises browser sync."""
 
 import argparse
 import errno

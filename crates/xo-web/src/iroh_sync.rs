@@ -254,6 +254,7 @@ impl IrohDocNode {
                 JOIN_ALPN,
                 BrowserJoin {
                     workspaces: workspaces.clone(),
+                    identity: identity.clone(),
                 },
             )
             .accept(GOSSIP_ALPN, gossip.clone())
@@ -973,6 +974,7 @@ async fn announce_browser(workspace: &BrowserWorkspace, endpoint: &Endpoint) -> 
 #[derive(Clone, Debug)]
 struct BrowserJoin {
     workspaces: WorkspaceMap,
+    identity: Arc<MembershipIdentity>,
 }
 impl ProtocolHandler for BrowserJoin {
     async fn accept(&self, connection: iroh::endpoint::Connection) -> Result<(), AcceptError> {
@@ -991,14 +993,37 @@ impl ProtocolHandler for BrowserJoin {
                 .cloned()
                 .context("unknown workspace")?;
             let fingerprint = public_key_fingerprint(&request.public_key);
-            let response = match workspace.registry.read().await.member(&fingerprint) {
-                Some(member) if member.status == MemberStatus::Active => JoinResponse::Approved {
+            let member_status = workspace
+                .registry
+                .read()
+                .await
+                .member(&fingerprint)
+                .map(|member| member.status);
+            let response = match member_status {
+                Some(MemberStatus::Active) => JoinResponse::Approved {
                     membership_event: vec![],
                 },
                 Some(_) => JoinResponse::Rejected,
                 None => {
-                    workspace.pending.write().await.insert(fingerprint, request);
-                    JoinResponse::Pending
+                    let event = SignedMembershipEvent::create(
+                        &self.identity,
+                        WorkspaceId::new(workspace.id.clone()),
+                        now_hlc(&self.identity)?,
+                        MembershipEvent::JoinApproved {
+                            peer_id: request.peer_id,
+                            public_key: request.public_key,
+                            endpoint_id: request.endpoint_id,
+                        },
+                    )?;
+                    workspace.document.lock().await.put(
+                        &format!("membership/event/{}", event.event_id),
+                        encode(&event)?,
+                    )?;
+                    workspace.sign_local().await?;
+                    workspace.refresh_registry().await?;
+                    JoinResponse::Approved {
+                        membership_event: encode(&event)?,
+                    }
                 }
             };
             write_frame(&mut send, &encode(&response)?).await?;

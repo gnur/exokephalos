@@ -59,14 +59,17 @@
         (subview
           (id "to-read")
           (name "To Read")
+          (sort-field "added")
           (predicate (has-tag "to-read")))
         (subview
           (id "reading")
           (name "Reading")
+          (sort-field "started")
           (predicate (has-tag "reading")))
         (subview
           (id "read")
           (name "Read")
+          (sort-field "finished")
           (predicate (has-tag "read")))))
     (view
       (id "webhooks")

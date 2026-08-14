@@ -617,7 +617,14 @@ function errorMessage(cause: unknown) {
 // the same object. Keep all runtime operations in arrival order.
 let requestQueue = Promise.resolve();
 scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
-  requestQueue = requestQueue.then(() => respond(event.data));
+  // Queries only read the durable IndexedDB cache and invoke a pure Wasm
+  // function; they do not borrow IrohDocNode. Let them bypass slow network
+  // refreshes so navigation remains immediate.
+  if (event.data.method === 'query-notes') {
+    void respond(event.data);
+  } else {
+    requestQueue = requestQueue.then(() => respond(event.data));
+  }
 });
 
 async function respond(request: WorkerRequest) {

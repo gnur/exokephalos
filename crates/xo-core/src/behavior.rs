@@ -143,6 +143,8 @@ pub struct SubviewDescriptor {
     #[serde(default)]
     pub name: String,
     #[serde(default)]
+    pub sort_field: Option<String>,
+    #[serde(default)]
     pub predicate: Predicate,
 }
 
@@ -360,8 +362,9 @@ impl WorkspaceBehavior {
                     && query.tags.iter().all(|tag| tags(note).contains(tag))
             })
             .collect::<Vec<_>>();
-        let sort_field = view
+        let sort_field = subview
             .and_then(|value| value.sort_field.as_deref())
+            .or_else(|| view.and_then(|value| value.sort_field.as_deref()))
             .unwrap_or("created");
         result.sort_by(|left, right| {
             field(left, sort_field)
@@ -624,6 +627,46 @@ mod tests {
         assert_eq!(found[0].id.as_str(), "z title");
         assert_eq!(sort_year(found[0], "created").as_deref(), Some("2024"));
         assert_eq!(sort_year(found[1], "title"), None);
+    }
+
+    #[test]
+    fn subview_sort_field_overrides_its_parent_view() {
+        let mut behavior = WorkspaceBehavior {
+            views: default_views(),
+            ..WorkspaceBehavior::default()
+        };
+        behavior.views[0].sort_field = Some("created".into());
+        behavior.views[0].descending = false;
+        behavior.views[0].subviews.push(SubviewDescriptor {
+            id: "alphabetical".into(),
+            name: "Alphabetical".into(),
+            sort_field: Some("title".into()),
+            predicate: Predicate::Always,
+        });
+        let mut zulu = note("Zulu", &[]);
+        zulu.frontmatter
+            .insert("type".into(), FrontmatterValue::String("note".into()));
+        zulu.frontmatter
+            .insert("created".into(), FrontmatterValue::String("2020".into()));
+        let mut alpha = note("Alpha", &[]);
+        alpha
+            .frontmatter
+            .insert("type".into(), FrontmatterValue::String("note".into()));
+        alpha
+            .frontmatter
+            .insert("created".into(), FrontmatterValue::String("2030".into()));
+        let notes = [zulu, alpha];
+        let found = behavior
+            .query(
+                &notes,
+                &Query {
+                    view: behavior.views[0].id.clone(),
+                    subview: Some(behavior.views[0].subviews[0].id.clone()),
+                    ..Query::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(found[0].id.as_str(), "alpha");
     }
 
     #[test]

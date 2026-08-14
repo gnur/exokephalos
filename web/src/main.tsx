@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   BookOpen,
@@ -26,7 +26,7 @@ import {
   X,
 } from 'lucide-react';
 import { registerSW } from 'virtual:pwa-register';
-import type { RuntimeReport, RuntimeState } from './protocol';
+import type { NoteQueryInput, RuntimeReport, RuntimeState } from './protocol';
 import { XoRuntime } from './runtime';
 import { WorkspaceExperience } from './workspace-ui';
 import './styles.css';
@@ -118,6 +118,19 @@ function randomPeerId() {
   return `${PEER_ADJECTIVES[random[0] % PEER_ADJECTIVES.length]}-${PEER_SUBJECTS[random[1] % PEER_SUBJECTS.length]}`;
 }
 
+function reportRevision(report?: RuntimeReport) {
+  if (!report) return '';
+  return JSON.stringify({
+    entries: report.entries.map((entry) => [entry.keyBase64, entry.contentHash, entry.pending]),
+    pendingWrites: report.pendingWrites,
+    pendingApproval: report.status.pendingApproval,
+    peers: report.status.peers,
+    syncError: report.syncError,
+    members: report.members,
+    pendingMembers: report.pendingMembers,
+  });
+}
+
 function App() {
   const runtimeRef = useRef<XoRuntime | undefined>(undefined);
   const initialRoute = useRef(workspaceRouteState());
@@ -193,7 +206,7 @@ function App() {
       try {
         const next = await runtimeRef.current.refreshSync();
         if (active) {
-          setReport(next);
+          setReport((current) => reportRevision(current) === reportRevision(next) ? current : next);
           if (!next.syncError) setError('');
         }
       } catch (cause) {
@@ -202,12 +215,15 @@ function App() {
         running = false;
       }
     };
-    const timer = window.setInterval(() => void refresh(), 3_000);
+    // Admission is polled promptly; routine synchronization is deliberately
+    // less frequent so it does not monopolize the serialized Wasm worker.
+    const interval = report.status.pendingApproval ? 2_000 : 15_000;
+    const timer = window.setInterval(() => void refresh(), interval);
     return () => {
       active = false;
       window.clearInterval(timer);
     };
-  }, [state, report?.status.workspaceId]);
+  }, [state, report?.status.workspaceId, report?.status.pendingApproval]);
 
   useEffect(() => {
     const onUpdate = () => setUpdateAvailable(true);
@@ -307,6 +323,11 @@ function App() {
     }
   }
 
+  const queryNotes = useCallback(
+    (input: NoteQueryInput) => runtimeRef.current?.queryNotes(input) ?? Promise.resolve([]),
+    [],
+  );
+
   const hasWorkspace = Boolean(report?.status.workspaceId);
   if (hasWorkspace && report) {
     return (
@@ -324,7 +345,7 @@ function App() {
         }}
         onSubview={setActiveSubview}
         onSearch={setSearch}
-        onQuery={(input) => runtimeRef.current?.queryNotes(input) ?? Promise.resolve([])}
+        onQuery={queryNotes}
         onMutate={(input) => runWorkspace((runtime) => runtime.mutateNote(input))}
         onRefresh={() => void runWorkspace((runtime) => runtime.refreshSync())}
         onUpdate={() => void applyUpdate()}
@@ -465,9 +486,9 @@ function Onboarding({ state, report, error, busy, peerId, onPeerId, ticket, onTi
           <h1>Your knowledge,<br /><em>entirely client-side.</em></h1>
           <p className="lede">Create or join an authenticated Automerge workspace. Iroh QUIC, Gossip, Steel, and recovery run in this browser worker.</p>
           {!report?.peerId ? <label className="ticket-form"><span>Peer ID (required)</span><small>A random client name has been generated for this browser. You can change it before creating or joining a workspace.</small><input value={peerId} onChange={(event) => onPeerId(event.target.value)} placeholder="smart-browser" aria-label="Peer ID" required /></label> : <p>Peer ID: <strong>{report.peerId}</strong></p>}
-          {report?.syncError?.includes('pending approval') ? <p className="error-message">This peer is pending approval from an active workspace member.</p> : null}
+          {report?.syncError?.includes('pending approval') ? <p className="error-message">This peer is waiting for its signed automatic admission.</p> : null}
           <div className="hero-actions">
-            {report?.syncError?.includes('pending approval') ? <button className="primary" disabled={busy} onClick={onRetryApproval}><RefreshCw className={busy ? 'spin' : ''} /> Check approval</button> : null}
+            {report?.syncError?.includes('pending approval') ? <button className="primary" disabled={busy} onClick={onRetryApproval}><RefreshCw className={busy ? 'spin' : ''} /> Check admission</button> : null}
             <button className="primary" disabled={busy || state !== 'ready' || (!report?.peerId && !peerId.trim())} onClick={onCreate}>{busy ? <LoaderCircle className="spin" /> : <Plus />} Create workspace</button>
             {installPrompt ? <button className="secondary" onClick={onInstall}><Download /> Install xo</button> : <button className="secondary" onClick={onCheckForUpdates}>Check for updates</button>}
           </div>

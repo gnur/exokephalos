@@ -503,10 +503,11 @@ fn parse_view(form: &NativeForm) -> Result<ViewDescriptor, SteelConfigError> {
 
 fn parse_subview(form: &NativeForm) -> Result<SubviewDescriptor, SteelConfigError> {
     let args = constructor_args(form, "subview")?;
-    let fields = native_fields(args, &["id", "name", "predicate"], "subview")?;
+    let fields = native_fields(args, &["id", "name", "sort-field", "predicate"], "subview")?;
     Ok(SubviewDescriptor {
         id: required_string(&fields, "id")?,
         name: optional_string(&fields, "name")?.unwrap_or_default(),
+        sort_field: optional_nullable_string(&fields, "sort-field")?,
         predicate: optional_predicate(&fields)?.unwrap_or_default(),
     })
 }
@@ -1195,12 +1196,14 @@ fn encode_view(view: &ViewDescriptor, indent: usize) -> String {
     for subview in &view.subviews {
         write!(
             output,
-            "\n{}(subview\n{}(id {})\n{}(name {})\n{}(predicate {}))",
+            "\n{}(subview\n{}(id {})\n{}(name {})\n{}(sort-field {})\n{}(predicate {}))",
             " ".repeat(indent + 4),
             " ".repeat(indent + 6),
             steel_string(&subview.id),
             " ".repeat(indent + 6),
             steel_string(&subview.name),
+            " ".repeat(indent + 6),
+            encode_optional_string(subview.sort_field.as_deref()),
             " ".repeat(indent + 6),
             encode_predicate(&subview.predicate)
         )
@@ -1546,6 +1549,7 @@ mod tests {
                 subviews: vec![SubviewDescriptor {
                     id: "important".into(),
                     name: "Important".into(),
+                    sort_field: None,
                     predicate: Predicate::Any {
                         predicates: vec![
                             Predicate::HasTag {

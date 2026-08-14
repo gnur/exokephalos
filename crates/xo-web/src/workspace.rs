@@ -795,6 +795,7 @@ mod tests {
                 subviews: vec![SubviewDescriptor {
                     id: "reading".into(),
                     name: "Reading".into(),
+                    sort_field: None,
                     predicate: Predicate::HasTag {
                         tag: "reading".into(),
                     },

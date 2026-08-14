@@ -24,6 +24,7 @@ export type FrontmatterValue = null | boolean | number | string | FrontmatterVal
 export interface SubviewDescriptor {
   id: string;
   name: string;
+  sort_field?: string;
 }
 
 export interface ViewDescriptor {

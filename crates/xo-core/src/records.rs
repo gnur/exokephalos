@@ -939,9 +939,6 @@ mod tests {
             crate::PeerId::parse("asset-second")?,
         )
         .await?;
-        assert!(second.import_workspace(&ticket).await.is_err());
-        let request = workspace.pending_requests().await.remove(0);
-        workspace.approve_peer(&request.public_key).await?;
         let imported = second.import_workspace(&ticket).await?;
         let records = WorkspaceRecords::new(&imported);
         let mut replicated = None;
@@ -1023,9 +1020,6 @@ mod tests {
         let workspace_id = workspace_a.id();
         let ticket = workspace_a.share(true).await?;
         let b = IrohNode::persistent_with_peer(&b_dir, crate::PeerId::parse("retire-b")?).await?;
-        assert!(b.import_workspace(&ticket).await.is_err());
-        let request = workspace_a.pending_requests().await.remove(0);
-        workspace_a.approve_peer(&request.public_key).await?;
         let workspace_b = b.import_workspace(&ticket).await?;
         let records_b = WorkspaceRecords::new(&workspace_b);
         let author_b = records_b.actor_id();
@@ -1218,14 +1212,8 @@ mod tests {
         let workspace_id = workspace_a.id();
         let ticket = workspace_a.share(true).await?;
         let b = IrohNode::persistent_with_relay_map(b_dir.path(), relay_map.clone()).await?;
-        assert!(b.import_workspace(&ticket).await.is_err());
-        let request = workspace_a.pending_requests().await.remove(0);
-        workspace_a.approve_peer(&request.public_key).await?;
         b.import_workspace(&ticket).await?;
         let c = IrohNode::persistent_with_relay_map(c_dir.path(), relay_map.clone()).await?;
-        assert!(c.import_workspace(&ticket).await.is_err());
-        let request = workspace_a.pending_requests().await.remove(0);
-        workspace_a.approve_peer(&request.public_key).await?;
         c.import_workspace(&ticket).await?;
         c.shutdown().await?;
         b.shutdown().await?;

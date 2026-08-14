@@ -258,6 +258,7 @@ impl AutomergeNode {
         let gossip = Gossip::builder().spawn(endpoint.clone());
         let join = JoinProtocol {
             workspaces: workspaces.clone(),
+            identity: identity.clone(),
         };
         let sync = SyncProtocol {
             workspaces: workspaces.clone(),
@@ -876,6 +877,7 @@ impl AutomergeWorkspace {
 #[derive(Clone, Debug)]
 struct JoinProtocol {
     workspaces: WorkspaceMap,
+    identity: Arc<MembershipIdentity>,
 }
 
 impl ProtocolHandler for JoinProtocol {
@@ -902,18 +904,35 @@ impl JoinProtocol {
             .cloned()
             .context("unknown workspace")?;
         let fingerprint = crate::membership::public_key_fingerprint(&request.public_key);
-        let response = match workspace.registry.read().await.member(&fingerprint) {
-            Some(member) if member.status == MemberStatus::Active => JoinResponse::Approved {
+        let member_status = workspace
+            .registry
+            .read()
+            .await
+            .member(&fingerprint)
+            .map(|member| member.status);
+        let response = match member_status {
+            Some(MemberStatus::Active) => JoinResponse::Approved {
                 membership_event: Vec::new(),
             },
-            Some(member) if member.status != MemberStatus::Active => JoinResponse::Rejected,
-            _ => {
-                workspace.pending.write().await.insert(fingerprint, request);
-                workspace.persist_pending().await?;
+            Some(_) => JoinResponse::Rejected,
+            None => {
+                let event = SignedMembershipEvent::create(
+                    &self.identity,
+                    WorkspaceId::new(workspace.id.clone()),
+                    timestamp(&self.identity)?,
+                    MembershipEvent::JoinApproved {
+                        peer_id: request.peer_id,
+                        public_key: request.public_key,
+                        endpoint_id: request.endpoint_id,
+                    },
+                )?;
+                workspace.put_membership_event(&event).await?;
                 let _ = workspace
                     .events
                     .send(AutomergeWorkspaceEvent::MembershipChanged);
-                JoinResponse::Pending
+                JoinResponse::Approved {
+                    membership_event: encode(&event)?,
+                }
             }
         };
         write_frame(&mut send, &encode(&response)?).await?;
@@ -1218,25 +1237,11 @@ mod tests {
         let owner_workspace = owner.create_workspace().await?;
         let invitation = owner_workspace.invitation()?;
 
-        assert_eq!(
-            phone.request_join(&invitation).await?,
-            JoinResponse::Pending
-        );
-        let pending = owner_workspace.pending_requests().await;
-        assert_eq!(pending.len(), 1);
-        let persisted_pending = load_pending_requests(
-            &directory
-                .path()
-                .join("owner")
-                .join(WORKSPACES_DIR)
-                .join(owner_workspace.id()),
-        )?;
-        assert_eq!(persisted_pending.len(), 1);
-        owner_workspace.approve(&pending[0].public_key).await?;
         assert!(matches!(
             phone.request_join(&invitation).await?,
             JoinResponse::Approved { .. }
         ));
+        assert!(owner_workspace.pending_requests().await.is_empty());
 
         let phone_workspace = phone.import_approved_workspace(&invitation).await?;
         owner_workspace

@@ -591,6 +591,7 @@ mod tests {
                 subviews: vec![xo_core::behavior::SubviewDescriptor {
                     id: "reading".into(),
                     name: "Reading".into(),
+                    sort_field: None,
                     predicate: Predicate::HasTag {
                         tag: "reading".into(),
                     },
@@ -644,19 +645,6 @@ mod tests {
         let ticket = source.writable_invitation().await?;
 
         let peer_state = directory.path().join("peer-state");
-        assert!(
-            WorkspaceSession::open_with_peer(
-                &peer_state,
-                None,
-                Some(&ticket),
-                directory.path().join("peer-notes"),
-                xo_core::PeerId::parse("peer")?,
-            )
-            .await
-            .is_err()
-        );
-        let request = source.workspace.pending_requests().await.remove(0);
-        source.workspace.approve_peer(&request.public_key).await?;
         let mut peer = WorkspaceSession::open_with_peer(
             &peer_state,
             None,
@@ -746,14 +734,6 @@ mod tests {
             xo_core::PeerId::parse("server")?,
         )
         .await?;
-        assert!(
-            server
-                .import_writable_workspace(&client_ticket)
-                .await
-                .is_err()
-        );
-        let request = session.workspace.pending_requests().await.remove(0);
-        session.workspace.approve_peer(&request.public_key).await?;
         let server_workspace = server.import_writable_workspace(&client_ticket).await?;
         assert_eq!(server_workspace.id().to_string(), workspace_id);
         let server_ticket = server_workspace.share(true).await?;
@@ -817,9 +797,6 @@ mod tests {
         let central =
             IrohNode::persistent_with_peer(&central_state, xo_core::PeerId::parse("central")?)
                 .await?;
-        assert!(central.import_workspace(&ticket).await.is_err());
-        let request = workspace.pending_requests().await.remove(0);
-        workspace.approve_peer(&request.public_key).await?;
         let central_workspace = central.import_workspace(&ticket).await?;
         wait_until(|| async {
             WorkspaceRecords::new(&central_workspace)

@@ -83,10 +83,15 @@ export function WorkspaceExperience({
   const [draft, setDraft] = useState('');
   const [createTitle, setCreateTitle] = useState('');
   const [queryError, setQueryError] = useState('');
+  const [queryLoading, setQueryLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [ticketVisible, setTicketVisible] = useState(false);
 
   const workspace = report.workspace;
+  const entriesFingerprint = useMemo(
+    () => report.entries.map((entry) => `${entry.keyBase64}:${entry.contentHash}:${entry.pending ? 'p' : ''}`).join('|'),
+    [report.entries],
+  );
   const view = workspace?.behavior.views.find((candidate) => candidate.id === activeView);
   const selected = notes.find((note) => note.id === selectedId);
 
@@ -138,22 +143,29 @@ export function WorkspaceExperience({
     // Never leave the previous view's rows visible while its replacement is loading.
     setNotes([]);
     setUnfilteredNotes([]);
+    setQueryLoading(true);
     const base: NoteQueryInput = search.trim()
       ? { view: 'all', search, tags: [] }
       : { view: activeView, subview: activeSubview, search, tags: [] };
-    void Promise.all([onQuery({ ...base, tags: selectedTags }), onQuery(base)])
-      .then(([next, unfiltered]) => {
+    const queries = selectedTags.length
+      ? Promise.all([onQuery({ ...base, tags: selectedTags }), onQuery(base)])
+      : onQuery(base).then((next) => [next, next] as const);
+    void queries.then(([next, unfiltered]) => {
         if (!active) return;
         setQueryError('');
+        setQueryLoading(false);
         setNotes(next);
         setUnfilteredNotes(unfiltered);
         setSelectedId((current) => next.some((note) => note.id === current) ? current : next[0]?.id);
       })
       .catch((cause: unknown) => {
-        if (active) setQueryError(errorMessage(cause));
+        if (active) {
+          setQueryLoading(false);
+          setQueryError(errorMessage(cause));
+        }
       });
     return () => { active = false; };
-  }, [activeView, activeSubview, search, selectedTags, report.entries, onQuery]);
+  }, [activeView, activeSubview, search, selectedTags, entriesFingerprint, onQuery]);
 
   const tagCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -232,7 +244,7 @@ export function WorkspaceExperience({
           <p className="legacy-eyebrow">exokephalos · {report.runtime.version}</p>
           <h1>{screenTitle}</h1>
         </div>
-        <img className="brand-logo" src="/logo.svg" alt="" aria-hidden="true" />
+        <img className={queryLoading || busy ? 'brand-logo loading' : 'brand-logo'} src="/logo.svg" alt="" aria-hidden="true" />
       </header>
 
       {saving || report.pendingWrites ? (
@@ -299,7 +311,8 @@ export function WorkspaceExperience({
               ? view?.subviews.find((subview) => subview.id === activeSubview)?.name || activeSubview
               : undefined}
             showTags={Boolean(view?.show_tags)}
-            sortField={view?.sort_field || 'created'}
+            sortField={(activeSubview ? view?.subviews.find((subview) => subview.id === activeSubview)?.sort_field : undefined) || view?.sort_field || 'created'}
+            loading={queryLoading}
             selectedTagCount={selectedTags.length}
             deleted={workspace?.deleted ?? []}
             onTags={() => setPane('tags')}
@@ -345,12 +358,13 @@ export function WorkspaceExperience({
   );
 }
 
-function ItemsPane({ notes, viewName, subviewName, showTags, sortField, selectedTagCount, deleted, onTags, onSelect, onRestore }: {
+function ItemsPane({ notes, viewName, subviewName, showTags, sortField, loading, selectedTagCount, deleted, onTags, onSelect, onRestore }: {
   notes: WorkspaceNote[];
   viewName: string;
   subviewName?: string;
   showTags: boolean;
   sortField: string;
+  loading: boolean;
   selectedTagCount: number;
   deleted: WorkspaceNote[];
   onTags: () => void;
@@ -378,7 +392,7 @@ function ItemsPane({ notes, viewName, subviewName, showTags, sortField, selected
               ))}
             </React.Fragment>
           ))}
-          {!notes.length ? <div className="empty-state">No matching items.</div> : null}
+          {loading ? <div className="empty-state loading-state"><RefreshCw className="spin" /> Loading items…</div> : !notes.length ? <div className="empty-state">No matching items.</div> : null}
         </div>
         {deleted.length ? (
           <details className="deleted-panel"><summary>Deleted notes ({deleted.length})</summary>{deleted.map((note) => <div key={note.id}><span><strong>{noteTitle(note)}</strong><small>{note.id}</small></span><button className="button" onClick={() => onRestore(note.id)}>Restore</button></div>)}</details>
@@ -448,7 +462,7 @@ function SettingsPane({ report, busy, ticketVisible, onTicketVisible, onRefresh,
   return <section className="single-pane settings-pane">
     <div className="settings-section"><p className="legacy-eyebrow">Automerge workspace</p><h2>Synchronization</h2><div className="status-grid compact"><Status icon={<Cloud />} label="Transport" value="relay-only E2EE" /><Status icon={<Radio />} label="Peers" value={String(report.status.peers)} /><Status icon={<Check />} label="Pending writes" value={String(report.pendingWrites)} /><Status icon={<KeyRound />} label="Workspace" value={short(report.status.workspaceId)} /></div><button className="button" disabled={busy} onClick={onRefresh}><RefreshCw className={busy ? 'spin' : ''} /> Sync now</button></div>
     <div className="settings-section"><p className="legacy-eyebrow">Authenticated membership</p><h2>Peers</h2>{report.pendingMembers.map((peer) => <div className="entry-row" key={peer.fingerprint}><div><strong>{peer.peerId}</strong><code>{short(peer.fingerprint)}</code></div><div className="button-row"><button className="button" disabled={busy} onClick={() => onApprovePeer(peer.fingerprint)}>Approve</button><button className="button danger-button" disabled={busy} onClick={() => onRejectPeer(peer.fingerprint)}>Reject</button></div></div>)}{report.members.map((peer) => <div className="entry-row" key={peer.fingerprint}><div><strong>{peer.peerId}</strong><span>{peer.status} · {short(peer.fingerprint)}</span></div>{peer.fingerprint !== report.status.authorId && peer.status === 'active' ? <button className="button danger-button" disabled={busy} onClick={() => onRemovePeer(peer.fingerprint)}>Remove</button> : null}</div>)}</div>
-    <div className="settings-section ticket-panel"><div><p className="legacy-eyebrow">Workspace invitation</p><h2>Invitation</h2><p>New peers remain quarantined until an active member approves them.</p></div><div className="button-row"><button className="button" onClick={() => onTicketVisible(!ticketVisible)}>{ticketVisible ? 'Hide' : 'Reveal'} ticket</button><button className="button" onClick={() => void navigator.clipboard.writeText(report.ticket ?? '')}><Copy /> Copy</button></div>{ticketVisible ? <textarea className="ticket-output" readOnly value={report.ticket ?? ''} /> : null}</div>
+    <div className="settings-section ticket-panel"><div><p className="legacy-eyebrow">Workspace invitation</p><h2>Invitation</h2><p>Invitation peers are admitted automatically after their signed identity and endpoint binding are validated.</p></div><div className="button-row"><button className="button" onClick={() => onTicketVisible(!ticketVisible)}>{ticketVisible ? 'Hide' : 'Reveal'} ticket</button><button className="button" onClick={() => void navigator.clipboard.writeText(report.ticket ?? '')}><Copy /> Copy</button></div>{ticketVisible ? <textarea className="ticket-output" readOnly value={report.ticket ?? ''} /> : null}</div>
     {report.workspace?.deleted.length ? <details className="deleted-panel"><summary>Deleted notes ({report.workspace.deleted.length})</summary>{report.workspace.deleted.map((note) => <div key={note.id}><span><strong>{noteTitle(note)}</strong><small>{note.id}</small></span><button className="button" onClick={() => onRestore(note.id)}>Restore</button></div>)}</details> : null}
     {report.workspace?.diagnostics.map((diagnostic) => <p className="error-message" key={diagnostic}>{diagnostic}</p>)}
     <details className="raw-panel"><summary>Raw Automerge records ({report.entries.length})</summary><div className="entry-list">{report.entries.map((entry) => <EntryRow key={entry.keyBase64} entry={entry} />)}</div></details>

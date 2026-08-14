@@ -23,7 +23,10 @@
 }
 .legacy-topbar h1 { margin: 0; color: #f8fafc; font-size: 1.25rem; line-height: 1.2; letter-spacing: 0; }
 .legacy-eyebrow { margin: 0 0 2px; color: #94a3b8; font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; }
-.brand-logo { width: 38px; height: 38px; flex: none; }
+.brand-logo { width: 38px; height: 38px; flex: none; animation: logo-spin 1s linear infinite; animation-play-state: paused; }
+.brand-logo.loading { animation-play-state: running; }
+@keyframes logo-spin { to { transform: rotate(360deg); } }
+.loading-state { display: flex; align-items: center; justify-content: center; gap: 8px; }
 .legacy-content { width: 100%; min-width: 0; margin: 0; padding: 0 0 calc(92px + env(safe-area-inset-bottom)); }
 
 .legacy-shell .button,

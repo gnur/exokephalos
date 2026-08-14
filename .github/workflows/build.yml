@@ -265,7 +265,7 @@ jobs:
           workspace_id=$(grep '^workspace_id=' "${fixture}/import.out" | cut -d= -f2-)
 
           # Exercise the exact user-facing path first: imported state -> real xo TUI in a
-          # pseudo-terminal -> browser join approved with the TUI's Space/i/a keys.
+          # pseudo-terminal -> automatically admitted browser join and synchronization.
           mkdir -p "${fixture}/home/.config/xo"
           HOME="${fixture}/home" target/debug/xo config-init \
             > "${fixture}/home/.config/xo/config.scm"
@@ -289,7 +289,6 @@ jobs:
           (
             cd web
             XO_IROH_TICKET="${ticket}" \
-              XO_TUI_APPROVAL_URL="http://127.0.0.1:19465/approve" \
               npx playwright test --project=chromium \
                 --grep 'imports notes, starts the actual TUI'
           )

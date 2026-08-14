@@ -882,6 +882,7 @@ mod tests {
             .push(xo_core::behavior::SubviewDescriptor {
                 id: "important".into(),
                 name: "Important".into(),
+                sort_field: None,
                 predicate: xo_core::behavior::Predicate::HasTag {
                     tag: "important".into(),
                 },
@@ -926,15 +927,6 @@ mod tests {
         let workspace_id = workspace.id().to_string();
         let source_ticket = workspace.share(true).await?;
         let target_state = directory.path().join("target");
-        assert!(import_ticket(&target_state, &source_ticket).await.is_err());
-        let request = workspace
-            .pending_requests()
-            .await
-            .into_iter()
-            .next()
-            .context("pending xo-admin import")?;
-        workspace.approve_peer(&request.public_key).await?;
-
         let first = import_ticket(&target_state, &source_ticket).await?;
         let repeated = import_ticket(&target_state, &source_ticket).await?;
         assert_eq!(first.workspace_id, workspace_id);

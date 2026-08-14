@@ -20,7 +20,7 @@ Each process has:
 - a persistent Ed25519 membership key, whose fingerprint is the canonical actor identity;
 - a separate persistent Iroh endpoint key.
 
-The creator writes the self-signed genesis event. Candidates submit signed requests over `/xo/join/1` and remain quarantined until an active member approves them. Any active member can approve, reject, or permanently remove a key. Removed keys cannot be reactivated. Rejoining requires a fresh membership key and approval.
+The creator writes the self-signed genesis event. Candidates submit signed requests over `/xo/join/1`; an active invitation peer validates the request and endpoint binding and records a signed approval automatically. Active members can permanently remove a key. Removed keys cannot be reactivated. Rejoining requires a fresh membership key and a new signed admission.
 
 Every Automerge change has an Ed25519 sidecar signature binding its workspace, actor, sequence, hash, and raw bytes. Authenticated sync validates the Iroh endpoint binding, membership status, signature, actor, sequence, and revocation cutoff. A removal records accepted heads and actor sequence, rotates the membership epoch and Gossip topic, and causes informed peers to deny further synchronization. Revocation is eventually consistent for offline peers.
 

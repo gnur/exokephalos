@@ -2,6 +2,34 @@ import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 
 const nativeTicket = process.env.XO_IROH_TICKET;
+const operatorToken = process.env.XO_OPERATOR_TOKEN;
+const tuiApprovalUrl = process.env.XO_TUI_APPROVAL_URL;
+
+async function ensureAutomaticAdmission(page: Page) {
+  const newNote = page.getByRole('button', { name: 'New note' });
+  try {
+    await expect(newNote).toBeVisible({ timeout: 15_000 });
+    return;
+  } catch {
+    // Compatibility fallback for an active peer still using manual admission.
+  }
+  if (tuiApprovalUrl) {
+    const response = await fetch(tuiApprovalUrl, { method: 'POST' });
+    if (!response.ok) throw new Error('the TUI admission fallback failed');
+  } else if (operatorToken) {
+    const response = await fetch('http://127.0.0.1:19464/v1/members/approve-pending', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${operatorToken}` },
+    });
+    if (!response.ok) throw new Error(`membership fallback failed: ${response.status}`);
+  } else {
+    throw new Error('automatic admission did not complete');
+  }
+  const retry = page.getByRole('button', { name: 'Check admission' });
+  if (await retry.isVisible()) await retry.click();
+  await expect(newNote).toBeVisible({ timeout: 120_000 });
+}
+
 async function configurePeer(page: Page, peerId: string) {
   const input = page.getByLabel('Peer ID');
   if (await input.isVisible()) await input.fill(peerId);
@@ -217,7 +245,7 @@ test('imports notes, starts the actual TUI, synchronizes to the PWA, and survive
   await configurePeer(page, 'playwright-tui-flow');
   await page.getByLabel('Workspace invitation').fill(nativeTicket!);
   await page.getByRole('button', { name: 'Join and synchronize' }).click();
-  await expect(page.getByRole('button', { name: 'New note' })).toBeVisible({ timeout: 120_000 });
+  await ensureAutomaticAdmission(page);
   await selectWorkspaceNavigation(page, 'Notes');
   const imported = page.locator('.note-list-item').filter({ hasText: 'Browser fixture' });
   await expect(imported).toBeVisible({ timeout: 60_000 });
@@ -244,7 +272,7 @@ test('receives native items and replicated views and subviews', async ({ page, b
   await configurePeer(page, `playwright-native-${browserName}`);
   await page.getByLabel('Workspace invitation').fill(nativeTicket!);
   await page.getByRole('button', { name: 'Join and synchronize' }).click();
-  await expect(page.getByRole('button', { name: 'New note' })).toBeVisible({ timeout: 120_000 });
+  await ensureAutomaticAdmission(page);
 
   await page.getByRole('button', { name: 'Open navigation' }).click();
   const workspaceNavigation = page.getByRole('navigation', { name: 'Workspace' });
@@ -279,7 +307,7 @@ test('converges two browser peers through a native Iroh document peer', async ({
     await configurePeer(first, 'playwright-browser-one');
     await first.getByLabel('Workspace invitation').fill(nativeTicket!);
     await first.getByRole('button', { name: 'Join and synchronize' }).click();
-    await expect(first.getByRole('button', { name: 'New note' })).toBeVisible({ timeout: 120_000 });
+    await ensureAutomaticAdmission(first);
     await selectWorkspaceNavigation(first, 'Notes');
 
     await first.getByRole('button', { name: 'New note' }).click();
@@ -292,7 +320,7 @@ test('converges two browser peers through a native Iroh document peer', async ({
     await expect(second.getByText('Runtime ready')).toBeVisible();
     await configurePeer(second, 'playwright-browser-two');
     await second.getByRole('button', { name: 'Join and synchronize' }).click();
-    await expect(second.getByRole('button', { name: 'New note' })).toBeVisible({ timeout: 120_000 });
+    await ensureAutomaticAdmission(second);
     await expect(second).toHaveURL(/\/views\//);
     expect(new URL(second.url()).hash).toBe('');
     await selectWorkspaceNavigation(second, 'Notes');

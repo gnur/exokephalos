@@ -28,8 +28,13 @@ async function ensureAutomaticAdmission(page: Page) {
     throw new Error('automatic admission did not complete');
   }
   const retry = page.getByRole('button', { name: 'Check admission' });
-  await expect(retry).toBeVisible({ timeout: 120_000 });
-  await retry.click();
+  if (await retry.isVisible()) {
+    await retry.click();
+  } else {
+    // A first-round network error may leave the invitation form visible even
+    // though the active peer durably recorded the automatic admission.
+    await page.getByRole('button', { name: 'Join and synchronize' }).click();
+  }
   await expect(newNote).toBeVisible({ timeout: 120_000 });
 }
 

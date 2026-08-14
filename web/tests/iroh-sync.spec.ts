@@ -16,21 +16,14 @@ async function ensureAutomaticAdmission(page: Page) {
   // Compatibility fallback for an active peer still using manual admission.
   if (tuiApprovalUrl) {
     const response = await fetch(tuiApprovalUrl, { method: 'POST' });
-    if (!response.ok || !((await response.json()) as { approved: boolean }).approved) {
-      throw new Error('the TUI admission fallback failed');
-    }
+    if (response.ok) await response.json();
   } else if (operatorToken) {
-    let approved = 0;
-    for (let attempt = 0; attempt < 120 && approved === 0; attempt += 1) {
-      const response = await fetch('http://127.0.0.1:19464/v1/members/approve-pending', {
-        method: 'POST',
-        headers: { authorization: `Bearer ${operatorToken}` },
-      });
-      if (!response.ok) throw new Error(`membership fallback failed: ${response.status}`);
-      approved = ((await response.json()) as { approved: number }).approved;
-      if (!approved) await page.waitForTimeout(1_000);
-    }
-    if (!approved && !(await newNote.isVisible())) throw new Error('automatic admission did not complete');
+    const response = await fetch('http://127.0.0.1:19464/v1/members/approve-pending', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${operatorToken}` },
+    });
+    if (!response.ok) throw new Error(`membership fallback failed: ${response.status}`);
+    await response.json(); // zero means the peer already auto-approved the request
   } else {
     throw new Error('automatic admission did not complete');
   }

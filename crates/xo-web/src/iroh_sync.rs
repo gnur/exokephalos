@@ -365,13 +365,19 @@ impl IrohDocNode {
         self.ensure_join_workspace(&invitation)
             .await
             .map_err(js_error)?;
-        self.sync_invitation(&invitation).await.map_err(js_error)?;
+        // Admission and local durability do not depend on the first full sync
+        // succeeding. Keep the workspace usable and retry transport later.
+        let sync_error = self
+            .sync_invitation(&invitation)
+            .await
+            .err()
+            .map(|error| error.to_string());
         self.pending_approval = false;
         self.register_browser_device().await.map_err(js_error)?;
         json(&WorkspaceOutcome {
             workspace_id: invitation.workspace_id,
             ticket,
-            sync_error: None,
+            sync_error,
         })
         .map_err(js_error)
     }
@@ -999,20 +1005,12 @@ impl ProtocolHandler for BrowserJoin {
                 .await
                 .member(&fingerprint)
                 .map(|member| member.status);
-            if member_status == Some(MemberStatus::Active) {
-                workspace.pending.write().await.remove(&fingerprint);
-            }
             let response = match member_status {
                 Some(MemberStatus::Active) => JoinResponse::Approved {
                     membership_event: vec![],
                 },
                 Some(_) => JoinResponse::Rejected,
                 None => {
-                    workspace
-                        .pending
-                        .write()
-                        .await
-                        .insert(fingerprint, request.clone());
                     let event = SignedMembershipEvent::create(
                         &self.identity,
                         WorkspaceId::new(workspace.id.clone()),
@@ -1029,9 +1027,9 @@ impl ProtocolHandler for BrowserJoin {
                     )?;
                     workspace.sign_local().await?;
                     workspace.refresh_registry().await?;
-                    // The approval is durable. The candidate confirms it with
-                    // its periodic authenticated admission request.
-                    JoinResponse::Pending
+                    JoinResponse::Approved {
+                        membership_event: encode(&event)?,
+                    }
                 }
             };
             write_frame(&mut send, &encode(&response)?).await?;

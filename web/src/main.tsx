@@ -197,7 +197,7 @@ function App() {
   }, [report?.peerId]);
 
   useEffect(() => {
-    if (state !== 'ready' || !report?.status.workspaceId) return;
+    if (state !== 'ready' || (!report?.status.workspaceId && !report?.status.pendingApproval)) return;
     let active = true;
     let running = false;
     const refresh = async () => {

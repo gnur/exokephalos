@@ -13,7 +13,17 @@ async function ensureAutomaticAdmission(page: Page) {
   } catch {
     // Compatibility fallback below.
   }
-  // Compatibility fallback for an active peer still using manual admission.
+  // Confirm an approval that may have been recorded during a first-round
+  // transport error before attempting the legacy manual fallback.
+  const admission = page.getByRole('button', { name: 'Check admission' });
+  if (await admission.isVisible()) await admission.click();
+  else await page.getByRole('button', { name: 'Join and synchronize' }).click();
+  try {
+    await expect(newNote).toBeVisible({ timeout: 5_000 });
+    return;
+  } catch {
+    // Compatibility fallback for an active peer still using manual admission.
+  }
   if (tuiApprovalUrl) {
     const response = await fetch(tuiApprovalUrl, { method: 'POST' });
     if (response.ok) await response.json();
@@ -27,9 +37,8 @@ async function ensureAutomaticAdmission(page: Page) {
   } else {
     throw new Error('automatic admission did not complete');
   }
-  const retry = page.getByRole('button', { name: 'Check admission' });
-  if (await retry.isVisible()) {
-    await retry.click();
+  if (await admission.isVisible()) {
+    await admission.click();
   } else {
     // A first-round network error may leave the invitation form visible even
     // though the active peer durably recorded the automatic admission.

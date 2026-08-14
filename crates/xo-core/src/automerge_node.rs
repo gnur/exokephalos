@@ -915,12 +915,28 @@ impl JoinProtocol {
             .await
             .member(&fingerprint)
             .map(|member| member.status);
+        if member_status == Some(MemberStatus::Active)
+            && workspace
+                .pending
+                .write()
+                .await
+                .remove(&fingerprint)
+                .is_some()
+        {
+            workspace.persist_pending().await?;
+        }
         let response = match member_status {
             Some(MemberStatus::Active) => JoinResponse::Approved {
                 membership_event: Vec::new(),
             },
             Some(_) => JoinResponse::Rejected,
             None => {
+                workspace
+                    .pending
+                    .write()
+                    .await
+                    .insert(fingerprint, request.clone());
+                workspace.persist_pending().await?;
                 let event = SignedMembershipEvent::create(
                     &self.identity,
                     WorkspaceId::new(workspace.id.clone()),

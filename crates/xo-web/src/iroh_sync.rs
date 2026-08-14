@@ -999,12 +999,20 @@ impl ProtocolHandler for BrowserJoin {
                 .await
                 .member(&fingerprint)
                 .map(|member| member.status);
+            if member_status == Some(MemberStatus::Active) {
+                workspace.pending.write().await.remove(&fingerprint);
+            }
             let response = match member_status {
                 Some(MemberStatus::Active) => JoinResponse::Approved {
                     membership_event: vec![],
                 },
                 Some(_) => JoinResponse::Rejected,
                 None => {
+                    workspace
+                        .pending
+                        .write()
+                        .await
+                        .insert(fingerprint, request.clone());
                     let event = SignedMembershipEvent::create(
                         &self.identity,
                         WorkspaceId::new(workspace.id.clone()),

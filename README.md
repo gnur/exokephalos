@@ -654,7 +654,7 @@ features should be configured appropriately for `.xo.md` files.
 Every normal-mode interaction is a named action. Press `:` to open the
 autocompleting action picker, type part of an action name, use Up/Down to select,
 Tab to complete, and Enter to run it. Short aliases are accepted where listed;
-for example, `:q` runs `quit`.
+for example, `:q` runs `quit`, while `:p` opens peer management.
 
 | Action | Alias | Arguments | Effect |
 | --- | --- | --- | --- |
@@ -677,6 +677,7 @@ for example, `:q` runs `quit`.
 | `open_devices` | — | — | Show workspace clients and membership controls. |
 | `open_goto` | — | — | Open the view/subview path prompt. |
 | `open_item_actions` | — | — | Show configured actions for the selected item. |
+| `open_peers` | `p` | — | Open the peer and device management view. |
 | `open_search` | — | — | Edit the title search filter. |
 | `open_server_setup` | — | — | Open server pairing and installation setup. |
 | `open_sync_status` | — | — | Show synchronization status. |

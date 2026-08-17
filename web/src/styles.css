@@ -259,8 +259,10 @@ h2 { margin: 0; color: var(--bright); font-size: clamp(1.4rem, 2.3vw, 2rem); let
 
 @media (max-width: 620px) {
   input, textarea, .search input, .note-editor textarea { font-size: 16px; }
+  .workspace { display: block; padding-bottom: calc(38px + env(safe-area-inset-bottom)); }
   main { padding: 34px 18px calc(40px + env(safe-area-inset-bottom)); }
-  .topbar { height: 62px; }
+  .topbar { display: none; }
+  .app-footer { position: fixed; right: 0; bottom: 0; left: 0; z-index: 20; padding: 10px 18px calc(10px + env(safe-area-inset-bottom)); background: #08111f; }
   .search { flex: 1; width: auto; }
   .search kbd { display: none; }
   .connection span { display: none; }

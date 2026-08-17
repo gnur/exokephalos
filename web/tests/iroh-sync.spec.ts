@@ -196,9 +196,19 @@ test('prevents mobile focus zoom and horizontal page overflow', async ({ page })
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
   await expect(page.getByText('Runtime ready')).toBeVisible();
+  await expect(page.locator('.topbar')).toBeHidden();
   await configurePeer(page, 'playwright-mobile');
   await expect(page.locator('meta[name="viewport"]')).toHaveAttribute('content', /maximum-scale=1, user-scalable=no/);
   await page.getByRole('button', { name: 'Create workspace' }).click();
+  await expect(page.locator('.notes-toolbar')).toBeVisible();
+  const mobileLayout = await page.evaluate(() => ({
+    header: getComputedStyle(document.querySelector('.legacy-topbar')!).display,
+    toolbar: getComputedStyle(document.querySelector('.notes-toolbar')!).position,
+    footer: getComputedStyle(document.querySelector('.bottom-search')!).position,
+    pageOverflow: getComputedStyle(document.documentElement).overflowY,
+  }));
+  expect(mobileLayout).toMatchObject({ header: 'none', toolbar: 'static', footer: 'fixed' });
+  expect(mobileLayout.pageOverflow).not.toBe('hidden');
   await page.getByRole('button', { name: 'New note' }).click();
   await page.getByLabel('Title', { exact: true }).focus();
   await page.getByLabel('Frontmatter and Markdown').focus();

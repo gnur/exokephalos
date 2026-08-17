@@ -1749,6 +1749,11 @@ mod tests {
             app.matching_tui_actions()
                 .contains(&"open_sync_status".to_owned())
         );
+        app.action_query = "peer".into();
+        assert!(
+            app.matching_tui_actions()
+                .contains(&"open_peers".to_owned())
+        );
         app.action_query = "edit_".into();
         let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
         terminal.draw(|frame| render(frame, &app)).unwrap();

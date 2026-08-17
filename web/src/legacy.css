@@ -243,6 +243,9 @@
 }
 
 @media (max-width: 620px) {
+  .legacy-shell { display: block; }
+  .legacy-topbar { display: none; }
+  .legacy-shell .items-header.notes-toolbar, .tag-actions { position: static; }
   .frontmatter-grid, .status-grid.compact { grid-template-columns: 1fr; }
   .legacy-shell .detail-pane { padding: 14px; }
   .detail-toolbar { align-items: flex-start; }

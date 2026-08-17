@@ -24,6 +24,7 @@ pub const ACTION_NAMES: &[&str] = &[
     "open_devices",
     "open_goto",
     "open_item_actions",
+    "open_peers",
     "open_search",
     "open_server_setup",
     "open_sync_status",
@@ -52,6 +53,7 @@ pub const ACTION_ALIASES: &[(&str, &str)] = &[
     ("j", "cursor_down"),
     ("k", "cursor_up"),
     ("l", "focus_column_right"),
+    ("p", "open_peers"),
     ("q", "quit"),
     ("u", "restore_item"),
 ];
@@ -412,6 +414,7 @@ mod tests {
             "clear_search"
         );
         assert_eq!(ActionCall::parse("q").unwrap().name, "quit");
+        assert_eq!(ActionCall::parse("p").unwrap().name, "open_peers");
         let custom = KeyMap::from_source(
             r#"(keys (bind "b" (goto_view "books/read")) (bind ":" action_picker))"#,
         )

@@ -949,7 +949,7 @@ impl<'a> NativeXoParser<'a> {
             workspace: required(workspace, "workspace", self.position)?,
             projection: required(projection, "projection", self.position)?,
             pwa_url: required(pwa_url, "pwa-url", self.position)?,
-            leader_key: required(leader_key, "leader-key", self.position)?,
+            leader_key: leader_key.unwrap_or_else(|| " ".to_owned()),
         })
     }
 

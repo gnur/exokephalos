@@ -10,8 +10,9 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use tempfile::Builder as TempFileBuilder;
+use xo::keymap::{ACTION_NAMES, KeyMap};
 use xo::steel_plugin::PluginChoice;
 use xo_core::behavior::{Query, WorkspaceBehavior};
 use xo_core::domain::{DeviceRecord, Frontmatter, FrontmatterValue};
@@ -33,13 +34,13 @@ pub enum Pane {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Mode {
     Normal,
-    Leader,
     Search,
     CreateTitle,
     CreateEncryptedTitle,
     Goto,
     ViewPicker,
     ActionPicker,
+    ItemActionPicker,
     CaptureUrl,
     PluginInput,
     PluginResults,
@@ -86,6 +87,8 @@ pub struct App {
     pub selected: usize,
     pub tag_index: usize,
     pub action_query: String,
+    pub action_index: usize,
+    pub keymap: KeyMap,
     pub capture_url: String,
     pub plugin_input: String,
     pub plugin_action: Option<String>,
@@ -97,7 +100,6 @@ pub struct App {
     pub goto_index: usize,
     pub message: String,
     pub pwa_url: String,
-    pub leader_key: char,
     pub pairing: Option<ServerPairing>,
     pub mobile_pairing: Option<MobilePairing>,
     pub decrypted_preview: Option<Zeroizing<String>>,
@@ -136,6 +138,8 @@ impl App {
             selected: 0,
             tag_index: 0,
             action_query: String::new(),
+            action_index: 0,
+            keymap: KeyMap::default(),
             capture_url: String::new(),
             plugin_input: String::new(),
             plugin_action: None,
@@ -147,7 +151,6 @@ impl App {
             goto_index: 0,
             message: String::new(),
             pwa_url: "https://xo.exokephalos.dev/".to_owned(),
-            leader_key: ' ',
             pairing: None,
             mobile_pairing: None,
             decrypted_preview: None,
@@ -200,20 +203,6 @@ impl App {
     pub fn selected_index(&self) -> Option<usize> {
         let len = self.visible_notes().len();
         (len > 0).then(|| self.selected.min(len - 1))
-    }
-    pub fn next_pane(&mut self) {
-        self.pane = match self.pane {
-            Pane::Notes => Pane::Preview,
-            Pane::Preview if self.tags_visible => Pane::Tags,
-            Pane::Tags | Pane::Preview => Pane::Notes,
-        };
-    }
-    pub fn previous_pane(&mut self) {
-        self.pane = match self.pane {
-            Pane::Notes if self.tags_visible => Pane::Tags,
-            Pane::Preview => Pane::Notes,
-            Pane::Tags | Pane::Notes => Pane::Preview,
-        };
     }
     pub fn focus_right(&mut self) {
         self.pane = match self.pane {
@@ -503,6 +492,41 @@ impl App {
         let note = self.deleted.remove(id)?;
         self.notes.push(note.clone());
         Some(note)
+    }
+
+    pub fn matching_tui_actions(&self) -> Vec<String> {
+        let needle = self.action_query.to_lowercase();
+        if needle.starts_with("goto_view ") {
+            return vec![self.action_query.clone()];
+        }
+        let mut actions = ACTION_NAMES
+            .iter()
+            .filter(|name| name.contains(&needle) || fuzzy(name, &needle).is_some())
+            .map(|name| (*name).to_owned())
+            .collect::<Vec<_>>();
+        actions.sort_by_key(|name| std::cmp::Reverse(fuzzy(name, &needle).unwrap_or_default()));
+        actions
+    }
+
+    pub fn goto_view_path(&mut self, target: &str) -> bool {
+        let (view_id, subview_id) = target
+            .split_once('/')
+            .map_or((target, None), |(view, subview)| (view, Some(subview)));
+        let Some(view) = self.behavior.views.iter().find(|view| view.id == view_id) else {
+            self.message = format!("unknown view {view_id:?}");
+            return false;
+        };
+        if let Some(subview_id) = subview_id
+            && !view.subviews.iter().any(|subview| subview.id == subview_id)
+        {
+            self.message = format!("unknown subview {view_id}/{subview_id}");
+            return false;
+        }
+        self.set_view(view_id);
+        if let Some(subview_id) = subview_id {
+            self.set_subview(Some(subview_id.to_owned()));
+        }
+        true
     }
 
     pub fn matching_actions(&self) -> Vec<&xo_core::behavior::ActionDescriptor> {
@@ -848,6 +872,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             | Mode::Goto
             | Mode::ViewPicker
             | Mode::ActionPicker
+            | Mode::ItemActionPicker
             | Mode::CaptureUrl
             | Mode::PluginInput
             | Mode::PluginResults
@@ -859,6 +884,9 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         }
         Mode::PluginResults => {
             u16::try_from((app.plugin_results.len() + 2).clamp(3, 9)).unwrap_or(9)
+        }
+        Mode::ActionPicker => {
+            u16::try_from((app.matching_tui_actions().len() + 3).clamp(4, 12)).unwrap_or(12)
         }
         _ => 3,
     };
@@ -906,16 +934,26 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         ),
         vertical[0],
     );
-    let leader = if app.leader_key == ' ' {
-        "Space".to_owned()
-    } else {
-        app.leader_key.to_string()
-    };
+    let key = |action: &str| app.keymap.footer_key(action);
     let mut footer = if app.mode == Mode::Devices {
-        "[j/k] select · [a] approve · [r] reject · [x] remove · [Esc] close".to_owned()
+        format!(
+            "[{}/{}] select · [{}] approve · [{}] reject · [{}] remove · [Esc] close",
+            key("cursor_down"),
+            key("cursor_up"),
+            key("approve_peer"),
+            key("reject_peer"),
+            key("remove_peer")
+        )
     } else {
         format!(
-            "[{leader}] menu · [g] views · [/] search · [e/Enter] edit · [c/C] create/encrypted · [d] delete · [u] restore · [q] quit"
+            "[{}] actions · [{}] views · [{}] search · [{}] edit · [{}] create · [{}] delete · [{}] quit",
+            key("action_picker"),
+            key("open_view_picker"),
+            key("open_search"),
+            key("edit_item"),
+            key("create_item"),
+            key("delete_item"),
+            key("quit")
         )
     };
     if app.message.starts_with("Notice:") {
@@ -987,12 +1025,37 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 ("Switch view · key or ↑/↓ and Enter · Esc close", menu)
             }
             Mode::ActionPicker => {
+                let matches = app.matching_tui_actions();
+                let start = app.action_index.saturating_sub(7);
+                let menu = matches
+                    .iter()
+                    .enumerate()
+                    .skip(start)
+                    .take(8)
+                    .map(|(index, action)| {
+                        format!(
+                            "{} {action}",
+                            if index == app.action_index {
+                                "→"
+                            } else {
+                                " "
+                            }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (
+                    "Action picker · type to filter · Tab complete · Enter run · Esc close",
+                    format!(":{}\n{menu}", app.action_query),
+                )
+            }
+            Mode::ItemActionPicker => {
                 let selected = app
                     .matching_actions()
                     .first()
                     .map_or("no matching action", |action| action.description.as_str());
                 (
-                    "Run action · Enter apply · Esc close",
+                    "Run item action · Enter apply · Esc close",
                     format!(">{}  → {selected}", app.action_query),
                 )
             }
@@ -1271,9 +1334,6 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         ),
         panes[preview_pane],
     );
-    if app.mode == Mode::Leader {
-        render_leader_menu(frame);
-    }
 }
 
 fn render_devices(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -1374,46 +1434,6 @@ fn render_devices(frame: &mut Frame<'_>, app: &App, area: Rect) {
         ),
         area,
     );
-}
-
-fn render_leader_menu(frame: &mut Frame<'_>) {
-    let entries = [
-        "a  actions",
-        "v  choose view",
-        "c  config",
-        "x  conflicts",
-        "i  devices",
-        "m  setup mobile client",
-        "r  refresh sync",
-        "o  reverse sort",
-        "j  server setup/status",
-        "s  synchronization status",
-        "t  toggle tags",
-        "p  unlock preview",
-    ];
-    let height = u16::try_from(entries.len()).unwrap_or(u16::MAX);
-    let area = centered_rect(34, height.saturating_add(2), frame.area());
-    let menu = Text::from(entries.into_iter().map(Line::raw).collect::<Vec<_>>());
-    frame.render_widget(Clear, area);
-    frame.render_widget(
-        Paragraph::new(menu).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        ),
-        area,
-    );
-}
-
-fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
-    let width = width.min(area.width);
-    let height = height.min(area.height);
-    Rect {
-        x: area.x + area.width.saturating_sub(width) / 2,
-        y: area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    }
 }
 
 fn render_mobile_pairing(frame: &mut Frame<'_>, app: &App, area: ratatui::layout::Rect) {
@@ -1601,9 +1621,9 @@ mod tests {
         assert!(screen.contains("Hello **world**"));
         assert!(screen.contains(&format!("xo {}", xo_core::version::VERSION)));
         assert!(screen.contains("Preview"));
-        assert!(screen.contains("[Space] menu"));
+        assert!(screen.contains("[:] actions"));
         assert!(screen.contains("[/] search"));
-        assert!(screen.contains("[e/Enter] edit"));
+        assert!(screen.contains("[e] edit"));
         assert!(
             terminal.backend().buffer().content[1_900..]
                 .iter()
@@ -1675,7 +1695,7 @@ mod tests {
         assert!(screen.contains("ACTIVE CLIENTS"));
         assert!(screen.contains("REMOVED CLIENTS"));
         assert!(screen.contains("PEER ID"));
-        assert!(screen.contains("[j/k] select"));
+        assert!(screen.contains("[down/k] select"));
         assert!(!screen.contains("First"));
         assert!(!screen.contains("Preview"));
         assert!(!screen.contains("Tags ·"));
@@ -1683,10 +1703,22 @@ mod tests {
     }
 
     #[test]
-    fn leader_popup_lists_commands_and_uses_the_configured_key_in_the_footer() {
+    fn action_picker_lists_callable_actions_and_footer_uses_custom_keys() {
         let mut app = fixture();
-        app.leader_key = ',';
-        app.mode = Mode::Leader;
+        app.keymap = KeyMap::from_source(
+            r#"(keys (bind ";" action_picker) (bind "v" open_view_picker) (bind "/" open_search) (bind "e" edit_item) (bind "n" create_item) (bind "d" delete_item) (bind "q" quit))"#,
+        )
+        .unwrap();
+        app.mode = Mode::ActionPicker;
+        assert!(
+            app.matching_tui_actions()
+                .contains(&"setup_mobile_client".to_owned())
+        );
+        assert!(
+            app.matching_tui_actions()
+                .contains(&"open_sync_status".to_owned())
+        );
+        app.action_query = "edit_".into();
         let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
         terminal.draw(|frame| render(frame, &app)).unwrap();
         let screen = terminal
@@ -1696,15 +1728,8 @@ mod tests {
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
-        assert!(screen.contains("[,] menu"));
-        assert!(!screen.contains("Leader menu"));
-        assert!(screen.contains("t  toggle tags"));
-        assert!(screen.contains("v  choose view"));
-        assert!(screen.contains("a  actions"));
-        assert!(screen.contains("c  config"));
-        assert!(screen.contains("m  setup mobile client"));
-        assert!(screen.contains("j  server setup/status"));
-        assert!(screen.contains("s  synchronization"));
+        assert!(screen.contains("[;] actions"));
+        assert!(screen.contains("edit_workspace_config"), "{screen}");
     }
 
     #[test]
@@ -1871,6 +1896,9 @@ mod tests {
         assert_eq!(app.active_view, "books");
         assert_eq!(app.active_subview.as_deref(), Some("reading"));
         assert_eq!(app.subview_header(), "[Reading]");
+        assert!(app.goto_view_path("books/reading"));
+        assert_eq!(app.active_view, "books");
+        assert_eq!(app.active_subview.as_deref(), Some("reading"));
 
         app.goto_input = "ne".into();
         assert!(app.goto_is_unambiguous());

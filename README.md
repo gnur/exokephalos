@@ -203,7 +203,7 @@ ten minutes. Only a changed deployment produces an explicit **Update** button.
 
 ### Pair a phone from the TUI
 
-Press `Space`, then `m` in the TUI to create an invitation and display a QR code.
+Run `setup_mobile_client` from the `:` action picker to create an invitation and display a QR code.
 Scanning it opens `https://xo.exokephalos.dev/`, submits the browser's visible
 peer ID and Ed25519 fingerprint for automatic admission, and stores its
 encrypted identity and durable Automerge replica. The PWA polls while admission
@@ -321,7 +321,7 @@ stable—it does **not** discard or silently merge the other branch. Concurrent
 revision IDs and all immutable history remain in the document. A concurrent
 delete and edit are handled the same way, so both outcomes remain recoverable.
 
-Press `Space`, then `x` in the TUI to see conflicted note IDs, the selected winner, concurrent
+Run `open_conflicts` from the `:` action picker to see conflicted note IDs, the selected winner, concurrent
 revision IDs, and revision history. To resolve a conflict, edit the visible note
 and incorporate any content you want to retain. When xo saves a conflicted
 note, the new revision names the winner and every concurrent revision as
@@ -355,8 +355,8 @@ xo config-init > ~/.config/xo/config.scm
 xo
 ```
 
-The default configuration stores Iroh state in `~/.local/share/xo`, projects
-Markdown into `~/notes`, and uses Space as the TUI leader key:
+The default configuration stores Iroh state in `~/.local/share/xo` and projects
+Markdown into `~/notes`; TUI bindings are generated separately in `keys.scm`:
 
 ```scheme
 (xo-config
@@ -364,8 +364,7 @@ Markdown into `~/notes`, and uses Space as the TUI leader key:
   (state-dir "~/.local/share/xo")
   (workspace #f)
   (projection "~/notes")
-  (pwa-url "https://xo.exokephalos.dev/")
-  (leader-key " "))
+  (pwa-url "https://xo.exokephalos.dev/"))
 ```
 
 On this first launch, xo creates separate membership and Iroh identities plus a
@@ -391,7 +390,7 @@ interface, not Iroh's synchronization port.
 
 ### 3. Pair the first TUI with xo-syncd
 
-In the first TUI, press `Space`, then `j`. xo immediately creates a writable
+In the first TUI, run `open_server_setup` from the `:` action picker. xo immediately creates a writable
 invitation and a ready-to-run user-unit installer command. Press `F2` to reveal
 it and `U` to copy it, then run it on the daemon host. Alternatively, open
 `http://127.0.0.1:9464/setup` and enter the displayed workspace ID and ticket.
@@ -427,7 +426,7 @@ xo --ticket '<WRITABLE_TICKET>'
 ```
 
 The first launch submits a membership request. Approve the displayed peer ID and
-fingerprint from an active TUI (`Space`, then `i`) and retry the launch. It then
+fingerprint from the `open_devices` action and retry the launch. It then
 stores the Automerge workspace, starts synchronization, and opens the TUI.
 Later launches use plain `xo`. Read-only membership is not supported. Never run
 `xo-admin` and `xo-syncd` concurrently against the same state directory.
@@ -580,8 +579,8 @@ mkdir -p ~/.config/xo
 xo config-init > ~/.config/xo/config.scm
 ```
 
-The default configuration uses `~/.local/share/xo` for replicated local state,
-`~/notes` for the Markdown projection, and Space as the TUI leader key:
+The default configuration uses `~/.local/share/xo` for replicated local state
+and `~/notes` for the Markdown projection. TUI bindings live in `keys.scm`:
 
 ```scheme
 (xo-config
@@ -589,8 +588,7 @@ The default configuration uses `~/.local/share/xo` for replicated local state,
   (state-dir "~/.local/share/xo")
   (workspace #f)
   (projection "~/notes")
-  (pwa-url "https://xo.exokephalos.dev/")
-  (leader-key " "))
+  (pwa-url "https://xo.exokephalos.dev/"))
 ```
 
 ### Join with a writable invitation
@@ -631,9 +629,10 @@ The uncluttered TUI header shows only xo and the embedded release version.
 The TUI subscribes to Iroh document events and automatically reloads notes,
 conflicts, devices, replicated behavior, and the filesystem projection when
 local or remote content becomes available. TUI, browser, and `xo-syncd` peers
-publish signed device records when they open a workspace, so `Space`, then `i`
-shows the clients that have joined after their records replicate. Press `Space`, then `s` for detailed
-synchronization state or `Space`, then `r` for a manual refresh and retry.
+publish signed device records when they open a workspace, so `open_devices`
+shows the clients that have joined after their records replicate. Run
+`open_sync_status` for detailed synchronization state or `refresh_sync` for a
+manual refresh and retry.
 
 Create and edit commands open a private temporary file whose name ends in
 `.xo.md`. Editors can associate that compound extension with `xo-lsp` while the
@@ -650,27 +649,44 @@ plaintext note to an encrypted note because plaintext revisions would remain in
 history. Editors may create their own swap, backup, or recovery files, so those
 features should be configured appropriately for `.xo.md` files.
 
-### TUI leader, navigation, and tag filtering
+### TUI actions, key bindings, navigation, and tag filtering
 
-Pressing the configured leader opens a popup listing views, tags, actions,
-mobile setup, server setup/status, synchronization status, conflicts, devices,
-refresh, sorting, and preview unlocking. Space is the default. Set another
-single printable character with `(leader-key ",")` in the schema-3 command
-configuration.
+Every normal-mode interaction is a named action. Press `:` to open the
+autocompleting action picker, type part of an action name, use Up/Down to select,
+Tab to complete, and Enter to run it. Actions include `cursor_down`,
+`focus_column_left`, `focus_subview_next`, `edit_item`, `open_search`,
+`delete_item`, `open_view_picker`, `open_goto`, `open_item_actions`,
+`edit_workspace_config`, `setup_mobile_client`, `open_server_setup`,
+`open_sync_status`, `open_conflicts`, `open_devices`, `refresh_sync`,
+`reverse_sort`, and `unlock_preview`.
 
-Press `g` from the normal TUI to open the quick main-view switcher. It lists
-only top-level views and assigns each one a unique single-character key,
-preferring its configured key and then letters from its name. Press that key to
-switch immediately, or use Up/Down and Enter. Press `Space`, then `v` for the
-full view menu containing both views and subviews; type its shown prefix or use
-the arrow keys and Enter. When the active view has subviews, press `Tab`
-or `Shift-Tab` to cycle through them; the active view and subview list are shown
-in the TUI header.
+The TUI creates `~/.config/xo/keys.scm` on first start and hot reloads it while
+running. Bind keys to actions with declarative forms:
 
-Press `Space`, then `t` to show or hide the tag pane. When it is visible, `Tab`
-and `Shift-Tab` include it in cyclic pane navigation. Use Left/Right or `h`/`l`
-for spatial pane movement between Tags, Notes, and Preview. Highlight a tag with
-Up/Down or `j`/`k`, then press Enter to toggle that filter.
+```scheme
+(keys
+  (bind "j" cursor_down)
+  (bind "h" focus_column_left)
+  (bind "tab" focus_subview_next)
+  (bind "e" edit_item)
+  (bind "/" open_search)
+  (bind "d" delete_item)
+  (bind "g" open_view_picker)
+  (bind ":" action_picker)
+  (bind "b" (goto_view "books/read")))
+```
+
+Names such as `space`, `enter`, `tab`, `backtab`, `left`, `right`, `up`, and
+`down` represent special keys; modifier forms such as `ctrl+x` are also
+accepted. The footer is generated from the active bindings and changes after a
+successful hot reload. Invalid edits leave the previous keymap active and show
+a reload error. The legacy `(leader-key ...)` command setting is accepted for
+configuration compatibility but no longer opens a leader menu.
+
+By default `g` opens the top-level view switcher, Tab and Shift-Tab cycle
+subviews, and Left/Right or `h`/`l` move between Tags, Notes, and Preview.
+Highlight a tag with Up/Down or `j`/`k`; Space toggles that tag and does nothing
+outside the tag column.
 
 Tag counts are live facets. They first respect the active view or subview and
 the `/` title query, then show how many notes would remain if each tag were
@@ -738,9 +754,8 @@ inside `[[...]]` plus tags from the workspace. It does not mutate files yet.
 ## Edit workspace behavior
 
 Workspace behavior is replicated state and is edited from the TUI. It is no
-longer exposed as `xo.scm` inside the Markdown notes projection. Open the leader
-menu and press `c` (**config**) to open the current workspace configuration in
-`$EDITOR`. Save and exit to validate it and commit a new replicated configuration
+longer exposed as `xo.scm` inside the Markdown notes projection. Run `edit_workspace_config` from the `:` action picker to open the current
+workspace configuration in `$EDITOR`. Save and exit to validate it and commit a new replicated configuration
 revision. Other peers receive the configuration through Iroh; use the TUI refresh
 command after a remote configuration update.
 
@@ -797,7 +812,7 @@ Executable sandboxed plugins live below `plugins/**/*.scm`; their
 `xo-plugin-manifest` function contributes actions and their action entrypoint
 runs in a fresh, time-bounded `Engine::new_sandboxed()` VM.
 
-The `capture-url` plugin is a capability-gated native host action. Press `Space`, then `a`,
+The `capture-url` plugin is a capability-gated native host action. Run `open_item_actions` from the `:` action picker,
 select **Capture readable content from a URL**, and enter an HTTP or HTTPS URL.
 The host validates public destinations and redirects, limits the response,
 extracts the readable article, converts it to Markdown, and commits an ordinary
@@ -815,7 +830,7 @@ export HARDCOVER_TOKEN='your Hardcover API token'
 xo
 ```
 
-Press `Space`, then `a` and select **Search Hardcover**. The plugin prompts for a title or
+Run `open_item_actions` from the `:` action picker and select **Search Hardcover**. The plugin prompts for a title or
 author, performs the GraphQL request, presents up to five choices, and creates
 an ordinary `type: book` note tagged `to-read`. The plugin exposes only this
 search action; reading-state actions belong to workspace configuration.
@@ -836,11 +851,11 @@ The declarative workspace/module form remains restricted. Configuration is parse
 strict boundary: arbitrary filesystem, environment, process, network, clock,
 or evaluation expressions are rejected. Auxiliary modules and plugins remain
 materialized below `modules/**/*.scm` and `plugins/**/*.scm`; the main workspace
-configuration is kept in replicated state and edited with `Space`, then `c`.
+configuration is kept in replicated state and edited with the `edit_workspace_config` action.
 
 ## Detailed TUI-to-xo-syncd pairing flow
 
-If the workspace was created in the TUI, press `Space`, then `j` to open **Connect
+If the workspace was created in the TUI, run `open_server_setup` to open **Connect
 xo-syncd**. The workspace invitation is hidden by default.
 
 1. Press `F2` to reveal the ticket and generated installer command.

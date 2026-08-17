@@ -17,6 +17,7 @@ pub struct XoConfig {
     pub workspace: Option<String>,
     pub projection: PathBuf,
     pub pwa_url: String,
+    /// Accepted for schema-3 compatibility; TUI bindings now live in keys.scm.
     pub leader_key: String,
 }
 
@@ -116,15 +117,13 @@ impl XoConfig {
              \x20 (peer-id {})\n\
              \x20 (workspace {})\n\
              \x20 (projection {})\n\
-             \x20 (pwa-url {})\n\
-             \x20 (leader-key {}))\n",
+             \x20 (pwa-url {}))\n",
             self.schema,
             string(&self.state_dir.to_string_lossy())?,
             optional(self.peer_id.as_deref())?,
             optional(self.workspace.as_deref())?,
             string(&self.projection.to_string_lossy())?,
             string(&self.pwa_url)?,
-            string(&self.leader_key)?,
         ))
     }
 }
@@ -192,7 +191,7 @@ mod tests {
         assert_eq!(loaded.leader_key, " ");
         let document = std::fs::read_to_string(path)?;
         assert!(document.contains("(state-dir \"~/.local/share/xo\")"));
-        assert!(document.contains("(leader-key \" \"))"));
+        assert!(!document.contains("leader-key"));
         assert!(!document.contains("(ticket "));
         assert!(!document.contains("{\\\"schema\\\""));
         Ok(())
@@ -222,24 +221,24 @@ mod tests {
     }
 
     #[test]
-    fn leader_key_accepts_one_printable_character() -> Result<()> {
+    fn legacy_leader_key_is_accepted_but_no_longer_generated() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("config.scm");
-        let config = XoConfig {
-            leader_key: ",".into(),
-            ..XoConfig::default()
+        let with_leader = |value: &str| -> Result<String> {
+            let document = XoConfig::default().document()?;
+            Ok(document.replacen(
+                "))\n",
+                &format!(")\n  (leader-key {}))\n", serde_json::to_string(value)?),
+                1,
+            ))
         };
-        std::fs::write(&path, config.document()?)?;
+        std::fs::write(&path, with_leader(",")?)?;
         assert_eq!(
             XoConfig::load(&path, Path::new("/home/tester"))?.leader_key,
             ","
         );
         for invalid in ["", "ab", "\n"] {
-            let config = XoConfig {
-                leader_key: invalid.into(),
-                ..XoConfig::default()
-            };
-            std::fs::write(&path, config.document()?)?;
+            std::fs::write(&path, with_leader(invalid)?)?;
             assert!(XoConfig::load(&path, Path::new("/home/tester")).is_err());
         }
         Ok(())

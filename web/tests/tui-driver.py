@@ -110,7 +110,7 @@ try:
                         ready.set()
                     if b"approved peer" in transcript:
                         approval_finished.set()
-            if b"[Space] menu" in transcript and not ready.is_set() and not selected_notes_view:
+            if b"[:] actions" in transcript and not ready.is_set() and not selected_notes_view:
                 # The CI fixture defaults to Library. Exercise the real `g` view
                 # switcher and select the unique Notes match before declaring ready.
                 os.write(terminal, b"g")

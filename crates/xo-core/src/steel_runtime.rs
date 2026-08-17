@@ -228,7 +228,6 @@ fn sandbox(now: &str) -> Engine {
         .register_fn("workspace", optional_config_value)
         .register_fn("projection", |value: String| value)
         .register_fn("pwa-url", |value: String| value)
-        .register_fn("leader-key", |value: String| value)
         .register_fn(
             "xo-config",
             |schema: String,
@@ -236,8 +235,7 @@ fn sandbox(now: &str) -> Engine {
              peer_id: String,
              workspace: String,
              projection: String,
-             pwa_url: String,
-             leader_key: String| {
+             pwa_url: String| {
                 serde_json::json!({
                     "schema": schema.parse::<u16>().unwrap_or_default(),
                     "state_dir": state_dir,
@@ -245,7 +243,6 @@ fn sandbox(now: &str) -> Engine {
                     "workspace": (!workspace.is_empty()).then_some(workspace),
                     "projection": projection,
                     "pwa_url": pwa_url,
-                    "leader_key": leader_key,
                 })
                 .to_string()
             },
@@ -855,7 +852,6 @@ struct NativeXoFields {
     workspace: Option<String>,
     projection: String,
     pwa_url: String,
-    leader_key: String,
 }
 
 impl NativeXoFields {
@@ -865,14 +861,13 @@ impl NativeXoFields {
         };
         let optional = |value: Option<&str>| value.map_or_else(|| "#f".to_owned(), string);
         format!(
-            "(xo-config (schema {}) (state-dir {}) (peer-id {}) (workspace {}) (projection {}) (pwa-url {}) (leader-key {}))",
+            "(xo-config (schema {}) (state-dir {}) (peer-id {}) (workspace {}) (projection {}) (pwa-url {}))",
             self.schema,
             string(&self.state_dir),
             optional(self.peer_id.as_deref()),
             optional(self.workspace.as_deref()),
             string(&self.projection),
             string(&self.pwa_url),
-            string(&self.leader_key),
         )
     }
 }
@@ -899,7 +894,6 @@ impl<'a> NativeXoParser<'a> {
         let mut workspace = None;
         let mut projection = None;
         let mut pwa_url = None;
-        let mut leader_key = None;
         loop {
             self.skip_ignored();
             if self.peek() == Some(')') {
@@ -931,9 +925,6 @@ impl<'a> NativeXoParser<'a> {
                 "pwa-url" => {
                     set_once(&mut pwa_url, self.string()?, "pwa-url", self.position)?;
                 }
-                "leader-key" => {
-                    set_once(&mut leader_key, self.string()?, "leader-key", self.position)?;
-                }
                 _ => return self.error(format!("unknown field {key}")),
             }
             self.expect_char(')')?;
@@ -949,7 +940,6 @@ impl<'a> NativeXoParser<'a> {
             workspace: required(workspace, "workspace", self.position)?,
             projection: required(projection, "projection", self.position)?,
             pwa_url: required(pwa_url, "pwa-url", self.position)?,
-            leader_key: leader_key.unwrap_or_else(|| " ".to_owned()),
         })
     }
 

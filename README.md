@@ -661,7 +661,13 @@ Tab to complete, and Enter to run it. Actions include `cursor_down`,
 `reverse_sort`, and `unlock_preview`.
 
 The TUI creates `~/.config/xo/keys.scm` on first start and hot reloads it while
-running. Bind keys to actions with declarative forms:
+running. You can also write the default explicitly:
+
+```console
+xo keymap-init > ~/.config/xo/keys.scm
+```
+
+Bind keys to actions with declarative forms:
 
 ```scheme
 (keys
@@ -679,9 +685,7 @@ running. Bind keys to actions with declarative forms:
 Names such as `space`, `enter`, `tab`, `backtab`, `left`, `right`, `up`, and
 `down` represent special keys; modifier forms such as `ctrl+x` are also
 accepted. The footer is generated from the active bindings and changes after a
-successful hot reload. Invalid edits leave the previous keymap active and show
-a reload error. The legacy `(leader-key ...)` command setting is accepted for
-configuration compatibility but no longer opens a leader menu.
+successful hot reload. Invalid edits leave the previous keymap active and show a reload error.
 
 By default `g` opens the top-level view switcher, Tab and Shift-Tab cycle
 subviews, and Left/Right or `h`/`l` move between Tags, Notes, and Preview.

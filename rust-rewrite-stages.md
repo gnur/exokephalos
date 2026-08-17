@@ -154,7 +154,7 @@ is complete only when every task and its exit gate are checked.
 - [x] Show sync state, durable operations, retry controls, missing blobs, and diagnostics.
 - [x] Add conflict history, conflict review, and device management.
 - [x] Add secure encrypted-note preview and temporary-file editing.
-- [x] Use an uncluttered release-only header, configurable leader-key popup, and compact single-line footer.
+- [x] Use an uncluttered release-only header, configurable action bindings, and compact single-line footer.
 - [x] Show tags, filtered notes, and preview in the three content panes without persistent movement hints.
 - [x] Add inline `/` filtering and leader-driven view/subview navigation with computed unique prefixes.
 - [x] Make the tag pane leader-toggleable and show live faceted counts for the current view, title query, and selected tags.

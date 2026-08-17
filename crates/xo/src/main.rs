@@ -59,6 +59,8 @@ struct Cli {
 enum Command {
     /// Print a default ~/.config/xo/config.scm document to stdout.
     ConfigInit,
+    /// Print the default ~/.config/xo/keys.scm keymap to stdout.
+    KeymapInit,
     /// Validate that a Markdown document can be read by the Rust core.
     Validate { path: PathBuf },
     /// Recursively import Markdown into the configured active workspace.
@@ -91,6 +93,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     match &cli.command {
         Some(Command::ConfigInit) => print!("{}", XoConfig::default().document()?),
+        Some(Command::KeymapInit) => print!("{}", xo::keymap::DEFAULT_KEYS),
         Some(Command::Validate { path }) => {
             let content = std::fs::read_to_string(path)?;
             let document = xo_core::markdown::parse(&content)?;

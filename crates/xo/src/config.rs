@@ -17,8 +17,6 @@ pub struct XoConfig {
     pub workspace: Option<String>,
     pub projection: PathBuf,
     pub pwa_url: String,
-    /// Accepted for schema-3 compatibility; TUI bindings now live in keys.scm.
-    pub leader_key: String,
 }
 
 const fn schema() -> u16 {
@@ -34,7 +32,6 @@ impl Default for XoConfig {
             workspace: None,
             projection: PathBuf::from("~/notes"),
             pwa_url: "https://xo.exokephalos.dev/".to_owned(),
-            leader_key: " ".to_owned(),
         }
     }
 }
@@ -65,7 +62,6 @@ impl XoConfig {
             bail!("unsupported xo configuration schema {}", config.schema);
         }
         validate_pwa_url(&config.pwa_url)?;
-        validate_leader_key(&config.leader_key)?;
         if let Some(peer_id) = &config.peer_id {
             xo_core::PeerId::parse(peer_id.clone()).context("validate peer-id")?;
         }
@@ -128,17 +124,6 @@ impl XoConfig {
     }
 }
 
-fn validate_leader_key(value: &str) -> Result<()> {
-    let mut characters = value.chars();
-    let Some(key) = characters.next() else {
-        bail!("leader-key must contain exactly one printable character");
-    };
-    if characters.next().is_some() || key.is_control() {
-        bail!("leader-key must contain exactly one printable character");
-    }
-    Ok(())
-}
-
 fn validate_pwa_url(value: &str) -> Result<()> {
     let url = url::Url::parse(value).context("parse pwa-url")?;
     if url.scheme() != "https" || url.host_str().is_none() {
@@ -188,10 +173,8 @@ mod tests {
         assert_eq!(loaded.state_dir, Path::new("/home/tester/.local/share/xo"));
         assert_eq!(loaded.projection, Path::new("/home/tester/notes"));
         assert_eq!(loaded.pwa_url, "https://xo.exokephalos.dev/");
-        assert_eq!(loaded.leader_key, " ");
         let document = std::fs::read_to_string(path)?;
         assert!(document.contains("(state-dir \"~/.local/share/xo\")"));
-        assert!(!document.contains("leader-key"));
         assert!(!document.contains("(ticket "));
         assert!(!document.contains("{\\\"schema\\\""));
         Ok(())
@@ -217,30 +200,6 @@ mod tests {
         };
         std::fs::write(&path, invalid.document()?)?;
         assert!(XoConfig::load(&path, Path::new("/home/tester")).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn legacy_leader_key_is_accepted_but_no_longer_generated() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("config.scm");
-        let with_leader = |value: &str| -> Result<String> {
-            let document = XoConfig::default().document()?;
-            Ok(document.replacen(
-                "))\n",
-                &format!(")\n  (leader-key {}))\n", serde_json::to_string(value)?),
-                1,
-            ))
-        };
-        std::fs::write(&path, with_leader(",")?)?;
-        assert_eq!(
-            XoConfig::load(&path, Path::new("/home/tester"))?.leader_key,
-            ","
-        );
-        for invalid in ["", "ab", "\n"] {
-            std::fs::write(&path, with_leader(invalid)?)?;
-            assert!(XoConfig::load(&path, Path::new("/home/tester")).is_err());
-        }
         Ok(())
     }
 

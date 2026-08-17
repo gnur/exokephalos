@@ -2,7 +2,25 @@ use std::process::Command;
 
 use anyhow::{Context, Result, ensure};
 use xo::config::XoConfig;
+use xo::keymap::{DEFAULT_KEYS, KeyMap};
 use xo::session::WorkspaceSession;
+
+#[test]
+fn keymap_init_prints_the_default_keymap() -> Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_xo"))
+        .arg("keymap-init")
+        .output()
+        .context("run xo keymap-init")?;
+    ensure!(
+        output.status.success(),
+        "xo keymap-init failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let source = String::from_utf8(output.stdout)?;
+    ensure!(source == DEFAULT_KEYS, "keymap-init output changed");
+    KeyMap::from_source(&source)?;
+    Ok(())
+}
 
 #[tokio::test]
 async fn config_init_output_starts_a_fresh_xo_workspace() -> Result<()> {

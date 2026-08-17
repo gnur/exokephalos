@@ -929,7 +929,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(Color::White)
     };
     frame.render_widget(
         Paragraph::new(footer).style(footer_style),
@@ -1112,15 +1112,28 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     }
     let selected_index = app.selected_index();
     let sort_field = app.active_sort_field();
+    let visible_notes = app.visible_notes();
+    let year_counts = visible_notes
+        .iter()
+        .fold(BTreeMap::new(), |mut counts, note| {
+            let year = xo_core::behavior::sort_year(note, sort_field)
+                .unwrap_or_else(|| "No year".to_owned());
+            *counts.entry(year).or_insert(0_usize) += 1;
+            counts
+        });
     let mut previous_year = None;
     let mut note_items = Vec::new();
     let mut selected_row = None;
-    for (index, note) in app.visible_notes().iter().enumerate() {
+    for (index, note) in visible_notes.iter().enumerate() {
         let year =
             xo_core::behavior::sort_year(note, sort_field).unwrap_or_else(|| "No year".to_owned());
         if previous_year.as_deref() != Some(year.as_str()) {
             note_items.push(
-                ListItem::new(format!("  ── {year} ──")).style(
+                ListItem::new(format!(
+                    "  ── {year} ({}) ──",
+                    year_counts.get(&year).copied().unwrap_or_default()
+                ))
+                .style(
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
@@ -1155,7 +1168,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     frame.render_stateful_widget(
         List::new(note_items).block(
             Block::default()
-                .title(format!("Notes · {} visible", app.visible_notes().len()))
+                .title(format!("Notes · {} visible", visible_notes.len()))
                 .borders(Borders::ALL)
                 .border_style(if app.pane == Pane::Notes {
                     selected
@@ -1591,6 +1604,12 @@ mod tests {
         assert!(screen.contains("[Space] menu"));
         assert!(screen.contains("[/] search"));
         assert!(screen.contains("[e/Enter] edit"));
+        assert!(
+            terminal.backend().buffer().content[1_900..]
+                .iter()
+                .filter(|cell| !cell.symbol().trim().is_empty())
+                .all(|cell| cell.fg == Color::White)
+        );
         assert!(!screen.contains("Offline"));
         assert!(!screen.contains("↑↓/jk"));
     }
@@ -1770,6 +1789,8 @@ mod tests {
             "published".into(),
             FrontmatterValue::String("2025-04-01".into()),
         );
+        app.notes.push(newer.clone());
+        newer.id = NoteId::new("note003");
         app.notes.push(newer);
         let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
         terminal.draw(|frame| render(frame, &app)).unwrap();
@@ -1780,8 +1801,8 @@ mod tests {
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
-        assert!(screen.contains("2024"), "{screen}");
-        assert!(screen.contains("2025"), "{screen}");
+        assert!(screen.contains("2024 (1)"), "{screen}");
+        assert!(screen.contains("2025 (2)"), "{screen}");
     }
 
     #[test]

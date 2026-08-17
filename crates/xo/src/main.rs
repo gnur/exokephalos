@@ -413,7 +413,15 @@ async fn event_loop(
         }
         match app.mode {
             Mode::Search => match key.code {
-                KeyCode::Esc | KeyCode::Enter => app.mode = Mode::Normal,
+                KeyCode::Esc => {
+                    let action = app.keymap.action_for(key).cloned();
+                    if let Some(action) = action
+                        && dispatch_action(terminal, app, session, &action).await?
+                    {
+                        break;
+                    }
+                }
+                KeyCode::Enter => app.mode = Mode::Normal,
                 KeyCode::Backspace => {
                     app.search.pop();
                     app.selected = 0;
@@ -826,6 +834,7 @@ async fn dispatch_action(
         "toggle_tag" if app.pane == app::Pane::Tags => app.toggle_highlighted_tag(),
         "toggle_tag" => {}
         "open_search" => app.mode = Mode::Search,
+        "clear_search" => app.clear_search(),
         "open_goto" => {
             app.goto_input.clear();
             app.goto_index = 0;

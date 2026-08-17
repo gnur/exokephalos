@@ -653,12 +653,46 @@ features should be configured appropriately for `.xo.md` files.
 
 Every normal-mode interaction is a named action. Press `:` to open the
 autocompleting action picker, type part of an action name, use Up/Down to select,
-Tab to complete, and Enter to run it. Actions include `cursor_down`,
-`focus_column_left`, `focus_subview_next`, `edit_item`, `open_search`,
-`delete_item`, `open_view_picker`, `open_goto`, `open_item_actions`,
-`edit_workspace_config`, `setup_mobile_client`, `open_server_setup`,
-`open_sync_status`, `open_conflicts`, `open_devices`, `refresh_sync`,
-`reverse_sort`, and `unlock_preview`.
+Tab to complete, and Enter to run it. Short aliases are accepted where listed;
+for example, `:q` runs `quit`.
+
+| Action | Alias | Arguments | Effect |
+| --- | --- | --- | --- |
+| `action_picker` | — | — | Open the action picker. |
+| `approve_peer` | — | — | Approve the highlighted pending peer. |
+| `clear_search` | — | — | Clear the title search and return to normal mode. |
+| `create_encrypted_item` | — | — | Create an encrypted note. |
+| `create_item` | `c` | — | Create a plaintext note. |
+| `cursor_down` | `j` | — | Move the selection down. |
+| `cursor_up` | `k` | — | Move the selection up. |
+| `delete_item` | `d` | — | Delete the selected note. |
+| `edit_item` | `e` | — | Edit the selected note. |
+| `edit_workspace_config` | — | — | Edit replicated workspace configuration. |
+| `focus_column_left` | `h` | — | Focus the column to the left. |
+| `focus_column_right` | `l` | — | Focus the column to the right. |
+| `focus_subview_next` | — | — | Select the next subview. |
+| `focus_subview_previous` | — | — | Select the previous subview. |
+| `goto_view` | — | `view[/subview]` (required) | Open a view and optional subview. |
+| `open_conflicts` | — | — | Show unresolved conflicts. |
+| `open_devices` | — | — | Show workspace clients and membership controls. |
+| `open_goto` | — | — | Open the view/subview path prompt. |
+| `open_item_actions` | — | — | Show configured actions for the selected item. |
+| `open_search` | — | — | Edit the title search filter. |
+| `open_server_setup` | — | — | Open server pairing and installation setup. |
+| `open_sync_status` | — | — | Show synchronization status. |
+| `open_view_picker` | `g` | — | Open the top-level view picker. |
+| `quit` | `q` | — | Exit xo. |
+| `refresh_sync` | — | — | Refresh and retry synchronization. |
+| `reject_peer` | — | — | Reject the highlighted pending peer. |
+| `remove_peer` | — | — | Remove the highlighted active peer. |
+| `restore_item` | `u` | — | Restore the most recently deleted note. |
+| `retire_device` | — | — | Retire the highlighted device. |
+| `retry_operation` | — | — | Retry the first failed synchronization operation. |
+| `reverse_sort` | — | — | Reverse the current note sort order. |
+| `setup_mobile_client` | — | — | Open mobile-client pairing. |
+| `toggle_tag` | — | — | Toggle the highlighted tag filter. |
+| `toggle_tags_column` | — | — | Show or hide the tag column. |
+| `unlock_preview` | — | — | Unlock the selected encrypted note preview. |
 
 The TUI creates `~/.config/xo/keys.scm` on first start and hot reloads it while
 running. You can also write the default explicitly:
@@ -676,11 +710,17 @@ Bind keys to actions with declarative forms:
   (bind "tab" focus_subview_next)
   (bind "e" edit_item)
   (bind "/" open_search)
+  (bind "esc" clear_search)
   (bind "d" delete_item)
   (bind "g" open_view_picker)
   (bind ":" action_picker)
-  (bind "b" (goto_view "books/read")))
+  (bind "b" (goto_view "books/read"))
+  (bind "q" q))
 ```
+
+The argument-bearing binding above opens the `books` view with its `read`
+subview. The same action can be run without a binding by entering
+`:goto_view books/read` in the action picker.
 
 Names such as `space`, `enter`, `tab`, `backtab`, `left`, `right`, `up`, and
 `down` represent special keys; modifier forms such as `ctrl+x` are also
@@ -695,7 +735,9 @@ outside the tag column.
 Tag counts are live facets. They first respect the active view or subview and
 the `/` title query, then show how many notes would remain if each tag were
 added to the currently selected tag filters. Selecting or clearing a tag
-therefore updates every displayed count immediately.
+therefore updates every displayed count immediately. Escape runs the default
+`clear_search` binding, clearing the title filter even after the search prompt
+has been closed.
 
 ### Markdown projection layout
 

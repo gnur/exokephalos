@@ -12,7 +12,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use tempfile::Builder as TempFileBuilder;
-use xo::keymap::{ACTION_NAMES, KeyMap};
+use xo::keymap::{ACTION_ALIASES, ACTION_NAMES, KeyMap};
 use xo::steel_plugin::PluginChoice;
 use xo_core::behavior::{Query, WorkspaceBehavior};
 use xo_core::domain::{DeviceRecord, Frontmatter, FrontmatterValue};
@@ -494,6 +494,12 @@ impl App {
         Some(note)
     }
 
+    pub fn clear_search(&mut self) {
+        self.search.clear();
+        self.selected = 0;
+        self.mode = Mode::Normal;
+    }
+
     pub fn matching_tui_actions(&self) -> Vec<String> {
         let needle = self.action_query.to_lowercase();
         if needle.starts_with("goto_view ") {
@@ -504,7 +510,20 @@ impl App {
             .filter(|name| name.contains(&needle) || fuzzy(name, &needle).is_some())
             .map(|name| (*name).to_owned())
             .collect::<Vec<_>>();
-        actions.sort_by_key(|name| std::cmp::Reverse(fuzzy(name, &needle).unwrap_or_default()));
+        if !needle.is_empty() {
+            actions.extend(
+                ACTION_ALIASES
+                    .iter()
+                    .filter(|(alias, _)| alias.contains(&needle))
+                    .map(|(alias, _)| (*alias).to_owned()),
+            );
+        }
+        actions.sort_by_key(|name| {
+            (
+                name != &needle,
+                std::cmp::Reverse(fuzzy(name, &needle).unwrap_or_default()),
+            )
+        });
         actions
     }
 
@@ -1632,6 +1651,18 @@ mod tests {
         );
         assert!(!screen.contains("Offline"));
         assert!(!screen.contains("↑↓/jk"));
+    }
+
+    #[test]
+    fn clear_search_resets_filter_selection_and_mode() {
+        let mut app = fixture();
+        app.search = "missing".into();
+        app.selected = 4;
+        app.mode = Mode::Search;
+        app.clear_search();
+        assert!(app.search.is_empty());
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.mode, Mode::Normal);
     }
 
     #[test]

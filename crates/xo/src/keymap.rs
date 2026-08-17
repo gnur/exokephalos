@@ -9,6 +9,7 @@ pub const ACTION_NAMES: &[&str] = &[
     "approve_peer",
     "create_encrypted_item",
     "create_item",
+    "clear_search",
     "cursor_down",
     "cursor_up",
     "delete_item",
@@ -41,6 +42,20 @@ pub const ACTION_NAMES: &[&str] = &[
     "unlock_preview",
 ];
 
+/// Short action names accepted by both keys.scm and the action picker.
+pub const ACTION_ALIASES: &[(&str, &str)] = &[
+    ("c", "create_item"),
+    ("d", "delete_item"),
+    ("e", "edit_item"),
+    ("g", "open_view_picker"),
+    ("h", "focus_column_left"),
+    ("j", "cursor_down"),
+    ("k", "cursor_up"),
+    ("l", "focus_column_right"),
+    ("q", "quit"),
+    ("u", "restore_item"),
+];
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ActionCall {
     pub name: String,
@@ -50,9 +65,14 @@ pub struct ActionCall {
 impl ActionCall {
     pub fn parse(value: &str) -> Result<Self> {
         let mut parts = value.split_whitespace();
-        let name = parts.next().context("action name is required")?.to_owned();
+        let entered_name = parts.next().context("action name is required")?;
+        let name = ACTION_ALIASES
+            .iter()
+            .find_map(|(alias, name)| (*alias == entered_name).then_some(*name))
+            .unwrap_or(entered_name)
+            .to_owned();
         if !ACTION_NAMES.contains(&name.as_str()) {
-            bail!("unknown TUI action {name:?}");
+            bail!("unknown TUI action {entered_name:?}");
         }
         let arguments = parts.map(str::to_owned).collect::<Vec<_>>();
         if name == "goto_view" && arguments.len() != 1 {
@@ -161,6 +181,7 @@ pub const DEFAULT_KEYS: &str = r#"; Hot-reloaded xo TUI bindings.
   (bind "tab" focus_subview_next)
   (bind "backtab" focus_subview_previous)
   (bind "space" toggle_tag)
+  (bind "esc" clear_search)
   (bind "enter" edit_item)
   (bind "e" edit_item)
   (bind "/" open_search)
@@ -173,7 +194,7 @@ pub const DEFAULT_KEYS: &str = r#"; Hot-reloaded xo TUI bindings.
   (bind "c" create_item)
   (bind "C" create_encrypted_item)
   (bind "u" restore_item)
-  (bind "q" quit))
+  (bind "q" q))
 "#;
 
 fn action(form: &Form) -> Result<ActionCall> {
@@ -378,6 +399,19 @@ mod tests {
         let keys = KeyMap::default();
         let event = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
         assert_eq!(keys.action_for(event).unwrap().name, "cursor_down");
+        assert_eq!(
+            keys.action_for(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE))
+                .unwrap()
+                .name,
+            "quit"
+        );
+        assert_eq!(
+            keys.action_for(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+                .unwrap()
+                .name,
+            "clear_search"
+        );
+        assert_eq!(ActionCall::parse("q").unwrap().name, "quit");
         let custom = KeyMap::from_source(
             r#"(keys (bind "b" (goto_view "books/read")) (bind ":" action_picker))"#,
         )

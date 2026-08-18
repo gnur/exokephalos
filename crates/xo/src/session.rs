@@ -142,35 +142,12 @@ impl WorkspaceSession {
     }
 
     #[must_use]
-    pub fn peer_id(&self) -> &xo_core::PeerId {
-        &self.peer_id
+    pub fn client_id(&self) -> &str {
+        self.peer_id.as_str()
     }
 
-    #[must_use]
-    pub fn membership_fingerprint(&self) -> String {
-        xo_core::membership::public_key_fingerprint(
-            blake3::hash(self.peer_id.as_str().as_bytes()).as_bytes(),
-        )
-    }
-
-    pub async fn members(&self) -> Vec<xo_core::membership::Member> {
-        self.replica
-            .connected_clients()
-            .await
-            .into_iter()
-            .filter_map(|client| {
-                let peer_id = xo_core::PeerId::parse(&client).ok()?;
-                let public_key = *blake3::hash(client.as_bytes()).as_bytes();
-                Some(xo_core::membership::Member {
-                    peer_id,
-                    public_key,
-                    endpoint_ids: BTreeSet::from(["websocket".to_owned()]),
-                    status: xo_core::membership::MemberStatus::Active,
-                    accepted_actor_sequence: None,
-                    accepted_heads: Vec::new(),
-                })
-            })
-            .collect()
+    pub async fn connected_clients(&self) -> Vec<String> {
+        self.replica.connected_clients().await
     }
 
     #[must_use]

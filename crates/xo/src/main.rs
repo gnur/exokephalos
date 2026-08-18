@@ -294,8 +294,8 @@ async fn hydrate(
         .map(|note| (note.id.clone(), note))
         .collect();
     app.devices = snapshot.devices;
-    app.members = session.members().await;
-    app.self_fingerprint = session.membership_fingerprint();
+    app.connected_clients = session.connected_clients().await;
+    session.client_id().clone_into(&mut app.client_id);
     app.diagnostics = snapshot.diagnostics;
     app.operations = session.sync_state.ready()?;
     app.sync = Some(session.sync_state.status()?);
@@ -743,7 +743,7 @@ async fn dispatch_action(
     match action.name.as_str() {
         "quit" => return Ok(true),
         "cursor_down" if app.mode == Mode::Devices => {
-            let count = app.members.len();
+            let count = app.connected_clients.len();
             if count > 0 {
                 app.selected = (app.selected + 1).min(count - 1);
             }
@@ -1112,19 +1112,24 @@ fn conflict_summary(app: &App) -> String {
     }
 }
 fn device_summary(app: &App) -> String {
-    if app.members.is_empty() {
+    if app.connected_clients.is_empty() {
         "no clients connected".to_owned()
     } else {
-        app.members
-            .iter()
-            .map(|member| member.peer_id.to_string())
-            .collect::<Vec<_>>()
-            .join(" | ")
+        app.connected_clients.join(" | ")
     }
 }
 fn sync_summary(app: &App) -> String {
+    let server = app
+        .sync
+        .as_ref()
+        .map_or("offline", |status| match status.connectivity {
+            xo_core::sync_state::Connectivity::Direct => "connected",
+            xo_core::sync_state::Connectivity::Connecting => "connecting",
+            xo_core::sync_state::Connectivity::Offline
+            | xo_core::sync_state::Connectivity::Relay => "offline",
+        });
     format!(
-        "operations: {}; missing blobs: {}",
+        "server: {server}; operations: {}; missing blobs: {}",
         app.operations
             .iter()
             .map(|value| format!("{}:{:?}", value.id, value.status))

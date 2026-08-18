@@ -13,6 +13,29 @@ use xo_core::{ActorId, Note, NoteId};
 
 struct Server(Child);
 
+impl Server {
+    fn start(state: &std::path::Path, address: std::net::SocketAddr) -> Result<Self> {
+        let child = Command::new(env!("CARGO_BIN_EXE_xo-syncd"))
+            .args([
+                "--state-dir",
+                state.to_str().context("state path")?,
+                "--bind",
+            ])
+            .arg(address.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+        Ok(Self(child))
+    }
+
+    fn stop(mut self) -> Result<()> {
+        self.0.kill()?;
+        self.0.wait()?;
+        Ok(())
+    }
+}
+
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.0.kill();
@@ -28,18 +51,7 @@ async fn two_native_replicas_converge_through_the_central_server() -> Result<()>
     let address = listener.local_addr()?;
     drop(listener);
     let state = directory.path().join("server");
-    let child = Command::new(env!("CARGO_BIN_EXE_xo-syncd"))
-        .args([
-            "--state-dir",
-            state.to_str().context("state path")?,
-            "--bind",
-        ])
-        .arg(address.to_string())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
-    let _server = Server(child);
+    let _server = Server::start(&state, address)?;
     let workspace_file = state.join("workspace-id");
     let workspace_id = wait_for_workspace_id(&workspace_file).await?;
     let first = CentralReplica::open(
@@ -141,6 +153,73 @@ async fn two_native_replicas_converge_through_the_central_server() -> Result<()>
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     bail!("native replicas did not converge through /api/sync")
+}
+
+#[tokio::test]
+async fn acknowledged_server_data_survives_restart() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    drop(listener);
+    let state = directory.path().join("server-restart");
+    let server = Server::start(&state, address)?;
+    let workspace_id = wait_for_workspace_id(&state.join("workspace-id")).await?;
+    let writer = open_replica(directory.path(), "writer", &workspace_id)?;
+    let writer_client = CentralClient::start(
+        &format!("http://{address}"),
+        "writer".to_owned(),
+        Arc::clone(&writer),
+    )?;
+    wait_connected(&writer_client).await?;
+    writer
+        .put_record("test/restart", b"persisted".to_vec())
+        .await?;
+
+    let observer = open_replica(directory.path(), "observer", &workspace_id)?;
+    let observer_client = CentralClient::start(
+        &format!("http://{address}"),
+        "observer".to_owned(),
+        Arc::clone(&observer),
+    )?;
+    wait_for_record(&observer, "test/restart", b"persisted").await?;
+    writer_client.shutdown().await?;
+    observer_client.shutdown().await?;
+    server.stop()?;
+
+    let _restarted = Server::start(&state, address)?;
+    let recovered = open_replica(directory.path(), "recovered", &workspace_id)?;
+    let recovered_client = CentralClient::start(
+        &format!("http://{address}"),
+        "recovered".to_owned(),
+        Arc::clone(&recovered),
+    )?;
+    wait_connected(&recovered_client).await?;
+    wait_for_record(&recovered, "test/restart", b"persisted").await?;
+    recovered_client.shutdown().await?;
+    Ok(())
+}
+
+fn open_replica(
+    root: &std::path::Path,
+    name: &str,
+    workspace_id: &str,
+) -> Result<Arc<CentralReplica>> {
+    CentralReplica::open(
+        &root.join(name),
+        workspace_id,
+        ActorId::new(name),
+        format!("{name}-automerge-actor").as_bytes(),
+    )
+}
+
+async fn wait_for_record(replica: &CentralReplica, key: &str, expected: &[u8]) -> Result<()> {
+    for _ in 0..200 {
+        if replica.get_record(key).await?.as_deref() == Some(expected) {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    bail!("replica did not receive {key}")
 }
 
 async fn wait_for_workspace_id(path: &std::path::Path) -> Result<String> {

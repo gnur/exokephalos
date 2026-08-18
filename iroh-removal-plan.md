@@ -87,7 +87,7 @@ may transfer the complete Automerge history through normal Automerge sync messag
 - [x] Replace membership management with a connected-clients view.
 - [x] Keep `open_peers` and show connected client IDs; remove approve, reject, remove,
   retire-membership, invitation, and pairing actions.
-- [ ] Update footer/status language from relay/peer terminology to server sync.
+- [x] Update footer/status language from relay/peer terminology to server sync.
 - [ ] Update `xo-admin` or remove commands made obsolete by the HTTP API.
 
 ## Phase 3: browser client
@@ -142,7 +142,7 @@ may transfer the complete Automerge history through normal Automerge sync messag
 - [ ] Unit-test protocol versioning, malformed controls, and frame size bounds.
 - [x] Deterministic local WebSocket test: server plus two native replicas converge.
 - [ ] Three-client conflict test: two offline edits converge through a restarted server.
-- [ ] Server restart test proves acknowledged data survives.
+- [x] Server restart test proves acknowledged data survives.
 - [ ] Browser test proves cached notes render before WebSocket connection.
 - [ ] Browser test proves an offline mutation synchronizes after reconnect.
 - [ ] TUI and browser converge through the same `/api/sync` endpoint.

@@ -15,7 +15,6 @@ use xo::steel_plugin::PluginChoice;
 use xo_core::behavior::{Query, WorkspaceBehavior};
 use xo_core::domain::{DeviceRecord, Frontmatter, FrontmatterValue};
 use xo_core::encryption;
-use xo_core::membership::Member;
 use xo_core::projection::Diagnostic;
 use xo_core::sync_state::{DurableOperation, SyncStatus};
 use xo_core::{Conflict, Note, NoteId, NoteRevision, RevisionId};
@@ -54,8 +53,8 @@ pub struct App {
     pub conflicts: Vec<Conflict>,
     pub conflict_history: BTreeMap<NoteId, Vec<(RevisionId, NoteRevision)>>,
     pub devices: Vec<DeviceRecord>,
-    pub members: Vec<Member>,
-    pub self_fingerprint: String,
+    pub connected_clients: Vec<String>,
+    pub client_id: String,
     pub diagnostics: Vec<Diagnostic>,
     pub operations: Vec<DurableOperation>,
     pub sync: Option<SyncStatus>,
@@ -101,8 +100,8 @@ impl App {
             conflicts: vec![],
             conflict_history: BTreeMap::new(),
             devices: vec![],
-            members: vec![],
-            self_fingerprint: String::new(),
+            connected_clients: vec![],
+            client_id: String::new(),
             diagnostics: vec![],
             operations: vec![],
             sync: None,
@@ -1187,7 +1186,15 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         Mode::Sync => (
             "Synchronization (R retries)",
             Text::from(format!(
-                "operations\n{}\n\nmissing blobs\n{}\n\ndiagnostics\n{}",
+                "server\n{}\n\noperations\n{}\n\nmissing blobs\n{}\n\ndiagnostics\n{}",
+                app.sync
+                    .as_ref()
+                    .map_or("offline", |status| match status.connectivity {
+                        xo_core::sync_state::Connectivity::Direct => "connected",
+                        xo_core::sync_state::Connectivity::Connecting => "connecting",
+                        xo_core::sync_state::Connectivity::Offline
+                        | xo_core::sync_state::Connectivity::Relay => "offline",
+                    }),
                 app.operations
                     .iter()
                     .map(|value| format!(
@@ -1243,71 +1250,33 @@ fn render_devices(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let selected = Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD);
-    let mut items = Vec::new();
-    let mut section = |title: &'static str, rows: Vec<(usize, String, String, String)>| {
-        items.push(ListItem::new(Line::styled(
-            title,
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )));
-        items.push(ListItem::new(
-            "  PEER ID              FINGERPRINT       ENDPOINTS",
-        ));
-        if rows.is_empty() {
-            items.push(ListItem::new("  —                    —                 —"));
-        }
-        for (index, peer_id, fingerprint, endpoints) in rows {
-            items.push(
-                ListItem::new(format!(
-                    "{} {:<20} {:<17} {}",
-                    if index == app.selected { ">" } else { " " },
-                    peer_id,
-                    fingerprint.chars().take(16).collect::<String>(),
-                    endpoints
-                ))
-                .style(if index == app.selected {
-                    selected
-                } else {
-                    Style::default()
-                }),
-            );
-        }
-        items.push(ListItem::new(""));
-    };
-    let member_rows = |wanted: fn(&Member, &str) -> bool| {
-        app.members
-            .iter()
-            .enumerate()
-            .filter(|(_, member)| wanted(member, &app.self_fingerprint))
-            .map(|(index, member)| {
-                (
-                    index,
-                    member.peer_id.to_string(),
-                    xo_core::membership::public_key_fingerprint(&member.public_key),
-                    member
-                        .endpoint_ids
-                        .iter()
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                )
-            })
-            .collect()
-    };
-    section(
-        "THIS TUI",
-        member_rows(|member, own| {
-            xo_core::membership::public_key_fingerprint(&member.public_key) == own
-        }),
-    );
-    section(
-        "ACTIVE CLIENTS",
-        member_rows(|member, own| {
-            member.status == xo_core::membership::MemberStatus::Active
-                && xo_core::membership::public_key_fingerprint(&member.public_key) != own
-        }),
-    );
+    let mut items = vec![ListItem::new(Line::styled(
+        "  CLIENT ID",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ))];
+    if app.connected_clients.is_empty() {
+        items.push(ListItem::new("  No clients are currently connected."));
+    }
+    for (index, client_id) in app.connected_clients.iter().enumerate() {
+        let own = if client_id == &app.client_id {
+            " (this TUI)"
+        } else {
+            ""
+        };
+        items.push(
+            ListItem::new(format!(
+                "{} {client_id}{own}",
+                if index == app.selected { ">" } else { " " },
+            ))
+            .style(if index == app.selected {
+                selected
+            } else {
+                Style::default()
+            }),
+        );
+    }
 
     frame.render_widget(
         List::new(items).block(
@@ -1474,6 +1443,8 @@ mod tests {
     #[test]
     fn devices_mode_replaces_the_note_workspace_with_a_full_screen_list() {
         let mut app = fixture();
+        app.connected_clients = vec!["test-client".to_owned(), "browser".to_owned()];
+        app.client_id = "test-client".to_owned();
         app.mode = Mode::Devices;
         let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
         terminal.draw(|frame| render(frame, &app)).unwrap();
@@ -1485,9 +1456,9 @@ mod tests {
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
         assert!(screen.contains("Connected clients"));
-        assert!(screen.contains("THIS TUI"));
-        assert!(screen.contains("ACTIVE CLIENTS"));
-        assert!(screen.contains("PEER ID"));
+        assert!(screen.contains("CLIENT ID"));
+        assert!(screen.contains("test-client (this TUI)"));
+        assert!(screen.contains("browser"));
         assert!(screen.contains("[down/k] select"));
         assert!(!screen.contains("First"));
         assert!(!screen.contains("Preview"));

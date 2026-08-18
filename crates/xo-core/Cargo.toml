@@ -16,6 +16,7 @@ native = [
     "dep:regex",
     "dep:rusqlite",
     "dep:tempfile",
+    "dep:tokio",
     "dep:zeroize",
 ]
 peer-protocol = ["dep:base64", "dep:iroh"]
@@ -25,7 +26,6 @@ iroh-sync = [
     "dep:futures-lite",
     "dep:hostname",
     "dep:iroh-gossip",
-    "dep:tokio",
 ]
 steel = ["dep:steel-core"]
 test-utils = ["iroh-sync", "iroh/test-utils"]

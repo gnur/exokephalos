@@ -135,7 +135,7 @@ may transfer the complete Automerge history through normal Automerge sync messag
 ## Testing gates
 
 - [ ] Unit-test protocol versioning, malformed controls, and frame size bounds.
-- [ ] Deterministic local WebSocket test: server plus two native replicas converge.
+- [x] Deterministic local WebSocket test: server plus two native replicas converge.
 - [ ] Three-client conflict test: two offline edits converge through a restarted server.
 - [ ] Server restart test proves acknowledged data survives.
 - [ ] Browser test proves cached notes render before WebSocket connection.

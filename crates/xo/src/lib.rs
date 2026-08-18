@@ -1,3 +1,4 @@
+pub mod central_client;
 pub mod config;
 pub mod content_io;
 pub mod keymap;

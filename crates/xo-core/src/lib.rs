@@ -7,6 +7,8 @@ pub mod automerge_store;
 #[cfg(feature = "native")]
 pub mod backup;
 pub mod behavior;
+#[cfg(feature = "native")]
+pub mod central_replica;
 pub mod central_sync;
 pub mod domain;
 #[cfg(feature = "native")]
@@ -23,6 +25,7 @@ pub mod membership;
 pub mod peer_protocol;
 #[cfg(feature = "native")]
 pub mod projection;
+pub mod record_workspace;
 #[cfg(feature = "iroh-sync")]
 pub mod records;
 pub mod resolution;

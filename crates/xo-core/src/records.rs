@@ -9,6 +9,7 @@ use thiserror::Error;
 use crate::iroh_node::IrohWorkspace;
 use crate::local_index::{IndexError, LocalIndex};
 use crate::projection::{Diagnostic, ProjectedAsset};
+use crate::record_workspace::RecordWorkspace;
 use crate::{
     ActorId, AssetId, AssetRecord, CURRENT_SCHEMA, ConfigRevision, DeviceRecord, DomainError, Head,
     Hlc, Note, NoteId, NoteRevision, ResolvedNote, RevisionGraphError, RevisionId, Tombstone,
@@ -78,20 +79,28 @@ pub struct WorkspaceSnapshot {
 }
 
 /// The authoritative revision and per-author head repository for a workspace.
-#[derive(Clone, Copy, Debug)]
-pub struct WorkspaceRecords<'a> {
-    workspace: &'a IrohWorkspace,
+#[derive(Debug)]
+pub struct WorkspaceRecords<'a, W: RecordWorkspace = IrohWorkspace> {
+    workspace: &'a W,
 }
 
-impl<'a> WorkspaceRecords<'a> {
+impl<W: RecordWorkspace> Copy for WorkspaceRecords<'_, W> {}
+
+impl<W: RecordWorkspace> Clone for WorkspaceRecords<'_, W> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'a, W: RecordWorkspace> WorkspaceRecords<'a, W> {
     #[must_use]
-    pub const fn new(workspace: &'a IrohWorkspace) -> Self {
+    pub const fn new(workspace: &'a W) -> Self {
         Self { workspace }
     }
 
     #[must_use]
     pub fn actor_id(&self) -> ActorId {
-        ActorId::new(self.workspace.author_id().to_string())
+        self.workspace.record_actor_id()
     }
 
     pub async fn put_revision(&self, revision: &NoteRevision) -> Result<RevisionId, RecordError> {
@@ -99,7 +108,7 @@ impl<'a> WorkspaceRecords<'a> {
             .await?;
         let revision_id = revision.id()?;
         self.workspace
-            .put(
+            .put_record(
                 revision_key(&revision.note_id, &revision_id),
                 revision.canonical_bytes()?,
             )
@@ -117,14 +126,14 @@ impl<'a> WorkspaceRecords<'a> {
         }
         if self
             .workspace
-            .get(revision_key(&head.note_id, &head.revision_id))
+            .get_record(revision_key(&head.note_id, &head.revision_id))
             .await?
             .is_none()
         {
             return Err(RecordError::MissingRevision(head.revision_id.clone()));
         }
         self.workspace
-            .put(head_key(&head.note_id, &head.author_id), encode(head)?)
+            .put_record(head_key(&head.note_id, &head.author_id), encode(head)?)
             .await?;
         Ok(())
     }
@@ -148,7 +157,7 @@ impl<'a> WorkspaceRecords<'a> {
         let prefix = format!("{NOTE_PREFIX}{note_id}/");
         let mut group = NoteRecords::default();
         let cutoffs = self.retirement_cutoffs().await?;
-        for entry in self.workspace.list_signed(prefix).await? {
+        for entry in self.workspace.list_signed_records(prefix).await? {
             let key = String::from_utf8(entry.key).map_err(|error| {
                 RecordError::InvalidKey(String::from_utf8_lossy(error.as_bytes()).into_owned())
             })?;
@@ -172,7 +181,7 @@ impl<'a> WorkspaceRecords<'a> {
         let prefix = format!("{NOTE_PREFIX}{note_id}/");
         let mut group = NoteRecords::default();
         let cutoffs = self.retirement_cutoffs().await?;
-        for entry in self.workspace.list_signed(prefix).await? {
+        for entry in self.workspace.list_signed_records(prefix).await? {
             let key = String::from_utf8(entry.key).map_err(|error| {
                 RecordError::InvalidKey(String::from_utf8_lossy(error.as_bytes()).into_owned())
             })?;
@@ -196,7 +205,7 @@ impl<'a> WorkspaceRecords<'a> {
     pub async fn deleted_notes(&self) -> Result<Vec<Note>, RecordError> {
         let cutoffs = self.retirement_cutoffs().await?;
         let mut groups = BTreeMap::<NoteId, NoteRecords>::new();
-        for entry in self.workspace.list_signed(NOTE_PREFIX).await? {
+        for entry in self.workspace.list_signed_records(NOTE_PREFIX).await? {
             let key = String::from_utf8_lossy(&entry.key).into_owned();
             let Some(note_id) = note_id_from_key(&key) else {
                 continue;
@@ -238,7 +247,7 @@ impl<'a> WorkspaceRecords<'a> {
     ) -> Result<Option<NoteRevision>, RecordError> {
         let Some(entry) = self
             .workspace
-            .get_signed(revision_key(note_id, revision_id))
+            .get_signed_record(revision_key(note_id, revision_id))
             .await?
         else {
             return Ok(None);
@@ -273,7 +282,10 @@ impl<'a> WorkspaceRecords<'a> {
     ) -> Result<AssetRecord, RecordError> {
         let size = u64::try_from(bytes.len())
             .map_err(|_| RecordError::Encoding("asset size exceeds u64".to_owned()))?;
-        let blob_hash = self.workspace.put_blob(asset_blob_key(&id), bytes).await?;
+        let blob_hash = self
+            .workspace
+            .put_blob_record(asset_blob_key(&id), bytes)
+            .await?;
         let record = AssetRecord {
             schema: CURRENT_SCHEMA,
             id,
@@ -284,13 +296,13 @@ impl<'a> WorkspaceRecords<'a> {
         };
         record.validate()?;
         self.workspace
-            .put(asset_key(&record.id), encode(&record)?)
+            .put_record(asset_key(&record.id), encode(&record)?)
             .await?;
         Ok(record)
     }
 
     pub async fn get_asset(&self, id: &AssetId) -> Result<Option<ProjectedAsset>, RecordError> {
-        let Some(record_bytes) = self.workspace.get(asset_key(id)).await? else {
+        let Some(record_bytes) = self.workspace.get_record(asset_key(id)).await? else {
             return Ok(None);
         };
         let record: AssetRecord = decode(&record_bytes)?;
@@ -300,7 +312,7 @@ impl<'a> WorkspaceRecords<'a> {
         }
         let bytes = self
             .workspace
-            .get(asset_blob_key(id))
+            .get_record(asset_blob_key(id))
             .await?
             .ok_or_else(|| RecordError::MissingBlob(id.clone()))?;
         let size_matches = u64::try_from(bytes.len()).ok() == Some(record.size);
@@ -313,7 +325,7 @@ impl<'a> WorkspaceRecords<'a> {
 
     pub async fn list_assets(&self) -> Result<Vec<ProjectedAsset>, RecordError> {
         let mut assets = Vec::new();
-        for (key, _) in self.workspace.list(ASSET_PREFIX).await? {
+        for (key, _) in self.workspace.list_records(ASSET_PREFIX).await? {
             let key = String::from_utf8_lossy(&key);
             let parts = key.split('/').collect::<Vec<_>>();
             if parts.len() != 2 || parts[0] != "asset" || parts[1].is_empty() {
@@ -352,13 +364,13 @@ impl<'a> WorkspaceRecords<'a> {
         let revision_id = record.id()?;
         let stored_hash = self
             .workspace
-            .put_blob(config_blob_key(&revision_id), bytes.clone())
+            .put_blob_record(config_blob_key(&revision_id), bytes.clone())
             .await?;
         if stored_hash != record.blob_hash {
             return Err(RecordError::ContentMismatch(record.path));
         }
         self.workspace
-            .put(config_key(&record, &revision_id), encode(&record)?)
+            .put_record(config_key(&record, &revision_id), encode(&record)?)
             .await?;
         Ok(ProjectedConfig {
             revision_id,
@@ -370,7 +382,7 @@ impl<'a> WorkspaceRecords<'a> {
     pub async fn list_configs(&self) -> Result<Vec<ProjectedConfig>, RecordError> {
         let mut winners = BTreeMap::<String, ProjectedConfig>::new();
         let cutoffs = self.retirement_cutoffs().await?;
-        for entry in self.workspace.list_signed(CONFIG_PREFIX).await? {
+        for entry in self.workspace.list_signed_records(CONFIG_PREFIX).await? {
             let key = String::from_utf8_lossy(&entry.key).into_owned();
             let record: ConfigRevision = decode(&entry.value)?;
             record.validate()?;
@@ -384,7 +396,7 @@ impl<'a> WorkspaceRecords<'a> {
             }
             let bytes = self
                 .workspace
-                .get(config_blob_key(&revision_id))
+                .get_record(config_blob_key(&revision_id))
                 .await?
                 .ok_or_else(|| RecordError::MissingContent(record.path.clone()))?;
             if u64::try_from(bytes.len()).ok() != Some(record.size)
@@ -413,7 +425,7 @@ impl<'a> WorkspaceRecords<'a> {
         self.ensure_local_author(&record.author_id, &record.hlc)
             .await?;
         self.workspace
-            .put(tombstone_key(record), encode(record)?)
+            .put_record(tombstone_key(record), encode(record)?)
             .await?;
         Ok(())
     }
@@ -421,7 +433,7 @@ impl<'a> WorkspaceRecords<'a> {
     pub async fn list_tombstones(&self) -> Result<Vec<Tombstone>, RecordError> {
         let cutoffs = self.retirement_cutoffs().await?;
         let mut records = Vec::new();
-        for entry in self.workspace.list_signed(TOMBSTONE_PREFIX).await? {
+        for entry in self.workspace.list_signed_records(TOMBSTONE_PREFIX).await? {
             let key = String::from_utf8_lossy(&entry.key).into_owned();
             let record: Tombstone = decode(&entry.value)?;
             record.validate()?;
@@ -442,14 +454,14 @@ impl<'a> WorkspaceRecords<'a> {
             .map_or(&record.author_id, |cutoff| &cutoff.actor_id);
         verify_signer(&device_key(record), expected_signer, &self.actor_id())?;
         self.workspace
-            .put(device_key(record), encode(record)?)
+            .put_record(device_key(record), encode(record)?)
             .await?;
         Ok(())
     }
 
     pub async fn list_devices(&self) -> Result<Vec<DeviceRecord>, RecordError> {
         let mut records = Vec::new();
-        for entry in self.workspace.list_signed(DEVICE_PREFIX).await? {
+        for entry in self.workspace.list_signed_records(DEVICE_PREFIX).await? {
             let key = String::from_utf8_lossy(&entry.key).into_owned();
             let record: DeviceRecord = decode(&entry.value)?;
             record.validate()?;
@@ -473,13 +485,13 @@ impl<'a> WorkspaceRecords<'a> {
     ) -> Result<(), RecordError> {
         descriptor.validate()?;
         self.workspace
-            .put(WORKSPACE_DESCRIPTOR_KEY, encode(descriptor)?)
+            .put_record(WORKSPACE_DESCRIPTOR_KEY, encode(descriptor)?)
             .await?;
         Ok(())
     }
 
     pub async fn descriptor(&self) -> Result<Option<WorkspaceDescriptor>, RecordError> {
-        let Some(bytes) = self.workspace.get(WORKSPACE_DESCRIPTOR_KEY).await? else {
+        let Some(bytes) = self.workspace.get_record(WORKSPACE_DESCRIPTOR_KEY).await? else {
             return Ok(None);
         };
         let descriptor: WorkspaceDescriptor = decode(&bytes)?;
@@ -509,7 +521,7 @@ impl<'a> WorkspaceRecords<'a> {
         };
         let cutoffs = RetirementCutoffs::from_devices(&snapshot.devices);
 
-        for entry in self.workspace.list_signed(NOTE_PREFIX).await? {
+        for entry in self.workspace.list_signed_records(NOTE_PREFIX).await? {
             let key = String::from_utf8_lossy(&entry.key).into_owned();
             let Some(note_id) = note_id_from_key(&key) else {
                 snapshot.diagnostics.push(record_diagnostic(

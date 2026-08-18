@@ -11,7 +11,8 @@ use iroh::RelayMap;
 use crate::automerge_node::{AutomergeNode, AutomergeWorkspace, AutomergeWorkspaceEvent};
 use crate::membership::{Member, PeerId};
 use crate::peer_protocol::{JoinRequest, JoinResponse, WorkspaceInvitation};
-use crate::{ActorId, ConfigRevision, DeviceRecord, Head, NoteRevision, Tombstone, WorkspaceId};
+use crate::record_workspace::{RecordWorkspace, SignedWorkspaceValue, record_author};
+use crate::{ActorId, WorkspaceId};
 
 #[cfg(test)]
 pub(crate) static IROH_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -181,13 +182,6 @@ pub enum WorkspaceEvent {
     StatusChanged,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SignedWorkspaceValue {
-    pub key: Vec<u8>,
-    pub value: Vec<u8>,
-    pub author: String,
-}
-
 impl IrohWorkspace {
     #[must_use]
     pub fn id(&self) -> WorkspaceId {
@@ -339,38 +333,49 @@ impl IrohWorkspace {
     }
 }
 
-fn record_author(key: &[u8], value: &[u8]) -> Option<String> {
-    let key = std::str::from_utf8(key).ok()?;
-    if key.contains("/revision/") {
-        return ciborium::from_reader::<NoteRevision, _>(value)
-            .ok()
-            .map(|record| record.author_id.to_string());
+impl RecordWorkspace for IrohWorkspace {
+    fn record_actor_id(&self) -> ActorId {
+        self.author_id()
     }
-    if key.contains("/head/") {
-        return ciborium::from_reader::<Head, _>(value)
-            .ok()
-            .map(|record| record.author_id.to_string());
+
+    async fn put_record(
+        &self,
+        key: impl Into<Vec<u8>> + Send,
+        value: impl Into<Vec<u8>> + Send,
+    ) -> Result<String> {
+        self.put(key, value).await
     }
-    if key.starts_with("config/") {
-        return ciborium::from_reader::<ConfigRevision, _>(value)
-            .ok()
-            .map(|record| record.author_id.to_string());
+
+    async fn put_blob_record(
+        &self,
+        key: impl Into<Vec<u8>> + Send,
+        value: impl Into<Vec<u8>> + Send,
+    ) -> Result<String> {
+        self.put_blob(key, value).await
     }
-    if key.starts_with("tombstone/") {
-        return ciborium::from_reader::<Tombstone, _>(value)
-            .ok()
-            .map(|record| record.author_id.to_string());
+
+    async fn get_record(&self, key: impl AsRef<[u8]> + Send) -> Result<Option<Vec<u8>>> {
+        self.get(key).await
     }
-    if key.starts_with("device/") {
-        return ciborium::from_reader::<DeviceRecord, _>(value)
-            .ok()
-            .map(|record| {
-                record
-                    .retired_at
-                    .as_ref()
-                    .map_or(record.author_id.clone(), |cutoff| cutoff.actor_id.clone())
-                    .to_string()
-            });
+
+    async fn get_signed_record(
+        &self,
+        key: impl AsRef<[u8]> + Send,
+    ) -> Result<Option<SignedWorkspaceValue>> {
+        self.get_signed(key).await
     }
-    None
+
+    async fn list_records(
+        &self,
+        prefix: impl AsRef<[u8]> + Send,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        self.list(prefix).await
+    }
+
+    async fn list_signed_records(
+        &self,
+        prefix: impl AsRef<[u8]> + Send,
+    ) -> Result<Vec<SignedWorkspaceValue>> {
+        self.list_signed(prefix).await
+    }
 }

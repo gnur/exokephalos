@@ -58,7 +58,7 @@ tempfile = "3.20.0"
 thiserror = "2.0.12"
 time = { version = "0.3.41", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1.46.1", features = ["io-std", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-tungstenite = "0.28.0"
+tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"] }
 tower-lsp = "0.20.0"
 url = "2.5.4"
 wasm-bindgen = "0.2.105"

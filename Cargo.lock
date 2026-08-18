@@ -4270,12 +4270,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "qrcode"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
-
-[[package]]
 name = "quick-xml"
 version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7210,7 +7204,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "automerge",
- "base64",
+ "blake3",
  "clap",
  "crossterm",
  "dom_smoothie",
@@ -7218,8 +7212,8 @@ dependencies = [
  "futures-lite",
  "futures-util",
  "hostname",
- "qrcode",
  "quick_html2md",
+ "rand 0.9.5",
  "ratatui",
  "reqwest 0.13.4",
  "rpassword",

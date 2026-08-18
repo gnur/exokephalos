@@ -706,7 +706,7 @@ fn asset_mime(path: &Path) -> &'static str {
 }
 
 async fn verify_roundtrip(
-    records: &WorkspaceRecords<'_>,
+    records: &WorkspaceRecords<'_, xo_core::iroh_node::IrohWorkspace>,
     expected_notes: &[Note],
     expected_assets: &[ProjectedAsset],
     expected_configs: &[SourceConfig],

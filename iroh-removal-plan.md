@@ -78,15 +78,15 @@ may transfer the complete Automerge history through normal Automerge sync messag
 
 ## Phase 2: native client
 
-- [ ] Add `xo --server http[s]://host[:port]` and derive `ws[s]://.../api/sync`.
-- [ ] Remove `--ticket`, workspace invitations, and pairing commands.
-- [ ] Replace `IrohNode`/`IrohWorkspace` with a transport-neutral local Automerge
+- [x] Add `xo --server http[s]://host[:port]` and derive `ws[s]://.../api/sync`.
+- [x] Remove `--ticket`, workspace invitations, and pairing commands.
+- [x] Replace `IrohNode`/`IrohWorkspace` with a transport-neutral local Automerge
   workspace and WebSocket synchronization task.
-- [ ] Keep native snapshot durability and the single-process state lock.
-- [ ] Reconnect automatically and synchronize offline edits in both directions.
-- [ ] Replace membership management with a connected-clients view.
-- [ ] Keep `open_peers` and show client ID, connection status, and last observation;
-  remove approve, reject, remove, and retire-membership actions.
+- [x] Keep native snapshot durability and the single-process state lock.
+- [x] Reconnect automatically and synchronize offline edits in both directions.
+- [x] Replace membership management with a connected-clients view.
+- [x] Keep `open_peers` and show connected client IDs; remove approve, reject, remove,
+  retire-membership, invitation, and pairing actions.
 - [ ] Update footer/status language from relay/peer terminology to server sync.
 - [ ] Update `xo-admin` or remove commands made obsolete by the HTTP API.
 
@@ -108,6 +108,11 @@ may transfer the complete Automerge history through normal Automerge sync messag
 
 - [ ] Make the PWA build reproducible before `xo-syncd` embedding.
 - [ ] Embed hashed assets, `index.html`, manifest, icons, service worker, and installer.
+- [ ] Remove the standalone Cloudflare Pages deployment and its workflow after
+  `xo-syncd` serves the embedded PWA; production web traffic must terminate at the
+  proxy in front of `xo-syncd`, not at a separately deployed static origin.
+- [ ] Remove Cloudflare-specific deployment secrets, health checks, documentation,
+  and release dependencies.
 - [ ] Serve SPA fallbacks without shadowing `/api/*` or `/healthz`.
 - [ ] Set immutable caching for hashed assets and no-cache headers for HTML, manifest,
   service worker, and version metadata.

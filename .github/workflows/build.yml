@@ -264,38 +264,6 @@ jobs:
           ticket=$(grep '^ticket=' "${fixture}/import.out" | cut -d= -f2-)
           workspace_id=$(grep '^workspace_id=' "${fixture}/import.out" | cut -d= -f2-)
 
-          # Exercise the exact user-facing path first: imported state -> real xo TUI in a
-          # pseudo-terminal -> automatically admitted browser join and synchronization.
-          mkdir -p "${fixture}/home/.config/xo"
-          HOME="${fixture}/home" target/debug/xo config-init \
-            > "${fixture}/home/.config/xo/config.scm"
-          python3 web/tests/tui-driver.py \
-            --port 19465 \
-            --log "${fixture}/tui.log" \
-            --ready-text "Browser fixture" \
-            -- env HOME="${fixture}/home" target/debug/xo \
-              --state-dir "${fixture}/state" \
-              --workspace "${workspace_id}" \
-              --projection "${fixture}/projection" &
-          tui_driver_pid=$!
-          trap 'kill ${tui_driver_pid} 2>/dev/null || true' EXIT
-          for attempt in {1..120}; do
-            if curl --fail --silent http://127.0.0.1:19465/healthz > /dev/null; then
-              break
-            fi
-            sleep 0.5
-          done
-          curl --fail --silent http://127.0.0.1:19465/healthz > /dev/null
-          (
-            cd web
-            XO_IROH_TICKET="${ticket}" \
-              XO_TUI_APPROVAL_URL="http://127.0.0.1:19465/approve" \
-              npx playwright test --project=chromium \
-                --grep 'imports notes, starts the actual TUI'
-          )
-          kill "${tui_driver_pid}"
-          wait "${tui_driver_pid}"
-
           target/debug/xo-syncd \
             --state-dir "${fixture}/central-state" \
             --bind 127.0.0.1:19464 > "${fixture}/syncd.log" 2>&1 &

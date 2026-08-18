@@ -6,7 +6,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub const ACTION_NAMES: &[&str] = &[
     "action_picker",
-    "approve_peer",
     "create_encrypted_item",
     "create_item",
     "clear_search",
@@ -26,18 +25,13 @@ pub const ACTION_NAMES: &[&str] = &[
     "open_item_actions",
     "open_peers",
     "open_search",
-    "open_server_setup",
     "open_sync_status",
     "open_view_picker",
     "quit",
     "refresh_sync",
-    "reject_peer",
-    "remove_peer",
-    "retire_device",
     "restore_item",
     "retry_operation",
     "reverse_sort",
-    "setup_mobile_client",
     "toggle_tag",
     "toggle_tags_column",
     "unlock_preview",
@@ -190,9 +184,6 @@ pub const DEFAULT_KEYS: &str = r#"; Hot-reloaded xo TUI bindings.
   (bind "d" delete_item)
   (bind "g" open_view_picker)
   (bind ":" action_picker)
-  (bind "a" approve_peer)
-  (bind "r" reject_peer)
-  (bind "x" remove_peer)
   (bind "c" create_item)
   (bind "C" create_encrypted_item)
   (bind "u" restore_item)

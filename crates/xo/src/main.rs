@@ -5,7 +5,6 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use app::{App, Mode, external_edit_with, external_edit_with_suffix, render, required_frontmatter};
-use base64::Engine as _;
 use clap::{Parser, Subcommand};
 use crossterm::event::{
     DisableBracketedPaste, EnableBracketedPaste, Event, EventStream, KeyCode, KeyEventKind,
@@ -20,12 +19,11 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use time::OffsetDateTime;
 use xo::config::{CliOverrides, XoConfig, config_path, home_dir};
-use xo::session::WorkspaceSession;
+use xo::session::{WorkspaceEvent, WorkspaceSession};
 use xo::steel_plugin::{PluginChoice, execute as execute_steel_plugin};
 use xo::url_capture::{UrlCaptureService, captured_note};
 use xo_core::behavior::ActionPlugin;
 use xo_core::domain::{Frontmatter, FrontmatterValue};
-use xo_core::iroh_node::WorkspaceEvent;
 use xo_core::{Note, NoteId};
 use zeroize::Zeroizing;
 
@@ -36,18 +34,15 @@ use zeroize::Zeroizing;
     about = "Offline-first personal knowledge workspace"
 )]
 struct Cli {
-    /// Override the persistent Iroh state directory from config.scm.
+    /// Override the durable local replica directory from config.scm.
     #[arg(long)]
     state_dir: Option<PathBuf>,
     /// Override the required human-readable peer ID (defaults to the host name).
     #[arg(long)]
     peer_id: Option<String>,
-    /// Override the workspace ID from config.scm.
-    #[arg(long, conflicts_with = "ticket")]
-    workspace: Option<String>,
-    /// Import/connect a ticket instead of opening the configured workspace.
-    #[arg(long, conflicts_with = "workspace")]
-    ticket: Option<String>,
+    /// Central xo-syncd HTTP(S) base URL.
+    #[arg(long, default_value = "http://127.0.0.1:9464")]
+    server: String,
     /// Override the local Markdown projection directory from config.scm.
     #[arg(long)]
     projection: Option<PathBuf>,
@@ -112,10 +107,9 @@ async fn main() -> Result<()> {
             item_type,
         }) => {
             let config = configured(&cli)?;
-            let session = WorkspaceSession::open_with_peer(
+            let session = WorkspaceSession::open_central(
                 &config.state_dir,
-                config.workspace.as_deref(),
-                cli.ticket.as_deref(),
+                &cli.server,
                 config.projection.clone(),
                 config.resolved_peer_id()?,
             )
@@ -138,10 +132,9 @@ async fn main() -> Result<()> {
                 _ => anyhow::bail!("unknown bundled plugin {name:?}"),
             };
             let config = configured(&cli)?;
-            let mut session = WorkspaceSession::open_with_peer(
+            let mut session = WorkspaceSession::open_central(
                 &config.state_dir,
-                config.workspace.as_deref(),
-                cli.ticket.as_deref(),
+                &cli.server,
                 config.projection.clone(),
                 config.resolved_peer_id()?,
             )
@@ -157,10 +150,8 @@ async fn main() -> Result<()> {
             let config = configured(&cli)?;
             run_tui(
                 &config.state_dir,
-                config.workspace.as_deref(),
-                cli.ticket.as_deref(),
+                &cli.server,
                 config.projection.clone(),
-                &config.pwa_url,
                 &config_path(&home_dir()?).with_file_name("keys.scm"),
                 config.resolved_peer_id()?,
             )
@@ -172,10 +163,9 @@ async fn main() -> Result<()> {
 
 async fn import_command(cli: &Cli, source: &std::path::Path, item_type: &str) -> Result<()> {
     let config = configured(cli)?;
-    let mut session = WorkspaceSession::open_with_peer(
+    let mut session = WorkspaceSession::open_central(
         &config.state_dir,
-        config.workspace.as_deref(),
-        cli.ticket.as_deref(),
+        &cli.server,
         config.projection.clone(),
         config.resolved_peer_id()?,
     )
@@ -205,7 +195,7 @@ async fn import_command(cli: &Cli, source: &std::path::Path, item_type: &str) ->
                     eprintln!();
                     progress_line = false;
                 }
-                eprintln!("Finalizing projection and durable Iroh state...");
+                eprintln!("Finalizing projection and durable local replica...");
             }
         },
     )
@@ -227,7 +217,6 @@ fn configured(cli: &Cli) -> Result<XoConfig> {
         CliOverrides {
             state_dir: cli.state_dir.clone(),
             peer_id: cli.peer_id.clone(),
-            workspace: cli.workspace.clone(),
             projection: cli.projection.clone(),
         },
         &home,
@@ -238,21 +227,18 @@ fn configured(cli: &Cli) -> Result<XoConfig> {
 
 async fn run_tui(
     state_dir: &std::path::Path,
-    workspace: Option<&str>,
-    ticket: Option<&str>,
+    server: &str,
     projection: PathBuf,
-    pwa_url: &str,
     keys_path: &std::path::Path,
     peer_id: xo_core::PeerId,
 ) -> Result<()> {
     let mut session =
-        WorkspaceSession::open_with_peer(state_dir, workspace, ticket, projection, peer_id).await?;
-    let workspace_events = session.subscribe().await?;
+        WorkspaceSession::open_central(state_dir, server, projection, peer_id).await?;
+    let workspace_events = session.subscribe()?;
     let behavior = session.behavior().await?;
     let snapshot = session.snapshot().await?;
     let mut app = App::new(behavior, snapshot.notes.clone());
     app.workspace_id = session.workspace_id();
-    pwa_url.clone_into(&mut app.pwa_url);
     let (keymap, keys_source) = xo::keymap::KeyMap::load_or_create(keys_path)?;
     app.keymap = keymap;
     hydrate(&mut app, &session, snapshot).await?;
@@ -309,7 +295,6 @@ async fn hydrate(
         .collect();
     app.devices = snapshot.devices;
     app.members = session.members().await;
-    app.pending_members = session.pending_membership_requests().await;
     app.self_fingerprint = session.membership_fingerprint();
     app.diagnostics = snapshot.diagnostics;
     app.operations = session.sync_state.ready()?;
@@ -725,55 +710,6 @@ async fn event_loop(
                 }
                 _ => {}
             },
-            Mode::MobilePairing => match key.code {
-                KeyCode::Esc | KeyCode::Enter => app.cancel_mobile_pairing(),
-                KeyCode::Char('c') => {
-                    if let Some(pairing) = &app.mobile_pairing {
-                        let link = pairing.setup_url.clone();
-                        match copy_to_clipboard(terminal, &link) {
-                            Ok(()) => app.message = "mobile setup link copied".into(),
-                            Err(error) => {
-                                app.message = format!("could not copy setup link: {error}");
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            },
-            Mode::Pairing => match key.code {
-                KeyCode::Esc | KeyCode::Enter => app.cancel_server_pairing(),
-                KeyCode::F(2) => {
-                    if let Some(pairing) = &mut app.pairing {
-                        pairing.reveal_ticket = !pairing.reveal_ticket;
-                    }
-                }
-                KeyCode::Char('c') => {
-                    if let Some(invitation) = app.pairing_invitation() {
-                        match copy_to_clipboard(terminal, &invitation) {
-                            Ok(()) => app.message = "writable ticket copied".into(),
-                            Err(error) => {
-                                if let Some(pairing) = &mut app.pairing {
-                                    pairing.error = format!("could not copy ticket: {error}");
-                                }
-                            }
-                        }
-                    }
-                }
-                KeyCode::Char('U') => {
-                    if let Some(command) = app.user_syncd_command() {
-                        match copy_to_clipboard(terminal, &command) {
-                            Ok(()) => app.message = "user-unit installer command copied".into(),
-                            Err(error) => {
-                                if let Some(pairing) = &mut app.pairing {
-                                    pairing.error =
-                                        format!("could not copy installer command: {error}");
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            },
             Mode::Devices if key.code == KeyCode::Esc => {
                 app.mode = Mode::Normal;
                 app.message.clear();
@@ -807,7 +743,7 @@ async fn dispatch_action(
     match action.name.as_str() {
         "quit" => return Ok(true),
         "cursor_down" if app.mode == Mode::Devices => {
-            let count = app.pending_members.len() + app.members.len();
+            let count = app.members.len();
             if count > 0 {
                 app.selected = (app.selected + 1).min(count - 1);
             }
@@ -910,19 +846,6 @@ async fn dispatch_action(
             refresh_workspace(app, session).await?;
             app.message = "workspace configuration updated".into();
         }
-        "setup_mobile_client" => match session.writable_invitation().await {
-            Ok(ticket) => {
-                let ticket = Zeroizing::new(ticket);
-                if let Err(error) = app.start_mobile_pairing(&ticket) {
-                    app.message = format!("could not create mobile setup: {error:#}");
-                }
-            }
-            Err(error) => app.message = format!("could not create invitation: {error:#}"),
-        },
-        "open_server_setup" => match session.writable_invitation().await {
-            Ok(invitation) => app.start_server_pairing(invitation),
-            Err(error) => app.message = format!("could not create invitation: {error:#}"),
-        },
         "open_sync_status" => {
             app.mode = Mode::Sync;
             app.message = sync_summary(app);
@@ -935,43 +858,6 @@ async fn dispatch_action(
             app.selected = 0;
             app.mode = Mode::Devices;
             app.message = device_summary(app);
-        }
-        "approve_peer" if app.mode == Mode::Devices && app.selected < app.pending_members.len() => {
-            let request = app.pending_members[app.selected].clone();
-            session.approve_member(&request.public_key).await?;
-            refresh_workspace(app, session).await?;
-            app.message = format!("approved peer {}", request.peer_id);
-        }
-        "reject_peer" if app.mode == Mode::Devices && app.selected < app.pending_members.len() => {
-            let request = app.pending_members[app.selected].clone();
-            session.reject_member(&request.public_key).await?;
-            refresh_workspace(app, session).await?;
-            app.message = format!("rejected peer {}", request.peer_id);
-        }
-        "remove_peer" if app.mode == Mode::Devices && app.selected >= app.pending_members.len() => {
-            let index = app.selected - app.pending_members.len();
-            if let Some(member) = app.members.get(index).cloned() {
-                if xo_core::membership::public_key_fingerprint(&member.public_key)
-                    == session.membership_fingerprint()
-                {
-                    app.message = "cannot remove the current peer".into();
-                } else {
-                    session.remove_member(&member.public_key).await?;
-                    refresh_workspace(app, session).await?;
-                    app.message = format!("removed peer {}", member.peer_id);
-                }
-            }
-        }
-        "retire_device" => {
-            if let Some(device) = app
-                .devices
-                .iter()
-                .find(|device| device.retired_at.is_none())
-                .cloned()
-            {
-                session.retire_device(device.clone()).await?;
-                app.message = format!("retired device {}", device.endpoint_id);
-            }
         }
         "unlock_preview" => {
             suspend_tui(terminal)?;
@@ -1201,20 +1087,6 @@ fn resume_tui(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<(
     Ok(())
 }
 
-fn copy_to_clipboard(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    value: &str,
-) -> Result<()> {
-    let encoded = Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(value));
-    write!(
-        terminal.backend_mut(),
-        "\u{1b}]52;c;{}\u{7}",
-        encoded.as_str()
-    )?;
-    terminal.backend_mut().flush()?;
-    Ok(())
-}
-
 fn conflict_summary(app: &App) -> String {
     if app.conflicts.is_empty() {
         "no conflicts".into()
@@ -1240,18 +1112,15 @@ fn conflict_summary(app: &App) -> String {
     }
 }
 fn device_summary(app: &App) -> String {
-    app.devices
-        .iter()
-        .map(|value| {
-            format!(
-                "{} {} retired={}",
-                value.label,
-                value.endpoint_id,
-                value.retired_at.is_some()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(" | ")
+    if app.members.is_empty() {
+        "no clients connected".to_owned()
+    } else {
+        app.members
+            .iter()
+            .map(|member| member.peer_id.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
 }
 fn sync_summary(app: &App) -> String {
     format!(
@@ -1294,8 +1163,8 @@ mod cli_tests {
             "xo",
             "--state-dir",
             "/state",
-            "--workspace",
-            "workspace-id",
+            "--server",
+            "https://xo.example.test",
             "--projection",
             "/notes",
         ])
@@ -1304,7 +1173,7 @@ mod cli_tests {
             cli.state_dir.as_deref(),
             Some(std::path::Path::new("/state"))
         );
-        assert_eq!(cli.workspace.as_deref(), Some("workspace-id"));
+        assert_eq!(cli.server, "https://xo.example.test");
         assert_eq!(
             cli.projection.as_deref(),
             Some(std::path::Path::new("/notes"))

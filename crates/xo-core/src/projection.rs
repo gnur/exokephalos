@@ -153,7 +153,7 @@ pub struct ProjectionState {
     root: PathBuf,
     manifest_path: PathBuf,
     asset_manifest_path: PathBuf,
-    #[cfg(feature = "iroh-sync")]
+    #[cfg(feature = "native")]
     config_manifest_path: PathBuf,
     expected_writes: ExpectedWrites,
 }
@@ -166,7 +166,7 @@ impl ProjectionState {
         Ok(Self {
             manifest_path: state_dir.join("projection.json"),
             asset_manifest_path: state_dir.join("assets.json"),
-            #[cfg(feature = "iroh-sync")]
+            #[cfg(feature = "native")]
             config_manifest_path: state_dir.join("configs.json"),
             expected_writes: ExpectedWrites::open(state_dir.join("expected-writes.json"))?,
             root,
@@ -239,7 +239,7 @@ impl ProjectionState {
     }
 
     /// Materialize verified, winning Steel configuration records.
-    #[cfg(feature = "iroh-sync")]
+    #[cfg(feature = "native")]
     pub fn reconcile_configs(
         &self,
         configs: &[crate::records::ProjectedConfig],
@@ -284,7 +284,7 @@ impl ProjectionState {
 
     /// Materialize auxiliary workspace configuration, excluding the main
     /// workspace config which is edited through the TUI.
-    #[cfg(feature = "iroh-sync")]
+    #[cfg(feature = "native")]
     pub fn reconcile_projection_configs(
         &self,
         configs: &[crate::records::ProjectedConfig],
@@ -298,7 +298,7 @@ impl ProjectionState {
     }
 }
 
-#[cfg(feature = "iroh-sync")]
+#[cfg(feature = "native")]
 fn valid_config_path(path: &str) -> bool {
     path == "xo.scm"
         || ((path.starts_with("modules/") || path.starts_with("plugins/"))

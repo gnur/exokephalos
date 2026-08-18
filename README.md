@@ -1,107 +1,70 @@
 # xo
 
-**xo is a local-first knowledge workspace whose replicas synchronize directly
-with one another over an end-to-end encrypted, peer-to-peer Iroh transport.**
-It works without an application server, without a central database, and without
-an online connection. A laptop, phone, browser tab, and always-on machine can
-all be equal workspace peers.
+**xo is an offline-first knowledge workspace backed by Automerge.** Each client
+keeps a durable local replica and can create or edit notes without connectivity.
+All replicas synchronize through one `xo-syncd` server per workspace over the
+shared `/api/sync` WebSocket endpoint.
 
 The project has three clients:
 
-- **`xo`** is a terminal workspace for creating, editing, searching, filtering,
-  and resolving Markdown notes. It maintains a convenient Markdown projection,
-  but the replicated Rust records and immutable revisions are authoritative.
-- **`xo-web`** is an installable, fully client-side PWA. Its Rust/Wasm runtime
-  and Iroh protocols run in a dedicated browser worker; the deployed site is
-  only static HTML, JavaScript, Wasm, and assets. There is no application API or
-  synchronization gateway behind it.
-- **`xo-syncd`** is an optional always-on native peer. It keeps a durable replica
-  available while laptops and phones sleep or disconnect. It is a convenience
-  peer, not a server that owns the workspace or coordinates synchronization.
+- **`xo`** is the terminal workspace and Markdown projection. Connect it with
+  `xo --server https://notes.example.test` (the default is
+  `http://127.0.0.1:9464`).
+- **`xo-web`** is an installable offline-first PWA. During the transport migration
+  its worker is being moved to the same-origin `/api/sync` endpoint.
+- **`xo-syncd`** is the authoritative durable synchronization server. It hosts one
+  workspace and will also serve the embedded PWA and item HTTP API.
 
-## What you can do with xo
+Local writes are durable before the UI acknowledges them. When disconnected,
+clients retain cached notes and pending Automerge changes. Reconnection preserves
+immutable revision history and concurrent conflicts rather than overwriting one
+client with another.
 
-xo is useful as a private notes and knowledge base, but its replicated document
-model also supports workflows such as:
+`xo-syncd` deliberately has no application authentication. Deploy it behind an
+authenticating reverse proxy for browser access. A TUI may connect directly on a
+trusted network. Client IDs are presence labels, not security identities.
 
-- write and read notes entirely offline, then synchronize later;
-- keep a canonical Markdown directory on one or more native machines;
-- use the TUI, a browser, and a phone against the same workspace;
-- run a home server or workstation as an always-on `xo-syncd` peer;
-- edit concurrently on disconnected devices and retain every branch until a
-  user resolves the conflict;
-- organize notes with tags, declarative views, subviews, predicates, sorting,
-  and Rust-evaluated search;
-- create plaintext or passphrase-encrypted notes, with ciphertext authenticated
-  to its note identity and replicated without exposing the plaintext;
-- import an existing Markdown tree, export a workspace, or use `xo-lsp` for
-  diagnostics and note/tag completion in an editor;
-- capture readable web pages into notes through capability-gated actions; and
-- extend a workspace with sandboxed Steel modules and plugins, including the
-  bundled Hardcover book-search workflow.
+Start a server and TUI with:
 
-The same data can therefore support a solo offline workflow, a multi-device
-mesh, a TUI-first setup with a headless replica, or a browser-first workflow.
-Choose the peers that should be online; no peer is required to remain online for
-local work.
+```console
+xo-syncd --state-dir /var/lib/xo-syncd --bind 127.0.0.1:9464
+xo --server http://127.0.0.1:9464
+```
 
-## P2P and end-to-end encrypted transport
+The Markdown directory remains a projection rather than the synchronization
+transport or a complete backup. Keep the local state directory and server state
+in normal backup procedures.
 
-Workspace synchronization is **peer-to-peer**. Iroh attempts direct paths
-between known endpoints and can use a relay only when the peers cannot connect
-directly. A relay forwards encrypted traffic; it is not an xo application
-server, does not host workspace APIs, and is not a database or lock manager.
-Native and browser peers use the same Automerge and authenticated Iroh QUIC
-protocols, so a browser synchronizes with native peers without a gateway.
-
-The synchronized content travels over Iroh's end-to-end encrypted connections.
-Relays provide connectivity but cannot read or resolve notes. Invitations carry
-discovery information only: an invitation peer validates a new Ed25519
-membership key and records its signed approval automatically. Every Automerge
-change is signed, and
-removed keys are permanently denied after their accepted causal frontier.
-Read-only membership and bearer write capabilities are intentionally unsupported.
-
-xo-syncd does not weaken this model. It is simply another authenticated replica
-in the mesh. A browser can sync directly with it, two native clients can sync
-with each other, and automatic peer discovery can form a full mesh as peers
-learn about one another. When a device reconnects, immutable revisions and
-Automerge records converge without requiring a central coordinator.
-
-The Markdown directory is a **projection**, not the transport or complete
-backup. Records, revision history, membership identities, and signed Automerge changes
-live in the local state directory. Keep both the projection and state directory.
+The Iroh removal is intentionally breaking and still in progress. See
+[`iroh-removal-plan.md`](iroh-removal-plan.md) for completed and remaining work.
 
 ## Example workflows
 
 ### 1. Private offline notebook
 
-Install `xo`, run `xo config-init`, and start the TUI. Create and edit notes in
-`~/notes` while offline. Each save creates an immutable revision locally. When a
-peer becomes reachable, the revisions synchronize automatically.
+Connect `xo` to the workspace server once, then create and edit notes in
+`~/notes` with or without connectivity. Each save creates an immutable local
+revision; pending changes synchronize automatically when `xo-syncd` is reachable.
 
 ### 2. Browser and phone companion
 
-Create a writable invitation in the TUI and scan its QR code with the PWA. The
-capability is carried in the URL fragment, never sent in the HTTP request, and
-is removed from the address bar after import. The browser stores its encrypted
-identity in IndexedDB and can continue creating and editing notes offline. It
-can later synchronize through an available native peer or another browser peer.
+Open the PWA served by the proxy in front of `xo-syncd`. The browser keeps its
+Automerge replica in IndexedDB, renders cached notes immediately, and continues
+creating and editing while offline. It reconnects to the same-origin
+`/api/sync` endpoint when connectivity returns.
 
-### 3. Always-on home or server peer
+### 3. Always-on home or server
 
-Run `xo-syncd` on a workstation, NAS, VPS, or small home server. Pair it once
-with the TUI, then let laptops and phones come and go. The daemon holds a
-persistent replica and resumes synchronization after restart; its loopback
-operator page is only for administration and setup, not workspace transport.
+Run `xo-syncd` on a workstation, NAS, VPS, or small home server and put an
+authenticating HTTPS reverse proxy in front of it. TUI clients use `--server`;
+browsers use the same origin. No invitation or membership setup is required.
 
 ### 4. Multi-device offline collaboration
 
-Give each device its own state directory and peer identity. Two people—or two
-of your own devices—can edit while disconnected. xo keeps concurrent revisions
-and deterministically selects a visible winner without deleting the other
-branch. Edit the note once with the desired content to create a descendant of
-all branches and clear the conflict on every peer.
+Give each device its own state directory and client ID. Two clients can edit
+while disconnected. xo keeps concurrent revisions and deterministically selects
+a visible winner without deleting the other branch. Reconnect both through the
+server, then edit the desired content to create a descendant of all branches.
 
 ### 5. Structured knowledge workflows
 
@@ -134,7 +97,7 @@ The resulting programs are:
 
 - `target/release/xo` — the terminal UI
 - `target/release/xo-admin` — offline workspace administration
-- `target/release/xo-syncd` — the persistent synchronization peer
+- `target/release/xo-syncd` — the centralized synchronization and web server
 
 The examples below assume those binaries have been copied somewhere in
 `PATH`.
@@ -219,16 +182,6 @@ being unsafely re-authored and refresh from peers in the background.
 Settings includes **Wipe all browser data** for removing the encrypted identity,
 workspace capability, document cache, pending writes, service worker, and offline
 files. A new invitation is required afterward.
-
-To use another PWA deployment, set its absolute HTTPS URL in
-`~/.config/xo/config.scm`:
-
-```scheme
-(pwa-url "https://notes.example.test/")
-```
-
-The configured value must be an HTTPS origin without credentials, a path,
-query parameters, or a fragment.
 
 Build the Wasm package and static application locally with:
 
@@ -362,9 +315,7 @@ Markdown into `~/notes`; TUI bindings are generated separately in `keys.scm`:
 (xo-config
   (schema 3)
   (state-dir "~/.local/share/xo")
-  (workspace #f)
-  (projection "~/notes")
-  (pwa-url "https://xo.exokephalos.dev/"))
+  (projection "~/notes"))
 ```
 
 On this first launch, xo creates separate membership and Iroh identities plus a
@@ -586,9 +537,7 @@ and `~/notes` for the Markdown projection. TUI bindings live in `keys.scm`:
 (xo-config
   (schema 3)
   (state-dir "~/.local/share/xo")
-  (workspace #f)
-  (projection "~/notes")
-  (pwa-url "https://xo.exokephalos.dev/"))
+  (projection "~/notes"))
 ```
 
 ### Join with a writable invitation
@@ -659,7 +608,6 @@ for example, `:q` runs `quit`, while `:p` opens peer management.
 | Action | Alias | Arguments | Effect |
 | --- | --- | --- | --- |
 | `action_picker` | — | — | Open the action picker. |
-| `approve_peer` | — | — | Approve the highlighted pending peer. |
 | `clear_search` | — | — | Clear the title search and return to normal mode. |
 | `create_encrypted_item` | — | — | Create an encrypted note. |
 | `create_item` | `c` | — | Create a plaintext note. |
@@ -677,20 +625,15 @@ for example, `:q` runs `quit`, while `:p` opens peer management.
 | `open_devices` | — | — | Show workspace clients and membership controls. |
 | `open_goto` | — | — | Open the view/subview path prompt. |
 | `open_item_actions` | — | — | Show configured actions for the selected item. |
-| `open_peers` | `p` | — | Open the peer and device management view. |
+| `open_peers` | `p` | — | Show clients currently connected to xo-syncd. |
 | `open_search` | — | — | Edit the title search filter. |
-| `open_server_setup` | — | — | Open server pairing and installation setup. |
 | `open_sync_status` | — | — | Show synchronization status. |
 | `open_view_picker` | `g` | — | Open the top-level view picker. |
 | `quit` | `q` | — | Exit xo. |
 | `refresh_sync` | — | — | Refresh and retry synchronization. |
-| `reject_peer` | — | — | Reject the highlighted pending peer. |
-| `remove_peer` | — | — | Remove the highlighted active peer. |
 | `restore_item` | `u` | — | Restore the most recently deleted note. |
-| `retire_device` | — | — | Retire the highlighted device. |
 | `retry_operation` | — | — | Retry the first failed synchronization operation. |
 | `reverse_sort` | — | — | Reverse the current note sort order. |
-| `setup_mobile_client` | — | — | Open mobile-client pairing. |
 | `toggle_tag` | — | — | Toggle the highlighted tag filter. |
 | `toggle_tags_column` | — | — | Show or hide the tag column. |
 | `unlock_preview` | — | — | Unlock the selected encrypted note preview. |

@@ -4,8 +4,6 @@ use std::io::Write;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use qrcode::render::unicode::Dense1x2;
-use qrcode::{EcLevel, QrCode};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -18,7 +16,6 @@ use xo_core::behavior::{Query, WorkspaceBehavior};
 use xo_core::domain::{DeviceRecord, Frontmatter, FrontmatterValue};
 use xo_core::encryption;
 use xo_core::membership::Member;
-use xo_core::peer_protocol::JoinRequest;
 use xo_core::projection::Diagnostic;
 use xo_core::sync_state::{DurableOperation, SyncStatus};
 use xo_core::{Conflict, Note, NoteId, NoteRevision, RevisionId};
@@ -47,20 +44,6 @@ pub enum Mode {
     Conflicts,
     Devices,
     Sync,
-    Pairing,
-    MobilePairing,
-}
-
-pub struct ServerPairing {
-    pub invitation: Zeroizing<String>,
-    pub reveal_ticket: bool,
-    pub error: String,
-}
-
-pub struct MobilePairing {
-    pub setup_url: Zeroizing<String>,
-    pub qr: Zeroizing<String>,
-    pub host: String,
 }
 
 pub struct App {
@@ -72,7 +55,6 @@ pub struct App {
     pub conflict_history: BTreeMap<NoteId, Vec<(RevisionId, NoteRevision)>>,
     pub devices: Vec<DeviceRecord>,
     pub members: Vec<Member>,
-    pub pending_members: Vec<JoinRequest>,
     pub self_fingerprint: String,
     pub diagnostics: Vec<Diagnostic>,
     pub operations: Vec<DurableOperation>,
@@ -99,9 +81,6 @@ pub struct App {
     pub goto_input: String,
     pub goto_index: usize,
     pub message: String,
-    pub pwa_url: String,
-    pub pairing: Option<ServerPairing>,
-    pub mobile_pairing: Option<MobilePairing>,
     pub decrypted_preview: Option<Zeroizing<String>>,
     sort_descending: bool,
 }
@@ -123,7 +102,6 @@ impl App {
             conflict_history: BTreeMap::new(),
             devices: vec![],
             members: vec![],
-            pending_members: vec![],
             self_fingerprint: String::new(),
             diagnostics: vec![],
             operations: vec![],
@@ -150,9 +128,6 @@ impl App {
             goto_input: String::new(),
             goto_index: 0,
             message: String::new(),
-            pwa_url: "https://xo.exokephalos.dev/".to_owned(),
-            pairing: None,
-            mobile_pairing: None,
             decrypted_preview: None,
             sort_descending: false,
         }
@@ -648,86 +623,6 @@ impl App {
         self.replace_selected(frontmatter, encrypted)
             .context("selected note disappeared")
     }
-
-    pub fn start_mobile_pairing(&mut self, ticket: &str) -> Result<()> {
-        let setup_url = mobile_setup_url(&self.pwa_url, ticket)?;
-        let code = QrCode::with_error_correction_level(setup_url.as_bytes(), EcLevel::L)
-            .context("encode mobile setup QR code")?;
-        let qr = code.render::<Dense1x2>().build();
-        let host = url::Url::parse(&self.pwa_url)?
-            .host_str()
-            .context("pwa-url has no host")?
-            .to_owned();
-        self.mobile_pairing = Some(MobilePairing {
-            setup_url,
-            qr: Zeroizing::new(qr),
-            host,
-        });
-        self.mode = Mode::MobilePairing;
-        Ok(())
-    }
-
-    pub fn cancel_mobile_pairing(&mut self) {
-        self.mobile_pairing = None;
-        self.mode = Mode::Normal;
-    }
-
-    pub fn start_server_pairing(&mut self, invitation: String) {
-        self.pairing = Some(ServerPairing {
-            invitation: Zeroizing::new(invitation),
-            reveal_ticket: false,
-            error: String::new(),
-        });
-        self.mode = Mode::Pairing;
-    }
-
-    pub fn cancel_server_pairing(&mut self) {
-        self.pairing = None;
-        self.mode = Mode::Normal;
-    }
-
-    pub fn user_syncd_command(&self) -> Option<Zeroizing<String>> {
-        let ticket = self.pairing.as_ref()?.invitation.as_str();
-        Some(Zeroizing::new(user_syncd_install_command(
-            &self.workspace_id,
-            ticket,
-        )))
-    }
-
-    pub fn pairing_invitation(&self) -> Option<Zeroizing<String>> {
-        Some(self.pairing.as_ref()?.invitation.clone())
-    }
-}
-
-pub fn mobile_setup_url(base: &str, ticket: &str) -> Result<Zeroizing<String>> {
-    let mut url = url::Url::parse(base).context("parse pwa-url")?;
-    if url.scheme() != "https"
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.path() != "/"
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        bail!("pwa-url must be an HTTPS origin");
-    }
-    let fragment = url::form_urlencoded::Serializer::new(String::new())
-        .append_pair("ticket", ticket)
-        .finish();
-    url.set_fragment(Some(&fragment));
-    Ok(Zeroizing::new(url.to_string()))
-}
-
-pub fn user_syncd_install_command(workspace_id: &str, ticket: &str) -> String {
-    format!(
-        "curl -fsSL https://xo.exokephalos.dev/install.sh | XO_WORKSPACE_ID={} XO_SYNC_TICKET={} bash",
-        shell_quote(workspace_id),
-        shell_quote(ticket)
-    )
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -934,7 +829,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         .map_or(app.active_view.as_str(), |view| view.name.as_str());
     let subviews = app.subview_header();
     let header = if app.mode == Mode::Devices {
-        format!("xo {} · Devices and peers", xo_core::version::VERSION)
+        format!("xo {} · Connected clients", xo_core::version::VERSION)
     } else if subviews.is_empty() {
         format!("xo {} · {}", xo_core::version::VERSION, view_name)
     } else {
@@ -956,12 +851,9 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     let key = |action: &str| app.keymap.footer_key(action);
     let mut footer = if app.mode == Mode::Devices {
         format!(
-            "[{}/{}] select · [{}] approve · [{}] reject · [{}] remove · [Esc] close",
+            "[{}/{}] select · connected clients are managed by xo-syncd · [Esc] close",
             key("cursor_down"),
-            key("cursor_up"),
-            key("approve_peer"),
-            key("reject_peer"),
-            key("remove_peer")
+            key("cursor_up")
         )
     } else {
         format!(
@@ -1118,14 +1010,6 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         );
     }
     let content_area = vertical[usize::from(has_input) + 1];
-    if app.mode == Mode::Pairing {
-        render_pairing(frame, app, content_area);
-        return;
-    }
-    if app.mode == Mode::MobilePairing {
-        render_mobile_pairing(frame, app, content_area);
-        return;
-    }
     if app.mode == Mode::Devices {
         render_devices(frame, app, content_area);
         return;
@@ -1391,22 +1275,6 @@ fn render_devices(frame: &mut Frame<'_>, app: &App, area: Rect) {
         }
         items.push(ListItem::new(""));
     };
-    let pending_len = app.pending_members.len();
-    section(
-        "PENDING APPROVAL",
-        app.pending_members
-            .iter()
-            .enumerate()
-            .map(|(index, request)| {
-                (
-                    index,
-                    request.peer_id.to_string(),
-                    xo_core::membership::public_key_fingerprint(&request.public_key),
-                    request.endpoint_id.to_string(),
-                )
-            })
-            .collect(),
-    );
     let member_rows = |wanted: fn(&Member, &str) -> bool| {
         app.members
             .iter()
@@ -1414,7 +1282,7 @@ fn render_devices(frame: &mut Frame<'_>, app: &App, area: Rect) {
             .filter(|(_, member)| wanted(member, &app.self_fingerprint))
             .map(|(index, member)| {
                 (
-                    pending_len + index,
+                    index,
                     member.peer_id.to_string(),
                     xo_core::membership::public_key_fingerprint(&member.public_key),
                     member
@@ -1440,118 +1308,13 @@ fn render_devices(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 && xo_core::membership::public_key_fingerprint(&member.public_key) != own
         }),
     );
-    section(
-        "REMOVED CLIENTS",
-        member_rows(|member, _| member.status != xo_core::membership::MemberStatus::Active),
-    );
+
     frame.render_widget(
         List::new(items).block(
             Block::default()
-                .title("Devices and peers")
+                .title("Connected clients")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan)),
-        ),
-        area,
-    );
-}
-
-fn render_mobile_pairing(frame: &mut Frame<'_>, app: &App, area: ratatui::layout::Rect) {
-    let Some(pairing) = &app.mobile_pairing else {
-        return;
-    };
-    let qr_width = pairing
-        .qr
-        .lines()
-        .map(|line| line.chars().count())
-        .max()
-        .unwrap_or_default();
-    let qr_height = pairing.qr.lines().count();
-    let fits = usize::from(area.width.saturating_sub(2)) >= qr_width
-        && usize::from(area.height.saturating_sub(6)) >= qr_height;
-    let mut lines = vec![
-        Line::from(Span::styled(
-            format!(
-                "Scan with your phone to open {} and join this workspace",
-                pairing.host
-            ),
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::raw("The QR contains bootstrap information; new peers still require approval."),
-        Line::raw(""),
-    ];
-    if fits {
-        lines.extend(pairing.qr.lines().map(|line| Line::raw(line.to_owned())));
-    } else {
-        lines.push(Line::raw(format!(
-            "Enlarge the terminal to at least {} columns × {} rows to display the QR code.",
-            qr_width.saturating_add(2),
-            qr_height.saturating_add(10)
-        )));
-    }
-    lines.extend([
-        Line::raw(""),
-        Line::raw("c: copy setup link · Esc/Enter: close"),
-    ]);
-    frame.render_widget(
-        Paragraph::new(Text::from(lines)).block(
-            Block::default()
-                .title("Mobile PWA setup")
-                .borders(Borders::ALL),
-        ),
-        area,
-    );
-}
-
-fn render_pairing(frame: &mut Frame<'_>, app: &App, area: ratatui::layout::Rect) {
-    let Some(pairing) = &app.pairing else {
-        frame.render_widget(
-            Paragraph::new("Pairing state is unavailable.").block(
-                Block::default()
-                    .title("Connect xo-syncd")
-                    .borders(Borders::ALL),
-            ),
-            area,
-        );
-        return;
-    };
-    let error = if pairing.error.is_empty() {
-        String::new()
-    } else {
-        format!("\n\nError: {}", pairing.error)
-    };
-    let invitation = if pairing.reveal_ticket {
-        app.pairing_invitation().unwrap_or_default()
-    } else {
-        Zeroizing::new("<invitation hidden>".to_owned())
-    };
-    let installer_command = if pairing.reveal_ticket {
-        app.user_syncd_command().map_or_else(
-            || "<installer command unavailable>".to_owned(),
-            |value| value.to_string(),
-        )
-    } else {
-        "<show ticket with F2 to reveal installer command>".to_owned()
-    };
-    let text = format!(
-        "Add this workspace to xo-syncd\n\n\
-         Workspace ID: {}\n\
-         Invitation: {}\n\n\
-         User-unit installer: {}\n\n\
-         Run the installer on the daemon host, or enter the workspace ID and invitation at \
-         http://127.0.0.1:9464/setup. A remote operator page can be reached with an SSH \
-         port forward. Approve the daemon's peer ID and fingerprint from this peer.\n\n\
-         c: copy invitation · U: copy user-unit installer · F2: show/hide invitation · \
-         Enter/Esc: close\n\n\
-         Verify the visible peer ID and fingerprint before approval.{error}",
-        app.workspace_id,
-        invitation.as_str(),
-        installer_command
-    );
-    frame.render_widget(
-        Paragraph::new(text).wrap(Wrap { trim: false }).block(
-            Block::default()
-                .title("Connect xo-syncd")
-                .borders(Borders::ALL),
         ),
         area,
     );
@@ -1721,10 +1484,9 @@ mod tests {
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
-        assert!(screen.contains("Devices and peers"));
+        assert!(screen.contains("Connected clients"));
         assert!(screen.contains("THIS TUI"));
         assert!(screen.contains("ACTIVE CLIENTS"));
-        assert!(screen.contains("REMOVED CLIENTS"));
         assert!(screen.contains("PEER ID"));
         assert!(screen.contains("[down/k] select"));
         assert!(!screen.contains("First"));
@@ -1741,10 +1503,6 @@ mod tests {
         )
         .unwrap();
         app.mode = Mode::ActionPicker;
-        assert!(
-            app.matching_tui_actions()
-                .contains(&"setup_mobile_client".to_owned())
-        );
         assert!(
             app.matching_tui_actions()
                 .contains(&"open_sync_status".to_owned())
@@ -1766,73 +1524,6 @@ mod tests {
             .collect::<String>();
         assert!(screen.contains("[;] actions"));
         assert!(screen.contains("edit_workspace_config"), "{screen}");
-    }
-
-    #[test]
-    fn mobile_setup_uses_a_fragment_and_supports_a_custom_host() {
-        let link = mobile_setup_url(
-            "https://notes.example.test/",
-            "writable ticket/with secrets",
-        )
-        .unwrap();
-        let parsed = url::Url::parse(&link).unwrap();
-        assert_eq!(parsed.host_str(), Some("notes.example.test"));
-        assert_eq!(parsed.path(), "/");
-        assert!(parsed.query().is_none());
-        let parameters = url::form_urlencoded::parse(parsed.fragment().unwrap().as_bytes())
-            .collect::<BTreeMap<_, _>>();
-        assert_eq!(
-            parameters.get("ticket").unwrap().as_ref(),
-            "writable ticket/with secrets"
-        );
-
-        let mut app = fixture();
-        app.pwa_url = "https://notes.example.test/".into();
-        app.start_mobile_pairing("writable ticket/with secrets")
-            .unwrap();
-        let mut terminal = Terminal::new(TestBackend::new(160, 60)).unwrap();
-        terminal.draw(|frame| render(frame, &app)).unwrap();
-        let screen = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(ratatui::buffer::Cell::symbol)
-            .collect::<String>();
-        assert!(screen.contains("Mobile PWA setup"));
-        assert!(screen.contains("notes.example.test"));
-        assert!(!screen.contains("writable ticket/with secrets"));
-    }
-
-    #[test]
-    fn server_pairing_builds_a_safe_seeded_installer_command() {
-        assert_eq!(
-            user_syncd_install_command("workspace123", "ticket'with-sensitive-content"),
-            "curl -fsSL https://xo.exokephalos.dev/install.sh | XO_WORKSPACE_ID='workspace123' XO_SYNC_TICKET='ticket'\"'\"'with-sensitive-content' bash"
-        );
-    }
-
-    #[test]
-    fn server_pairing_renders_one_way_setup_without_revealing_the_ticket() {
-        let mut app = fixture();
-        app.workspace_id = "workspace123".into();
-        app.start_server_pairing("client-secret-ticket".into());
-        let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
-        terminal.draw(|frame| render(frame, &app)).unwrap();
-        let screen = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(ratatui::buffer::Cell::symbol)
-            .collect::<String>();
-        assert!(screen.contains("Add this workspace to xo-syncd"));
-        assert!(screen.contains("http://127.0.0.1:9464/setup"));
-        assert!(screen.contains("Workspace ID: workspace123"));
-        assert!(screen.contains("Approve the daemon's peer ID"));
-        assert!(screen.contains("<invitation hidden>"));
-        assert!(!screen.contains("operator.token"));
-        assert!(!screen.contains("client-secret-ticket"));
     }
 
     #[test]

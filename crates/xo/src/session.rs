@@ -9,13 +9,10 @@ use anyhow::{Context, Result};
 use xo_core::behavior::{
     ActionDescriptor, ActionPlugin, Capability, Predicate, WorkspaceBehavior, default_views,
 };
-use xo_core::iroh_node::{IrohNode, IrohWorkspace, WorkspaceEvent};
 use xo_core::projection::ProjectionState;
 use xo_core::records::{WorkspaceRecords, WorkspaceSnapshot};
 use xo_core::sync_state::{Connectivity, SyncStateStore};
-use xo_core::{
-    ActorId, CURRENT_SCHEMA, DeviceRecord, HlcClock, Note, NoteId, NoteRevision, RevisionId,
-};
+use xo_core::{ActorId, CURRENT_SCHEMA, HlcClock, Note, NoteId, NoteRevision, RevisionId};
 
 const ACTIVE_WORKSPACE_FILE: &str = "active-workspace";
 const WORKSPACE_LOCK_FILE: &str = ".xo-workspace.lock";
@@ -50,117 +47,135 @@ impl Drop for WorkspaceLock {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkspaceEvent {
+    ContentChanged,
+    StatusChanged,
+}
+
 pub struct WorkspaceSession {
-    node: IrohNode,
-    workspace: IrohWorkspace,
+    replica: std::sync::Arc<xo_core::central_replica::CentralReplica>,
+    client: Option<crate::central_client::CentralClient>,
+    peer_id: xo_core::PeerId,
     actor: ActorId,
     clock: HlcClock,
     projection: ProjectionState,
     pub sync_state: SyncStateStore,
-    membership: xo_core::MembershipIdentity,
     _lock: WorkspaceLock,
 }
 
 impl WorkspaceSession {
-    pub async fn open(
-        state_dir: &Path,
-        workspace_id: Option<&str>,
-        ticket: Option<&str>,
-        projection: PathBuf,
-    ) -> Result<Self> {
+    pub fn open(state_dir: &Path, workspace_id: Option<&str>, projection: PathBuf) -> Result<Self> {
         let host = hostname::get()
             .context("read system hostname")?
             .into_string()
             .map_err(|_| anyhow::anyhow!("system hostname is not valid UTF-8"))?;
-        let peer_id = xo_core::PeerId::parse(host).context("validate host peer ID")?;
-        Self::open_with_peer(state_dir, workspace_id, ticket, projection, peer_id).await
+        let peer_id = xo_core::PeerId::parse(host).context("validate host client ID")?;
+        let workspace_id = match workspace_id {
+            Some(value) => value.to_owned(),
+            None => read_active_workspace(state_dir)?.unwrap_or_else(local_workspace_id),
+        };
+        Self::build(state_dir, &workspace_id, projection, peer_id, None)
     }
 
-    pub async fn open_with_peer(
+    pub async fn open_central(
         state_dir: &Path,
-        workspace_id: Option<&str>,
-        ticket: Option<&str>,
+        server: &str,
         projection: PathBuf,
         peer_id: xo_core::PeerId,
+    ) -> Result<Self> {
+        let workspace_id = match read_active_workspace(state_dir)? {
+            Some(value) => value,
+            None => {
+                crate::central_client::CentralClient::discover_workspace(server, peer_id.as_str())
+                    .await
+                    .context("discover server workspace")?
+            }
+        };
+        Self::build(state_dir, &workspace_id, projection, peer_id, Some(server))
+    }
+
+    fn build(
+        state_dir: &Path,
+        workspace_id: &str,
+        projection: PathBuf,
+        peer_id: xo_core::PeerId,
+        server: Option<&str>,
     ) -> Result<Self> {
         std::fs::create_dir_all(state_dir)
             .with_context(|| format!("create state directory {}", state_dir.display()))?;
         let lock = WorkspaceLock::acquire(state_dir)?;
-        let membership = xo_core::membership::load_or_create_identity(state_dir, &peer_id)?;
-        let node = IrohNode::persistent_with_peer(state_dir, peer_id).await?;
-        let (workspace, reopened) =
-            select_workspace(&node, state_dir, workspace_id, ticket).await?;
-        if let Some(ticket) = ticket {
-            workspace.start_sync(ticket).await?;
-        } else if reopened {
-            workspace.resume_sync().await?;
-        }
-        let actor = ActorId::new(workspace.author_id().to_string());
-        let clock = HlcClock::new(actor.clone());
-        WorkspaceRecords::new(&workspace)
-            .put_device(&DeviceRecord {
-                schema: CURRENT_SCHEMA,
-                endpoint_id: node.endpoint_id().to_string(),
-                author_id: actor.clone(),
-                label: membership.peer_id().to_string(),
-                capabilities: BTreeSet::from(["write".to_owned(), "tui".to_owned()]),
-                last_seen_ms: Some(now_ms()?),
-                retired_at: None,
+        std::fs::write(state_dir.join(ACTIVE_WORKSPACE_FILE), workspace_id)?;
+        let automerge_actor = load_or_create_actor(state_dir)?;
+        let actor = ActorId::new(blake3::hash(&automerge_actor).to_hex().to_string());
+        let replica = xo_core::central_replica::CentralReplica::open(
+            state_dir,
+            workspace_id,
+            actor.clone(),
+            &automerge_actor,
+        )?;
+        let client = server
+            .map(|server| {
+                crate::central_client::CentralClient::start(
+                    server,
+                    peer_id.to_string(),
+                    std::sync::Arc::clone(&replica),
+                )
             })
-            .await?;
+            .transpose()?;
         let sync_state = SyncStateStore::open(state_dir.join("tui-sync.sqlite"))?;
-        sync_state.set_connectivity(if ticket.is_some() || reopened {
+        sync_state.set_connectivity(if client.is_some() {
             &Connectivity::Connecting
         } else {
             &Connectivity::Offline
         })?;
         Ok(Self {
             projection: ProjectionState::open(projection)?,
-            node,
-            workspace,
+            replica,
+            client,
+            peer_id,
             actor: actor.clone(),
-            clock,
+            clock: HlcClock::new(actor),
             sync_state,
-            membership,
             _lock: lock,
         })
     }
 
     #[must_use]
     pub fn peer_id(&self) -> &xo_core::PeerId {
-        self.membership.peer_id()
+        &self.peer_id
     }
 
     #[must_use]
     pub fn membership_fingerprint(&self) -> String {
-        self.membership.fingerprint()
-    }
-
-    pub async fn pending_membership_requests(&self) -> Vec<xo_core::peer_protocol::JoinRequest> {
-        self.workspace.pending_requests().await
+        xo_core::membership::public_key_fingerprint(
+            blake3::hash(self.peer_id.as_str().as_bytes()).as_bytes(),
+        )
     }
 
     pub async fn members(&self) -> Vec<xo_core::membership::Member> {
-        self.workspace.members().await
-    }
-
-    pub async fn approve_member(&self, public_key: &[u8; 32]) -> Result<()> {
-        self.workspace.approve_peer(public_key).await
-    }
-
-    pub async fn reject_member(&self, public_key: &[u8; 32]) -> Result<()> {
-        self.workspace.reject_peer(public_key).await
-    }
-
-    pub async fn remove_member(&self, public_key: &[u8; 32]) -> Result<()> {
-        self.workspace
-            .remove_peer(public_key, Some("removed from xo TUI".to_owned()))
+        self.replica
+            .connected_clients()
             .await
+            .into_iter()
+            .filter_map(|client| {
+                let peer_id = xo_core::PeerId::parse(&client).ok()?;
+                let public_key = *blake3::hash(client.as_bytes()).as_bytes();
+                Some(xo_core::membership::Member {
+                    peer_id,
+                    public_key,
+                    endpoint_ids: BTreeSet::from(["websocket".to_owned()]),
+                    status: xo_core::membership::MemberStatus::Active,
+                    accepted_actor_sequence: None,
+                    accepted_heads: Vec::new(),
+                })
+            })
+            .collect()
     }
 
     #[must_use]
     pub fn workspace_id(&self) -> String {
-        self.workspace.id().to_string()
+        self.replica.workspace_id().to_owned()
     }
 
     #[must_use]
@@ -169,7 +184,10 @@ impl WorkspaceSession {
     }
 
     pub async fn snapshot(&self) -> Result<WorkspaceSnapshot> {
-        let snapshot = WorkspaceRecords::new(&self.workspace).snapshot().await?;
+        self.update_connectivity()?;
+        let snapshot = WorkspaceRecords::new(self.replica.as_ref())
+            .snapshot()
+            .await?;
         self.projection.reconcile(&snapshot.notes)?;
         self.projection.reconcile_assets(&snapshot.assets)?;
         self.projection
@@ -178,7 +196,7 @@ impl WorkspaceSession {
     }
 
     pub async fn behavior(&mut self) -> Result<WorkspaceBehavior> {
-        let records = WorkspaceRecords::new(&self.workspace);
+        let records = WorkspaceRecords::new(self.replica.as_ref());
         let configs = records.list_configs().await?;
         let mut modules = BTreeMap::new();
         let mut xo_main = None;
@@ -246,7 +264,7 @@ impl WorkspaceSession {
     }
 
     pub async fn workspace_config_source(&self) -> Result<String> {
-        let config = WorkspaceRecords::new(&self.workspace)
+        let config = WorkspaceRecords::new(self.replica.as_ref())
             .list_configs()
             .await?
             .into_iter()
@@ -256,7 +274,7 @@ impl WorkspaceSession {
     }
 
     pub async fn save_workspace_config(&mut self, source: &str) -> Result<()> {
-        let configs = WorkspaceRecords::new(&self.workspace)
+        let configs = WorkspaceRecords::new(self.replica.as_ref())
             .list_configs()
             .await?;
         let mut modules = BTreeMap::new();
@@ -275,7 +293,7 @@ impl WorkspaceSession {
             .find(|config| config.record.path == "xo.scm")
             .map(|config| BTreeSet::from([config.revision_id.clone()]))
             .unwrap_or_default();
-        WorkspaceRecords::new(&self.workspace)
+        WorkspaceRecords::new(self.replica.as_ref())
             .put_config(
                 "xo.scm",
                 source.as_bytes().to_vec(),
@@ -290,7 +308,7 @@ impl WorkspaceSession {
         if !path.starts_with("plugins/") || !xo_core::steel_runtime::valid_config_path(path) {
             anyhow::bail!("plugin path must be below plugins/ and end in .scm");
         }
-        let records = WorkspaceRecords::new(&self.workspace);
+        let records = WorkspaceRecords::new(self.replica.as_ref());
         let configs = records.list_configs().await?;
         let predecessors = configs
             .iter()
@@ -311,7 +329,7 @@ impl WorkspaceSession {
     }
 
     pub async fn config_source(&self, path: &str) -> Result<String> {
-        let config = WorkspaceRecords::new(&self.workspace)
+        let config = WorkspaceRecords::new(self.replica.as_ref())
             .list_configs()
             .await?
             .into_iter()
@@ -329,7 +347,7 @@ impl WorkspaceSession {
     }
 
     async fn commit(&mut self, note: &Note, deleted: bool) -> Result<RevisionId> {
-        let records = WorkspaceRecords::new(&self.workspace);
+        let records = WorkspaceRecords::new(self.replica.as_ref());
         let mut predecessors = BTreeSet::new();
         if let Some(resolved) = records.load_note(&note.id).await? {
             predecessors.insert(resolved.winning_revision);
@@ -359,105 +377,106 @@ impl WorkspaceSession {
             .map_err(Into::into)
     }
 
-    pub async fn subscribe(
+    pub fn subscribe(
         &self,
-    ) -> Result<impl futures_lite::Stream<Item = Result<WorkspaceEvent>> + Send + Unpin + 'static>
-    {
-        self.workspace.subscribe().await
+    ) -> Result<
+        std::pin::Pin<
+            Box<dyn futures_lite::Stream<Item = Result<WorkspaceEvent>> + Send + 'static>,
+        >,
+    > {
+        let receiver = self.replica.subscribe();
+        Ok(Box::pin(futures_lite::stream::unfold(
+            receiver,
+            |mut receiver| async move {
+                match receiver.recv().await {
+                    Ok(xo_core::central_replica::ReplicaEvent::ContentChanged) => {
+                        Some((Ok(WorkspaceEvent::ContentChanged), receiver))
+                    }
+                    Ok(xo_core::central_replica::ReplicaEvent::StatusChanged)
+                    | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        Some((Ok(WorkspaceEvent::StatusChanged), receiver))
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => None,
+                }
+            },
+        )))
     }
 
     pub fn refresh_sync(&self) -> Result<()> {
-        self.sync_state.set_connectivity(&Connectivity::Direct)?;
-        Ok(())
+        self.update_connectivity()
     }
-    pub async fn writable_invitation(&self) -> Result<String> {
-        self.workspace.share(true).await
-    }
-    pub async fn connect_peer(&self, ticket: &str) -> Result<()> {
-        self.workspace.start_sync(ticket).await?;
-        self.sync_state
-            .set_connectivity(&Connectivity::Connecting)?;
+
+    fn update_connectivity(&self) -> Result<()> {
+        let connectivity = match self
+            .client
+            .as_ref()
+            .map(crate::central_client::CentralClient::status)
+        {
+            Some(crate::central_client::CentralClientStatus::Connected) => Connectivity::Direct,
+            Some(crate::central_client::CentralClientStatus::Connecting) => {
+                Connectivity::Connecting
+            }
+            Some(
+                crate::central_client::CentralClientStatus::Offline(_)
+                | crate::central_client::CentralClientStatus::Stopped,
+            )
+            | None => Connectivity::Offline,
+        };
+        self.sync_state.set_connectivity(&connectivity)?;
         Ok(())
     }
     pub async fn deleted_notes(&self) -> Result<Vec<Note>> {
-        Ok(WorkspaceRecords::new(&self.workspace)
+        Ok(WorkspaceRecords::new(self.replica.as_ref())
             .deleted_notes()
             .await?)
     }
     pub async fn history(&self, note_id: &NoteId) -> Result<Vec<(RevisionId, NoteRevision)>> {
-        Ok(WorkspaceRecords::new(&self.workspace)
+        Ok(WorkspaceRecords::new(self.replica.as_ref())
             .revision_history(note_id)
             .await?)
-    }
-    pub async fn retire_device(&mut self, mut device: DeviceRecord) -> Result<()> {
-        device.retired_at = Some(self.clock.next(now_ms()?));
-        WorkspaceRecords::new(&self.workspace)
-            .put_device(&device)
-            .await?;
-        Ok(())
     }
     pub fn retry(&self, operation_id: i64) -> Result<()> {
         self.sync_state.retry(operation_id)?;
         Ok(())
     }
     pub async fn shutdown(self) -> Result<()> {
-        self.node.shutdown().await
-    }
-}
-
-async fn select_workspace(
-    node: &IrohNode,
-    state_dir: &Path,
-    requested: Option<&str>,
-    ticket: Option<&str>,
-) -> Result<(IrohWorkspace, bool)> {
-    let (workspace, reopened) = if let Some(ticket) = ticket {
-        (node.import_workspace(ticket).await?, false)
-    } else if let Some(workspace_id) = requested {
-        (
-            node.open_workspace_str(workspace_id)
-                .await?
-                .context("workspace is not present in this peer")?,
-            true,
-        )
-    } else if let Some(workspace) = open_active_workspace(node, state_dir).await? {
-        (workspace, true)
-    } else {
-        let workspace_ids = node.workspace_ids().await?;
-        match workspace_ids.as_slice() {
-            [] => (node.create_workspace().await?, false),
-            [workspace_id] => (
-                node.open_workspace_str(workspace_id)
-                    .await?
-                    .context("the local workspace disappeared")?,
-                true,
-            ),
-            _ => anyhow::bail!(
-                "multiple local workspaces exist; choose one once with --workspace WORKSPACE_ID"
-            ),
+        if let Some(client) = self.client {
+            client.shutdown().await?;
         }
-    };
-    std::fs::write(
-        state_dir.join(ACTIVE_WORKSPACE_FILE),
-        workspace.id().to_string(),
-    )?;
-    Ok((workspace, reopened))
+        Ok(())
+    }
 }
 
-async fn open_active_workspace(node: &IrohNode, state_dir: &Path) -> Result<Option<IrohWorkspace>> {
-    let active = match std::fs::read_to_string(state_dir.join(ACTIVE_WORKSPACE_FILE)) {
-        Ok(value) => value,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    let active = active.trim();
-    if active.is_empty() {
-        return Ok(None);
+fn read_active_workspace(state_dir: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(state_dir.join(ACTIVE_WORKSPACE_FILE)) {
+        Ok(value) if value.trim().is_empty() => Ok(None),
+        Ok(value) => Ok(Some(value.trim().to_owned())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
     }
-    node.open_workspace_str(active)
-        .await?
-        .with_context(|| format!("active workspace {active} is not present in this peer"))
-        .map(Some)
+}
+
+fn local_workspace_id() -> String {
+    let random = rand::random::<[u8; 16]>();
+    format!("local-{}", &blake3::hash(&random).to_hex()[..24])
+}
+
+fn load_or_create_actor(state_dir: &Path) -> Result<[u8; 32]> {
+    let path = state_dir.join("automerge-actor");
+    match std::fs::read(&path) {
+        Ok(bytes) => bytes.try_into().map_err(|_| {
+            anyhow::anyhow!(
+                "Automerge actor {} must contain exactly 32 bytes",
+                path.display()
+            )
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let bytes = rand::random::<[u8; 32]>();
+            std::fs::write(&path, bytes).with_context(|| format!("write {}", path.display()))?;
+            Ok(bytes)
+        }
+        Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
+    }
 }
 
 fn now_ms() -> Result<u64> {
@@ -472,424 +491,23 @@ fn now_ms() -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
-    use xo_core::domain::{Frontmatter, FrontmatterValue};
-    use xo_core::iroh_node::IrohNode;
-    use xo_core::records::WorkspaceRecords;
-    use xo_core::{Hlc, NoteId};
 
     #[tokio::test]
-    async fn fresh_local_start_creates_and_reopens_an_active_workspace() -> Result<()> {
+    async fn local_central_replica_reopens_without_a_network() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let state = directory.path().join("state");
         let projection = directory.path().join("notes");
-        let first = WorkspaceSession::open(&state, None, None, projection.clone()).await?;
+        let mut first = WorkspaceSession::open(&state, None, projection.clone())?;
         let workspace_id = first.workspace_id();
         assert_eq!(
             first.sync_state.status()?.connectivity,
             Connectivity::Offline
         );
+        assert_eq!(first.behavior().await?.default_view, "notes");
         first.shutdown().await?;
 
-        let reopened = WorkspaceSession::open(&state, None, None, projection).await?;
+        let reopened = WorkspaceSession::open(&state, None, projection)?;
         assert_eq!(reopened.workspace_id(), workspace_id);
-        assert_eq!(
-            reopened.sync_state.status()?.connectivity,
-            Connectivity::Connecting
-        );
-        assert_eq!(
-            std::fs::read_to_string(state.join(ACTIVE_WORKSPACE_FILE))?,
-            workspace_id
-        );
-        reopened.shutdown().await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn missing_views_create_default_xo_config_without_projection_file() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let state = directory.path().join("state");
-        let projection = directory.path().join("notes");
-        let mut session = WorkspaceSession::open(&state, None, None, projection.clone()).await?;
-
-        let behavior = session.behavior().await?;
-
-        assert_eq!(behavior.default_view, "notes");
-        assert_eq!(
-            behavior
-                .views
-                .iter()
-                .map(|view| view.id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["notes", "all"]
-        );
-        assert!(!projection.join("xo.scm").exists());
-        let source = session.workspace_config_source().await?;
-        assert!(source.starts_with("(workspace-config\n  (schema 1)"));
-        assert!(source.contains("(field-equals \"type\" \"note\")"));
-        assert!(source.contains("(plugin (capture-url))"));
-        assert!(source.contains("(capabilities create-note network)"));
-        assert!(!source.starts_with("(workspace-config \""));
-        let configs = WorkspaceRecords::new(&session.workspace)
-            .list_configs()
-            .await?;
-        assert!(configs.iter().any(|config| config.record.path == "xo.scm"));
-        session.shutdown().await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn bundled_plugin_install_is_replicated_projected_and_loaded() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let state = directory.path().join("state");
-        let projection = directory.path().join("notes");
-        let mut session = WorkspaceSession::open(&state, None, None, projection.clone()).await?;
-        session.behavior().await?;
-        session
-            .install_config(
-                "plugins/hardcover.scm",
-                include_bytes!("../../../plugins/hardcover.scm"),
-            )
-            .await?;
-
-        let behavior = session.behavior().await?;
-        assert!(
-            behavior
-                .actions
-                .iter()
-                .any(|action| action.id == "hardcover-search")
-        );
-        assert!(projection.join("plugins/hardcover.scm").is_file());
-        assert!(
-            WorkspaceRecords::new(&session.workspace)
-                .list_configs()
-                .await?
-                .iter()
-                .any(|config| config.record.path == "plugins/hardcover.scm")
-        );
-        session.shutdown().await?;
-        Ok(())
-    }
-
-    fn library_behavior() -> WorkspaceBehavior {
-        WorkspaceBehavior {
-            default_view: "library".into(),
-            views: vec![xo_core::behavior::ViewDescriptor {
-                id: "library".into(),
-                name: "Library".into(),
-                key: None,
-                show_tags: true,
-                title_field: "title".into(),
-                subtitle_field: Some("type".into()),
-                sort_field: Some("title".into()),
-                descending: false,
-                preview: None,
-                predicate: Predicate::FieldEquals {
-                    field: "type".into(),
-                    value: "book".into(),
-                },
-                subviews: vec![xo_core::behavior::SubviewDescriptor {
-                    id: "reading".into(),
-                    name: "Reading".into(),
-                    sort_field: None,
-                    predicate: Predicate::HasTag {
-                        tag: "reading".into(),
-                    },
-                }],
-            }],
-            ..WorkspaceBehavior::default()
-        }
-    }
-
-    fn reading_book() -> Note {
-        Note {
-            id: NoteId::new("bkabcde"),
-            path: "books/bkabcde.md".into(),
-            frontmatter: Frontmatter::from([
-                ("id".into(), FrontmatterValue::String("bkabcde".into())),
-                (
-                    "title".into(),
-                    FrontmatterValue::String("TUI reading fixture".into()),
-                ),
-                ("type".into(), FrontmatterValue::String("book".into())),
-                (
-                    "tags".into(),
-                    FrontmatterValue::Sequence(vec![FrontmatterValue::String("reading".into())]),
-                ),
-            ]),
-            body: "created by the native TUI peer".into(),
-        }
-    }
-
-    #[tokio::test]
-    async fn tui_peer_receives_replicated_views_subviews_and_items() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let mut source = WorkspaceSession::open_with_peer(
-            &directory.path().join("source-state"),
-            None,
-            None,
-            directory.path().join("source-notes"),
-            xo_core::PeerId::parse("source")?,
-        )
-        .await?;
-        let behavior = library_behavior();
-        WorkspaceRecords::new(&source.workspace)
-            .put_config(
-                "xo.scm",
-                xo_core::steel_runtime::encode_config(&behavior, false).into_bytes(),
-                source.clock.next(now_ms()?),
-                BTreeSet::new(),
-            )
-            .await?;
-        source.save(&reading_book()).await?;
-        let ticket = source.writable_invitation().await?;
-
-        let peer_state = directory.path().join("peer-state");
-        let mut peer = WorkspaceSession::open_with_peer(
-            &peer_state,
-            None,
-            Some(&ticket),
-            directory.path().join("peer-notes"),
-            xo_core::PeerId::parse("peer")?,
-        )
-        .await?;
-        let mut replicated_snapshot = None;
-        for _ in 0..200 {
-            if let Ok(snapshot) = peer.snapshot().await
-                && snapshot
-                    .configs
-                    .iter()
-                    .any(|config| config.record.path == "xo.scm")
-                && snapshot
-                    .notes
-                    .iter()
-                    .any(|note| note.id.as_str() == "bkabcde")
-            {
-                replicated_snapshot = Some(snapshot);
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        let snapshot = replicated_snapshot.context("TUI peer did not receive note and config")?;
-        let replicated = peer.behavior().await?;
-        assert_eq!(replicated.default_view, "library");
-        assert_eq!(replicated.views[0].subviews[0].id, "reading");
-        let matches = replicated.query(
-            &snapshot.notes,
-            &xo_core::behavior::Query {
-                view: "library".into(),
-                subview: Some("reading".into()),
-                ..xo_core::behavior::Query::default()
-            },
-        )?;
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].id.as_str(), "bkabcde");
-
-        let mut events = peer.subscribe().await?;
-        let mut live_note = reading_book();
-        live_note.id = NoteId::new("bkabcdf");
-        live_note.path = "books/bkabcdf.md".into();
-        live_note
-            .frontmatter
-            .insert("id".into(), FrontmatterValue::String("bkabcdf".into()));
-        source.save(&live_note).await?;
-        tokio::time::timeout(Duration::from_secs(30), async {
-            while let Some(event) = futures_lite::StreamExt::next(&mut events).await {
-                if event? == WorkspaceEvent::ContentChanged
-                    && peer.snapshot().await.is_ok_and(|snapshot| {
-                        snapshot
-                            .notes
-                            .iter()
-                            .any(|note| note.id.as_str() == "bkabcdf")
-                    })
-                {
-                    return Ok::<_, anyhow::Error>(());
-                }
-            }
-            anyhow::bail!("workspace event stream ended before the live update")
-        })
-        .await
-        .context("TUI peer did not receive a live workspace event")??;
-        peer.shutdown().await?;
-        source.shutdown().await
-    }
-
-    #[tokio::test]
-    async fn tui_pairing_invitation_connects_a_sync_peer() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let mut session = WorkspaceSession::open_with_peer(
-            &directory.path().join("client"),
-            None,
-            None,
-            directory.path().join("projection"),
-            xo_core::PeerId::parse("client")?,
-        )
-        .await?;
-        session.behavior().await?;
-        let workspace_id = session.workspace_id();
-        let client_ticket = session.writable_invitation().await?;
-
-        let server = IrohNode::persistent_with_peer(
-            directory.path().join("server"),
-            xo_core::PeerId::parse("server")?,
-        )
-        .await?;
-        let server_workspace = server.import_writable_workspace(&client_ticket).await?;
-        assert_eq!(server_workspace.id().to_string(), workspace_id);
-        let server_ticket = server_workspace.share(true).await?;
-
-        session.connect_peer(&server_ticket).await?;
-        assert_eq!(
-            session.sync_state.status()?.connectivity,
-            Connectivity::Connecting
-        );
-        server_workspace
-            .put("pairing/verification", "connected")
-            .await?;
-        wait_until(|| async {
-            session
-                .workspace
-                .get("pairing/verification")
-                .await
-                .ok()
-                .flatten()
-                .is_some()
-        })
-        .await?;
-
-        session.shutdown().await?;
-        server.shutdown().await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[allow(clippy::too_many_lines)]
-    async fn offline_tui_edit_reconnects_retains_conflict_and_converges() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let primary_state = directory.path().join("primary");
-        let central_state = directory.path().join("central");
-        let primary =
-            IrohNode::persistent_with_peer(&primary_state, xo_core::PeerId::parse("primary")?)
-                .await?;
-        let workspace = primary.create_workspace().await?;
-        let primary_records = WorkspaceRecords::new(&workspace);
-        let base = NoteRevision {
-            schema: CURRENT_SCHEMA,
-            note_id: NoteId::new("note002"),
-            frontmatter: Frontmatter::from([(
-                "title".into(),
-                FrontmatterValue::String("Base".into()),
-            )]),
-            body: "base".into(),
-            materialized_path: "notes/base.md".into(),
-            hlc: Hlc {
-                physical_ms: 100,
-                logical: 0,
-                actor_id: primary_records.actor_id(),
-            },
-            author_id: primary_records.actor_id(),
-            predecessors: BTreeSet::new(),
-            deleted: false,
-        };
-        let base_id = primary_records.commit_revision(&base).await?;
-        let workspace_id = workspace.id().to_string();
-        let ticket = workspace.share(true).await?;
-        let central =
-            IrohNode::persistent_with_peer(&central_state, xo_core::PeerId::parse("central")?)
-                .await?;
-        let central_workspace = central.import_workspace(&ticket).await?;
-        wait_until(|| async {
-            WorkspaceRecords::new(&central_workspace)
-                .get_revision(&base.note_id, &base_id)
-                .await
-                .ok()
-                .flatten()
-                .is_some()
-        })
-        .await?;
-        central.shutdown().await?;
-        primary.shutdown().await?;
-
-        let mut session = WorkspaceSession::open_with_peer(
-            &primary_state,
-            Some(&workspace_id),
-            None,
-            directory.path().join("projection"),
-            xo_core::PeerId::parse("primary")?,
-        )
-        .await?;
-        let mut offline_note = session.snapshot().await?.notes[0].clone();
-        offline_note.body = "offline primary edit".into();
-        session.save(&offline_note).await?;
-
-        let central =
-            IrohNode::persistent_with_peer(&central_state, xo_core::PeerId::parse("central")?)
-                .await?;
-        let central_workspace = central
-            .open_workspace_str(&workspace_id)
-            .await?
-            .context("central workspace missing")?;
-        let central_records = WorkspaceRecords::new(&central_workspace);
-        let central_actor = central_records.actor_id();
-        central_records
-            .commit_revision(&NoteRevision {
-                schema: CURRENT_SCHEMA,
-                note_id: base.note_id.clone(),
-                frontmatter: base.frontmatter.clone(),
-                body: "central concurrent edit".into(),
-                materialized_path: base.materialized_path.clone(),
-                hlc: Hlc {
-                    physical_ms: 200,
-                    logical: 0,
-                    actor_id: central_actor.clone(),
-                },
-                author_id: central_actor,
-                predecessors: BTreeSet::from([base_id]),
-                deleted: false,
-            })
-            .await?;
-        let primary_ticket = session.workspace.share(true).await?;
-        let central_ticket = central_workspace.share(true).await?;
-        central_workspace.start_sync(&primary_ticket).await?;
-        session.workspace.start_sync(&central_ticket).await?;
-        wait_until(|| async {
-            session.snapshot().await.ok().is_some_and(|snapshot| {
-                snapshot
-                    .resolved
-                    .iter()
-                    .any(|value| value.conflict.is_some())
-            }) && central_records
-                .snapshot()
-                .await
-                .ok()
-                .is_some_and(|snapshot| {
-                    snapshot
-                        .resolved
-                        .iter()
-                        .any(|value| value.conflict.is_some())
-                })
-        })
-        .await?;
-        let snapshot = session.snapshot().await?;
-        assert_eq!(snapshot.notes.len(), 1);
-        assert!(snapshot.resolved[0].conflict.is_some());
-        assert!(session.history(&base.note_id).await?.len() >= 3);
-        session.shutdown().await?;
-        central.shutdown().await?;
-        Ok(())
-    }
-
-    async fn wait_until<F, Fut>(mut condition: F) -> Result<()>
-    where
-        F: FnMut() -> Fut,
-        Fut: std::future::Future<Output = bool>,
-    {
-        for _ in 0..200 {
-            if condition().await {
-                return Ok(());
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        anyhow::bail!("peers did not converge before timeout")
+        reopened.shutdown().await
     }
 }

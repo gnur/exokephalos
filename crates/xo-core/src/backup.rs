@@ -260,7 +260,7 @@ mod tests {
 
     #[cfg(feature = "iroh-sync")]
     async fn wait_for_asset(
-        records: crate::records::WorkspaceRecords<'_>,
+        records: crate::records::WorkspaceRecords<'_, crate::iroh_node::IrohWorkspace>,
     ) -> anyhow::Result<Vec<u8>> {
         for _ in 0..300 {
             match records.get_asset(&crate::AssetId::new("image001")).await {
@@ -280,7 +280,7 @@ mod tests {
 
     #[cfg(feature = "iroh-sync")]
     async fn wait_for_device(
-        records: WorkspaceRecords<'_>,
+        records: WorkspaceRecords<'_, crate::iroh_node::IrohWorkspace>,
         author: &ActorId,
     ) -> anyhow::Result<DeviceRecord> {
         for _ in 0..100 {

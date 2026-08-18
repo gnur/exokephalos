@@ -41,7 +41,6 @@ iroh = "=0.98.0"
 iroh-gossip = "=0.98.0"
 notify = "=8.2.0"
 quick_html2md = { version = "0.2.1", features = ["url"] }
-qrcode = { version = "0.14.1", default-features = false }
 rand = "0.9.2"
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls-no-provider"] }
 rustls = { version = "0.23.42", default-features = false, features = ["ring"] }

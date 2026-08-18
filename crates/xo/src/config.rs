@@ -13,10 +13,7 @@ pub struct XoConfig {
     pub state_dir: PathBuf,
     #[serde(default)]
     pub peer_id: Option<String>,
-    #[serde(default)]
-    pub workspace: Option<String>,
     pub projection: PathBuf,
-    pub pwa_url: String,
 }
 
 const fn schema() -> u16 {
@@ -29,9 +26,7 @@ impl Default for XoConfig {
             schema: schema(),
             state_dir: PathBuf::from("~/.local/share/xo"),
             peer_id: None,
-            workspace: None,
             projection: PathBuf::from("~/notes"),
-            pwa_url: "https://xo.exokephalos.dev/".to_owned(),
         }
     }
 }
@@ -40,7 +35,6 @@ impl Default for XoConfig {
 pub struct CliOverrides {
     pub state_dir: Option<PathBuf>,
     pub peer_id: Option<String>,
-    pub workspace: Option<String>,
     pub projection: Option<PathBuf>,
 }
 
@@ -61,7 +55,6 @@ impl XoConfig {
         if config.schema != schema() {
             bail!("unsupported xo configuration schema {}", config.schema);
         }
-        validate_pwa_url(&config.pwa_url)?;
         if let Some(peer_id) = &config.peer_id {
             xo_core::PeerId::parse(peer_id.clone()).context("validate peer-id")?;
         }
@@ -77,9 +70,6 @@ impl XoConfig {
         }
         if let Some(value) = overrides.peer_id {
             self.peer_id = Some(value);
-        }
-        if let Some(value) = overrides.workspace {
-            self.workspace = Some(value);
         }
         if let Some(value) = overrides.projection {
             self.projection = expand_home(&value, home);
@@ -111,33 +101,13 @@ impl XoConfig {
              \x20 (schema {})\n\
              \x20 (state-dir {})\n\
              \x20 (peer-id {})\n\
-             \x20 (workspace {})\n\
-             \x20 (projection {})\n\
-             \x20 (pwa-url {}))\n",
+             \x20 (projection {}))\n",
             self.schema,
             string(&self.state_dir.to_string_lossy())?,
             optional(self.peer_id.as_deref())?,
-            optional(self.workspace.as_deref())?,
             string(&self.projection.to_string_lossy())?,
-            string(&self.pwa_url)?,
         ))
     }
-}
-
-fn validate_pwa_url(value: &str) -> Result<()> {
-    let url = url::Url::parse(value).context("parse pwa-url")?;
-    if url.scheme() != "https" || url.host_str().is_none() {
-        bail!("pwa-url must be an absolute HTTPS URL");
-    }
-    if !url.username().is_empty()
-        || url.password().is_some()
-        || url.path() != "/"
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        bail!("pwa-url must be an HTTPS origin without credentials, a path, query, or fragment");
-    }
-    Ok(())
 }
 
 pub fn home_dir() -> Result<PathBuf> {
@@ -172,34 +142,10 @@ mod tests {
         let loaded = XoConfig::load(&path, Path::new("/home/tester"))?;
         assert_eq!(loaded.state_dir, Path::new("/home/tester/.local/share/xo"));
         assert_eq!(loaded.projection, Path::new("/home/tester/notes"));
-        assert_eq!(loaded.pwa_url, "https://xo.exokephalos.dev/");
         let document = std::fs::read_to_string(path)?;
         assert!(document.contains("(state-dir \"~/.local/share/xo\")"));
         assert!(!document.contains("(ticket "));
         assert!(!document.contains("{\\\"schema\\\""));
-        Ok(())
-    }
-
-    #[test]
-    fn pwa_url_accepts_custom_https_hosts_and_rejects_unsafe_values() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("config.scm");
-        let config = XoConfig {
-            pwa_url: "https://notes.example.test/".into(),
-            ..XoConfig::default()
-        };
-        std::fs::write(&path, config.document()?)?;
-        assert_eq!(
-            XoConfig::load(&path, Path::new("/home/tester"))?.pwa_url,
-            "https://notes.example.test/"
-        );
-
-        let invalid = XoConfig {
-            pwa_url: "http://notes.example.test/".into(),
-            ..XoConfig::default()
-        };
-        std::fs::write(&path, invalid.document()?)?;
-        assert!(XoConfig::load(&path, Path::new("/home/tester")).is_err());
         Ok(())
     }
 
@@ -209,14 +155,12 @@ mod tests {
             CliOverrides {
                 state_dir: Some("~/state".into()),
                 peer_id: Some("alice-laptop".into()),
-                workspace: Some("workspace-id".into()),
                 projection: Some("~/knowledge".into()),
             },
             Path::new("/users/alice"),
         );
         assert_eq!(config.state_dir, Path::new("/users/alice/state"));
         assert_eq!(config.peer_id.as_deref(), Some("alice-laptop"));
-        assert_eq!(config.workspace.as_deref(), Some("workspace-id"));
         assert_eq!(config.projection, Path::new("/users/alice/knowledge"));
     }
 

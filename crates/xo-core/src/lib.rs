@@ -26,7 +26,7 @@ pub mod peer_protocol;
 #[cfg(feature = "native")]
 pub mod projection;
 pub mod record_workspace;
-#[cfg(feature = "iroh-sync")]
+#[cfg(feature = "native")]
 pub mod records;
 pub mod resolution;
 #[cfg(feature = "steel")]

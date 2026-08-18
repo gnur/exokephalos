@@ -49,7 +49,7 @@ pub struct LocalApplyReport {
 /// Serial projection pipeline for one local author and workspace.
 #[derive(Debug)]
 pub struct WorkspaceProjection<'a> {
-    records: WorkspaceRecords<'a>,
+    records: WorkspaceRecords<'a, IrohWorkspace>,
     index: &'a LocalIndex,
     state: ProjectionState,
     actor: ActorId,

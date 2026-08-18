@@ -39,8 +39,7 @@ async fn config_init_output_starts_a_fresh_xo_workspace() -> Result<()> {
     std::fs::write(&config_path, output.stdout)?;
     let config = XoConfig::load(&config_path, directory.path())?;
 
-    let mut session =
-        WorkspaceSession::open(&config.state_dir, None, None, config.projection).await?;
+    let mut session = WorkspaceSession::open(&config.state_dir, None, config.projection)?;
     let behavior = session.behavior().await?;
     ensure!(behavior.views.iter().any(|view| view.id == "notes"));
     ensure!(behavior.views.iter().any(|view| view.id == "all"));

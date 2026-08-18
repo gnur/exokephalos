@@ -26,6 +26,31 @@ pub struct CentralClient {
 }
 
 impl CentralClient {
+    pub async fn discover_workspace(server: &str, client_id: &str) -> Result<String> {
+        let endpoint = sync_endpoint(server)?;
+        let (mut socket, _) = tokio_tungstenite::connect_async(endpoint.as_str())
+            .await
+            .with_context(|| format!("connect to {endpoint}"))?;
+        socket
+            .send(Message::Text(
+                ControlMessage::client_hello(client_id).encode()?.into(),
+            ))
+            .await?;
+        let hello = tokio::time::timeout(Duration::from_secs(10), socket.next())
+            .await
+            .context("server hello timed out")?
+            .context("server disconnected before hello")??;
+        let Message::Text(hello) = hello else {
+            bail!("server hello was not a text frame");
+        };
+        let ControlMessage::ServerHello { workspace_id, .. } = ControlMessage::decode(&hello)?
+        else {
+            bail!("server did not send server_hello");
+        };
+        socket.close(None).await?;
+        Ok(workspace_id)
+    }
+
     pub fn start(server: &str, client_id: String, replica: Arc<CentralReplica>) -> Result<Self> {
         let endpoint = sync_endpoint(server)?;
         ControlMessage::client_hello(&client_id).validate()?;
@@ -92,6 +117,7 @@ async fn run(
                 let _ = status.send(CentralClientStatus::Offline(format!("{error:#}")));
             }
         }
+        replica.set_connected_clients(Vec::new()).await;
         tokio::select! {
             () = tokio::time::sleep(delay) => {}
             changed = shutdown.changed() => {

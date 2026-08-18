@@ -6,7 +6,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use thiserror::Error;
 
-use crate::iroh_node::IrohWorkspace;
+use crate::central_replica::CentralReplica;
 use crate::local_index::{IndexError, LocalIndex};
 use crate::projection::{Diagnostic, ProjectedAsset};
 use crate::record_workspace::RecordWorkspace;
@@ -80,7 +80,7 @@ pub struct WorkspaceSnapshot {
 
 /// The authoritative revision and per-author head repository for a workspace.
 #[derive(Debug)]
-pub struct WorkspaceRecords<'a, W: RecordWorkspace = IrohWorkspace> {
+pub struct WorkspaceRecords<'a, W: RecordWorkspace = CentralReplica> {
     workspace: &'a W,
 }
 
@@ -791,7 +791,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::domain::{Frontmatter, FrontmatterValue};
-    use crate::iroh_node::IrohNode;
+    use crate::iroh_node::{IrohNode, IrohWorkspace};
     use crate::{Hlc, SchemaVersion};
 
     use super::*;
@@ -799,7 +799,7 @@ mod tests {
     async fn add_metadata_records(
         node: &IrohNode,
         workspace: &crate::iroh_node::IrohWorkspace,
-        records: WorkspaceRecords<'_>,
+        records: WorkspaceRecords<'_, IrohWorkspace>,
         revision_id: RevisionId,
     ) -> anyhow::Result<()> {
         let actor = records.actor_id();
@@ -976,7 +976,7 @@ mod tests {
     }
 
     async fn wait_for_device(
-        records: WorkspaceRecords<'_>,
+        records: WorkspaceRecords<'_, IrohWorkspace>,
         author: &ActorId,
     ) -> anyhow::Result<DeviceRecord> {
         for _ in 0..200 {
@@ -998,7 +998,7 @@ mod tests {
     }
 
     async fn wait_for_retained_revision(
-        records: WorkspaceRecords<'_>,
+        records: WorkspaceRecords<'_, IrohWorkspace>,
         revision_id: &RevisionId,
     ) -> anyhow::Result<ResolvedNote> {
         for _ in 0..200 {
@@ -1136,7 +1136,9 @@ mod tests {
         }
     }
 
-    async fn wait_for_conflict(records: WorkspaceRecords<'_>) -> anyhow::Result<ResolvedNote> {
+    async fn wait_for_conflict(
+        records: WorkspaceRecords<'_, IrohWorkspace>,
+    ) -> anyhow::Result<ResolvedNote> {
         let mut last_state = String::from("no observation");
         for _ in 0..900 {
             match records.load_note(&NoteId::new("note002")).await {

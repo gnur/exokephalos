@@ -9,7 +9,7 @@ repository.workspace = true
 [dependencies]
 anyhow.workspace = true
 automerge.workspace = true
-base64.workspace = true
+blake3.workspace = true
 clap.workspace = true
 crossterm.workspace = true
 dom_smoothie.workspace = true
@@ -18,7 +18,7 @@ futures-util.workspace = true
 fs2.workspace = true
 hostname.workspace = true
 quick_html2md.workspace = true
-qrcode.workspace = true
+rand.workspace = true
 ratatui.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
@@ -32,7 +32,7 @@ tokio.workspace = true
 tokio-tungstenite.workspace = true
 url.workspace = true
 zeroize.workspace = true
-xo-core = { path = "../xo-core", features = ["iroh-sync", "steel"] }
+xo-core = { path = "../xo-core", features = ["native", "steel"] }
 
 [lints]
 workspace = true

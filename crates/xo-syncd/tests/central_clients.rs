@@ -5,9 +5,11 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
 use xo::central_client::{CentralClient, CentralClientStatus};
-use xo_core::ActorId;
+use xo::session::WorkspaceSession;
 use xo_core::central_replica::CentralReplica;
+use xo_core::domain::{Frontmatter, FrontmatterValue};
 use xo_core::record_workspace::RecordWorkspace as _;
+use xo_core::{ActorId, Note, NoteId};
 
 struct Server(Child);
 
@@ -19,6 +21,7 @@ impl Drop for Server {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn two_native_replicas_converge_through_the_central_server() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let listener = TcpListener::bind("127.0.0.1:0")?;
@@ -74,6 +77,63 @@ async fn two_native_replicas_converge_through_the_central_server() -> Result<()>
             .as_deref()
             == Some(b"central")
         {
+            let mut first_tui = WorkspaceSession::open_central(
+                &directory.path().join("first-tui"),
+                &format!("http://{address}"),
+                directory.path().join("first-projection"),
+                xo_core::PeerId::parse("first-tui")?,
+            )
+            .await?;
+            first_tui.behavior().await?;
+            let second_tui = WorkspaceSession::open_central(
+                &directory.path().join("second-tui"),
+                &format!("http://{address}"),
+                directory.path().join("second-projection"),
+                xo_core::PeerId::parse("second-tui")?,
+            )
+            .await?;
+            let note_id = NoteId::new("central");
+            first_tui
+                .save(&Note {
+                    id: note_id.clone(),
+                    path: "central.md".to_owned(),
+                    frontmatter: Frontmatter::from([
+                        (
+                            "id".to_owned(),
+                            FrontmatterValue::String(note_id.to_string()),
+                        ),
+                        (
+                            "title".to_owned(),
+                            FrontmatterValue::String("Central TUI".to_owned()),
+                        ),
+                        (
+                            "type".to_owned(),
+                            FrontmatterValue::String("note".to_owned()),
+                        ),
+                    ]),
+                    body: "through the WebSocket server".to_owned(),
+                })
+                .await?;
+            let mut tui_converged = false;
+            for _ in 0..200 {
+                if second_tui
+                    .snapshot()
+                    .await?
+                    .notes
+                    .iter()
+                    .any(|note| note.id == note_id && note.body == "through the WebSocket server")
+                {
+                    tui_converged = true;
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            assert!(
+                tui_converged,
+                "TUI sessions did not converge through /api/sync"
+            );
+            first_tui.shutdown().await?;
+            second_tui.shutdown().await?;
             first_client.shutdown().await?;
             second_client.shutdown().await?;
             return Ok(());

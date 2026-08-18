@@ -1,3 +1,4 @@
+mod central;
 mod operator;
 
 use std::fmt::Write as _;
@@ -80,7 +81,7 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("bind operator server to {}", cli.operator_bind))?;
     let operator_addr = listener.local_addr()?;
-    let state = OperatorState::new(Arc::clone(&node), workspace_ids, token);
+    let state = OperatorState::new(Arc::clone(&node), workspace_ids, token)?;
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let operator_task = tokio::spawn(operator::serve(listener, state, shutdown_rx));
     log_event(

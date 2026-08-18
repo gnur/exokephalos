@@ -20,9 +20,13 @@ use serde_json::{Value, json};
 use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::protocol::Role;
 use xo_core::iroh_node::{IrohNode, IrohWorkspace, writable_ticket_workspace_id};
 use xo_core::records::WorkspaceRecords;
 use xo_core::{ActorId, CURRENT_SCHEMA, DeviceRecord};
+
+use crate::central::CentralWorkspace;
 
 type Body = Full<Bytes>;
 
@@ -45,6 +49,7 @@ struct OperatorStateInner {
     author_id: String,
     state_dir: PathBuf,
     workspace_ids: RwLock<Vec<String>>,
+    central: Arc<CentralWorkspace>,
     token: Vec<u8>,
     started: Instant,
     metrics: Metrics,
@@ -62,14 +67,16 @@ struct DaemonStatus<'a> {
 }
 
 impl OperatorState {
-    pub fn new(node: Arc<IrohNode>, workspace_ids: Vec<String>, token: String) -> Self {
-        Self {
+    pub fn new(node: Arc<IrohNode>, workspace_ids: Vec<String>, token: String) -> Result<Self> {
+        let central = CentralWorkspace::open(&node.state_dir().join("central-workspace"))?;
+        Ok(Self {
             inner: Arc::new(OperatorStateInner {
                 endpoint_id: node.endpoint_id().to_string(),
                 author_id: node.author_id().to_string(),
                 state_dir: node.state_dir().to_path_buf(),
                 node: Some(node),
                 workspace_ids: RwLock::new(workspace_ids),
+                central,
                 token: token.into_bytes(),
                 started: Instant::now(),
                 metrics: Metrics {
@@ -78,7 +85,7 @@ impl OperatorState {
                     errors: AtomicU64::new(0),
                 },
             }),
-        }
+        })
     }
 }
 
@@ -102,6 +109,7 @@ pub async fn serve(
                         });
                     if let Err(error) = http1::Builder::new()
                         .serve_connection(TokioIo::new(stream), service)
+                        .with_upgrades()
                         .await
                     {
                         log_event("warn", "operator_connection_failed", &json!({
@@ -115,8 +123,11 @@ pub async fn serve(
     }
 }
 
-async fn handle(request: Request<Incoming>, state: &OperatorState) -> Response<Body> {
+async fn handle(mut request: Request<Incoming>, state: &OperatorState) -> Response<Body> {
     state.inner.metrics.requests.fetch_add(1, Ordering::Relaxed);
+    if request.method() == Method::GET && request.uri().path() == "/api/sync" {
+        return websocket_upgrade(&mut request, Arc::clone(&state.inner.central));
+    }
     let authorization = request
         .headers()
         .get(AUTHORIZATION)
@@ -201,6 +212,69 @@ async fn handle(request: Request<Incoming>, state: &OperatorState) -> Response<B
     )
 }
 
+fn websocket_upgrade(
+    request: &mut Request<Incoming>,
+    workspace: Arc<CentralWorkspace>,
+) -> Response<Body> {
+    let Some(key) = request
+        .headers()
+        .get("sec-websocket-key")
+        .map(|value| value.as_bytes().to_vec())
+    else {
+        return response(
+            StatusCode::BAD_REQUEST,
+            "text/plain; charset=utf-8",
+            "WebSocket upgrade required\n",
+        );
+    };
+    let version_matches = request
+        .headers()
+        .get("sec-websocket-version")
+        .is_some_and(|value| value == "13");
+    let upgrade_matches = request
+        .headers()
+        .get("upgrade")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
+    if !version_matches || !upgrade_matches {
+        return response(
+            StatusCode::BAD_REQUEST,
+            "text/plain; charset=utf-8",
+            "Invalid WebSocket upgrade\n",
+        );
+    }
+    let accept = tokio_tungstenite::tungstenite::handshake::derive_accept_key(&key);
+    let upgraded = hyper::upgrade::on(request);
+    tokio::spawn(async move {
+        match upgraded.await {
+            Ok(stream) => {
+                let socket =
+                    WebSocketStream::from_raw_socket(TokioIo::new(stream), Role::Server, None)
+                        .await;
+                if let Err(error) = workspace.serve_socket(socket).await {
+                    log_event(
+                        "warn",
+                        "central_sync_connection_failed",
+                        &json!({ "error": error.to_string() }),
+                    );
+                }
+            }
+            Err(error) => log_event(
+                "warn",
+                "central_sync_upgrade_failed",
+                &json!({ "error": error.to_string() }),
+            ),
+        }
+    });
+    Response::builder()
+        .status(StatusCode::SWITCHING_PROTOCOLS)
+        .header("connection", "Upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-accept", accept)
+        .body(Full::new(Bytes::new()))
+        .expect("static WebSocket response is valid")
+}
+
 fn route(
     method: &Method,
     path: &str,
@@ -208,7 +282,7 @@ fn route(
     state: &OperatorState,
 ) -> Response<Body> {
     if method == Method::GET && path == "/healthz" {
-        return json_response(StatusCode::OK, &json!({ "status": "ok" }));
+        return response(StatusCode::OK, "text/plain; charset=utf-8", "ok\n");
     }
     if method == Method::GET && path == "/readyz" {
         return json_response(StatusCode::OK, &json!({ "status": "ready" }));
@@ -687,6 +761,7 @@ pub fn log_event(level: &str, event: &str, fields: &Value) {
 mod tests {
     use std::net::SocketAddr;
 
+    use futures_util::{SinkExt as _, StreamExt as _};
     use http_body_util::BodyExt as _;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
@@ -700,6 +775,7 @@ mod tests {
                 author_id: "author".to_owned(),
                 state_dir: path.to_path_buf(),
                 workspace_ids: RwLock::new(vec!["workspace".to_owned()]),
+                central: CentralWorkspace::open(&path.join("central")).unwrap(),
                 token: b"secret-token".to_vec(),
                 started: Instant::now(),
                 metrics: Metrics {
@@ -712,12 +788,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn central_sync_websocket_performs_versioned_hello() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = state(directory.path());
+        let workspace_id = state.inner.central.workspace_id().to_owned();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server = tokio::spawn(serve(listener, state, shutdown_rx));
+
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/api/sync"))
+            .await
+            .unwrap();
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                xo_core::central_sync::ControlMessage::client_hello("test-client")
+                    .encode()
+                    .unwrap()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let response = socket.next().await.unwrap().unwrap();
+        let tokio_tungstenite::tungstenite::Message::Text(response) = response else {
+            panic!("expected server hello text frame");
+        };
+        assert_eq!(
+            xo_core::central_sync::ControlMessage::decode(&response).unwrap(),
+            xo_core::central_sync::ControlMessage::server_hello(
+                workspace_id,
+                ["test-client".to_owned()]
+            )
+        );
+        socket.close(None).await.unwrap();
+        let _ = shutdown_tx.send(());
+        server.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
     async fn health_is_public_but_operator_routes_require_a_token() {
         let directory = tempfile::tempdir().unwrap();
         let state = state(directory.path());
+        let health = route(&Method::GET, "/healthz", None, &state);
+        assert_eq!(health.status(), StatusCode::OK);
         assert_eq!(
-            route(&Method::GET, "/healthz", None, &state).status(),
-            StatusCode::OK
+            health.headers().get(CONTENT_TYPE).unwrap(),
+            "text/plain; charset=utf-8"
+        );
+        assert_eq!(
+            health.into_body().collect().await.unwrap().to_bytes(),
+            Bytes::from_static(b"ok\n")
         );
         assert_eq!(
             route(&Method::GET, "/v1/status", None, &state).status(),
@@ -813,7 +933,7 @@ mod tests {
             .unwrap(),
         );
         let token = "a".repeat(32);
-        let state = OperatorState::new(Arc::clone(&daemon), Vec::new(), token.clone());
+        let state = OperatorState::new(Arc::clone(&daemon), Vec::new(), token.clone()).unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();

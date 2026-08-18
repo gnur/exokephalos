@@ -7,6 +7,7 @@ pub mod automerge_store;
 #[cfg(feature = "native")]
 pub mod backup;
 pub mod behavior;
+pub mod central_sync;
 pub mod domain;
 #[cfg(feature = "native")]
 pub mod encryption;

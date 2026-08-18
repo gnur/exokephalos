@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use automerge::sync::{Message as SyncMessage, State as SyncState, SyncDoc as _};
 use automerge::transaction::Transactable as _;
 use automerge::{ActorId as AutomergeActorId, AutoCommit, ROOT, ReadDoc as _, ScalarValue};
 use thiserror::Error;
@@ -157,6 +158,28 @@ impl AutomergeRecordStore {
             .cloned()
             .collect()
     }
+
+    /// Generate the next opaque Automerge protocol message for one connection.
+    pub fn generate_sync_message(&mut self, state: &mut SyncState) -> Option<Vec<u8>> {
+        self.document
+            .sync()
+            .generate_sync_message(state)
+            .map(SyncMessage::encode)
+    }
+
+    /// Apply one opaque Automerge protocol message, returning whether heads changed.
+    pub fn receive_sync_message(
+        &mut self,
+        state: &mut SyncState,
+        bytes: &[u8],
+    ) -> anyhow::Result<bool> {
+        crate::central_sync::validate_sync_message(bytes)?;
+        let before = self.heads();
+        let message = SyncMessage::decode(bytes)
+            .map_err(|error| anyhow::anyhow!("decode Automerge sync message: {error}"))?;
+        self.document.sync().receive_sync_message(state, message)?;
+        Ok(self.heads() != before)
+    }
 }
 
 /// Native durable wrapper. Every acknowledged mutation atomically replaces an fsynced snapshot.
@@ -239,6 +262,23 @@ impl PersistentAutomergeStore {
         self.flush()
     }
 
+    pub fn generate_sync_message(&mut self, state: &mut SyncState) -> Option<Vec<u8>> {
+        self.store.generate_sync_message(state)
+    }
+
+    /// Apply a sync message and fsync changed state before reporting success.
+    pub fn receive_sync_message(
+        &mut self,
+        state: &mut SyncState,
+        bytes: &[u8],
+    ) -> anyhow::Result<bool> {
+        let changed = self.store.receive_sync_message(state, bytes)?;
+        if changed {
+            self.flush()?;
+        }
+        Ok(changed)
+    }
+
     #[must_use]
     pub fn snapshot(&mut self) -> Vec<u8> {
         self.store.save()
@@ -305,6 +345,38 @@ mod tests {
         first.merge(&mut second).unwrap();
         assert_eq!(first.get("note/a").unwrap(), Some(vec![1]));
         assert_eq!(first.get("note/b").unwrap(), Some(vec![2]));
+    }
+
+    #[test]
+    fn opaque_sync_messages_converge_offline_changes() {
+        let mut first = AutomergeRecordStore::create("workspace-a", b"actor-a").unwrap();
+        let mut second = AutomergeRecordStore::load(&first.save(), b"actor-b").unwrap();
+        first.put("note/a", vec![1]).unwrap();
+        second.put("note/b", vec![2]).unwrap();
+        let mut first_state = SyncState::new();
+        let mut second_state = SyncState::new();
+
+        for _ in 0..20 {
+            let first_message = first.generate_sync_message(&mut first_state);
+            let second_message = second.generate_sync_message(&mut second_state);
+            if first_message.is_none() && second_message.is_none() {
+                break;
+            }
+            if let Some(message) = first_message {
+                second
+                    .receive_sync_message(&mut second_state, &message)
+                    .unwrap();
+            }
+            if let Some(message) = second_message {
+                first
+                    .receive_sync_message(&mut first_state, &message)
+                    .unwrap();
+            }
+        }
+
+        assert_eq!(first.scan("note/").unwrap(), second.scan("note/").unwrap());
+        assert_eq!(first.get("note/b").unwrap(), Some(vec![2]));
+        assert_eq!(second.get("note/a").unwrap(), Some(vec![1]));
     }
 
     #[test]

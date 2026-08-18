@@ -7,9 +7,7 @@ INSTALL_DIR="${XO_INSTALL_DIR:-${HOME}/.local/bin}"
 CONFIG_DIR="${HOME}/.config/xo"
 CLIENT_STATE_DIR="${HOME}/.local/share/xo"
 SYNC_STATE_DIR="${XO_SYNCD_STATE_DIR:-${HOME}/.local/share/xo-syncd}"
-WORKSPACE_ID="${XO_WORKSPACE_ID:-}"
-SYNC_TICKET="${XO_SYNC_TICKET:-}"
-SYNCD_PEER_ID="${XO_SYNCD_PEER_ID:-}"
+SYNCD_BIND="${XO_SYNCD_BIND:-127.0.0.1:9464}"
 SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
 
 log() {
@@ -134,15 +132,6 @@ prompt_choice() {
   fi
 }
 
-prompt_secret() {
-  local prompt="$1" reply=""
-  if [[ -r /dev/tty ]]; then
-    read -r -s -p "${prompt}: " reply </dev/tty || reply=""
-    echo "" >/dev/tty
-  fi
-  echo "${reply}"
-}
-
 ask_installation_mode() {
   echo "" >&2
   echo "How would you like to configure xo on this system?" >&2
@@ -152,56 +141,14 @@ ask_installation_mode() {
   echo "  4) Skip configuration (binaries installed only)" >&2
   echo "" >&2
 
-  local choice default_choice="1"
-  if [[ -n "${SYNC_TICKET}" ]]; then
-    default_choice="2"
-  fi
-  choice="$(prompt_choice "Select option (1-4)" "${default_choice}")"
+  local choice
+  choice="$(prompt_choice "Select option (1-4)" "1")"
   case "${choice}" in
     1) echo "xo" ;;
     2) echo "syncd" ;;
     3) echo "both" ;;
     *) echo "none" ;;
   esac
-}
-
-prompt_sync_workspace() {
-  if [[ -z "${WORKSPACE_ID}" ]]; then
-    WORKSPACE_ID="$(prompt_choice "Workspace ID" "")"
-  fi
-  if [[ -z "${SYNC_TICKET}" ]]; then
-    SYNC_TICKET="$(prompt_secret "Workspace invitation")"
-  fi
-  if [[ -z "${SYNCD_PEER_ID}" ]]; then
-    local default_peer
-    default_peer="$(printf '%s-syncd' "$(hostname)" | cut -c1-64)"
-    SYNCD_PEER_ID="$(prompt_choice "xo-syncd peer ID" "${default_peer}")"
-  fi
-  [[ -n "${WORKSPACE_ID}" ]] || fatal "A workspace ID is required for xo-syncd setup."
-  [[ -n "${SYNC_TICKET}" ]] || fatal "A workspace invitation is required for xo-syncd setup."
-  [[ "${SYNCD_PEER_ID}" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || fatal "The xo-syncd peer ID is invalid."
-}
-
-import_sync_ticket() {
-  log "Importing workspace ${WORKSPACE_ID} into ${SYNC_STATE_DIR}..."
-  local output imported_workspace attempt
-  if ! output="$("${INSTALL_DIR}/xo-admin" import-ticket --peer-id "${SYNCD_PEER_ID}" "${SYNC_STATE_DIR}" "${SYNC_TICKET}" 2>&1)"; then
-    if [[ "${output}" != *"pending approval"* ]]; then
-      fatal "Could not submit the workspace invitation: ${output}"
-    fi
-    log "Admission requested for ${SYNCD_PEER_ID}. Approve its fingerprint from an active xo peer."
-    for attempt in $(seq 1 120); do
-      sleep 2
-      if output="$("${INSTALL_DIR}/xo-admin" import-ticket --peer-id "${SYNCD_PEER_ID}" "${SYNC_STATE_DIR}" "${SYNC_TICKET}" 2>&1)"; then
-        break
-      fi
-    done
-    [[ "${output}" == workspace_id=* ]] || fatal "Timed out waiting for workspace membership approval."
-  fi
-  imported_workspace="$(printf '%s\n' "${output}" | awk -F= '$1 == "workspace_id" { print $2; exit }')"
-  if [[ "${imported_workspace}" != "${WORKSPACE_ID}" ]]; then
-    fatal "The ticket belongs to workspace ${imported_workspace:-<unknown>}, not ${WORKSPACE_ID}."
-  fi
 }
 
 ensure_config() {
@@ -233,7 +180,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${INSTALL_DIR}/xo-syncd --state-dir ${SYNC_STATE_DIR}
+ExecStart=${INSTALL_DIR}/xo-syncd --state-dir ${SYNC_STATE_DIR} --bind ${SYNCD_BIND}
 Restart=on-failure
 RestartSec=5s
 Environment=RUST_BACKTRACE=1
@@ -279,15 +226,9 @@ main() {
   local mode
   mode="$(ask_installation_mode)"
 
-  if [[ -n "${SYNC_TICKET}" && "${mode}" == "xo" ]]; then
-    warn "XO_SYNC_TICKET was supplied, but xo-syncd was not selected; the ticket was not imported."
-  fi
-
   case "${mode}" in
     syncd | both)
-      prompt_sync_workspace
       systemctl --user stop xo-syncd.service 2>/dev/null || true
-      import_sync_ticket
       setup_systemd_unit
       ;;
   esac

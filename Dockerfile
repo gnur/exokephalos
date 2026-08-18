@@ -29,10 +29,10 @@ EXPOSE 9464
 STOPSIGNAL SIGINT
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:9464/readyz"]
+    CMD ["curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:9464/healthz"]
 
 ENTRYPOINT ["/usr/local/bin/xo-syncd"]
-CMD ["--state-dir", "/data", "--operator-bind", "0.0.0.0:9464"]
+CMD ["--state-dir", "/data", "--bind", "0.0.0.0:9464"]
 
 # CI reuses the release binaries built natively by the platform matrix instead
 # of compiling the ARM binary under QEMU.

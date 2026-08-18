@@ -56,6 +56,11 @@ impl CentralWorkspace {
         &self.workspace_id
     }
 
+    #[cfg(test)]
+    pub async fn record(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        Ok(self.store.lock().await.store().get(key)?)
+    }
+
     async fn client_ids(&self) -> Vec<String> {
         self.clients.lock().await.keys().cloned().collect()
     }

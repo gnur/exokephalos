@@ -11,23 +11,17 @@ anyhow.workspace = true
 automerge.workspace = true
 bytes.workspace = true
 clap.workspace = true
-futures-lite.workspace = true
 futures-util.workspace = true
-hostname.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 rand.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-subtle.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
-xo-core = { path = "../xo-core", features = ["iroh-sync"] }
+xo-core = { path = "../xo-core", features = ["native"] }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-xo = { path = "../xo" }

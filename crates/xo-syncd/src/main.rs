@@ -1,252 +1,49 @@
 mod central;
-mod operator;
+mod server;
 
-use std::fmt::Write as _;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context as _, Result};
 use clap::Parser;
-use futures_lite::StreamExt as _;
-use rand::RngCore as _;
-use serde_json::json;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-use xo_core::iroh_node::{IrohNode, WorkspaceEvent};
-use xo_core::records::WorkspaceRecords;
-use xo_core::{ActorId, CURRENT_SCHEMA, DeviceRecord};
 
-use operator::{OperatorState, log_event};
+use central::CentralWorkspace;
 
 #[derive(Debug, Parser)]
 #[command(
     name = "xo-syncd",
     version = xo_core::version::VERSION,
-    about = "Durable exokephalos replication peer"
+    about = "Central xo Automerge synchronization server"
 )]
 struct Cli {
-    /// Directory containing local daemon state.
+    /// Directory containing the server's authoritative Automerge workspace.
     #[arg(long, default_value = ".xo/syncd")]
     state_dir: PathBuf,
-    /// Human-readable peer ID; defaults to the system hostname.
-    #[arg(long)]
-    peer_id: Option<String>,
-    /// Address for health, metrics, and authenticated operator endpoints.
+    /// Address serving the PWA, item API, health probe, and WebSocket sync.
     #[arg(long, default_value = "127.0.0.1:9464")]
-    operator_bind: SocketAddr,
-    /// Bearer-token file; defaults to `STATE_DIR/operator.token` and is created if absent.
-    #[arg(long)]
-    operator_token_file: Option<PathBuf>,
+    bind: SocketAddr,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let peer_id = if let Some(value) = cli.peer_id {
-        xo_core::PeerId::parse(value)?
-    } else {
-        let hostname = hostname::get()
-            .context("read system hostname")?
-            .into_string()
-            .map_err(|_| anyhow::anyhow!("system hostname is not valid UTF-8"))?;
-        xo_core::PeerId::parse(hostname)?
-    };
-    let node = Arc::new(
-        xo_core::iroh_node::IrohNode::persistent_with_peer(&cli.state_dir, peer_id).await?,
-    );
-    let workspace_ids = node.workspace_ids().await?;
-    for workspace_id in &workspace_ids {
-        let workspace = node
-            .open_workspace_str(workspace_id)
-            .await?
-            .with_context(|| format!("stored workspace {workspace_id} disappeared"))?;
-        register_daemon_device(&node, &workspace).await?;
-        workspace
-            .resume_sync()
-            .await
-            .with_context(|| format!("resume workspace {workspace_id}"))?;
-        log_event(
-            "info",
-            "workspace_sync_resumed",
-            &json!({ "workspace_id": workspace_id }),
-        );
-        spawn_workspace_logging(workspace, workspace_id.clone());
-    }
-    let token_file = cli
-        .operator_token_file
-        .unwrap_or_else(|| cli.state_dir.join("operator.token"));
-    let token = load_or_create_token(&token_file)?;
-    let listener = TcpListener::bind(cli.operator_bind)
+    let workspace = CentralWorkspace::open(&cli.state_dir)?;
+    let listener = TcpListener::bind(cli.bind)
         .await
-        .with_context(|| format!("bind operator server to {}", cli.operator_bind))?;
-    let operator_addr = listener.local_addr()?;
-    let state = OperatorState::new(Arc::clone(&node), workspace_ids, token)?;
+        .with_context(|| format!("bind xo-syncd to {}", cli.bind))?;
+    let address = listener.local_addr()?;
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let operator_task = tokio::spawn(operator::serve(listener, state, shutdown_rx));
-    log_event(
-        "info",
-        "daemon_started",
-        &json!({
-            "endpoint_id": node.endpoint_id().to_string(),
-            "author_id": node.author_id().to_string(),
-            "state_dir": node.state_dir(),
-            "operator_addr": operator_addr,
-            "operator_token_file": token_file,
-        }),
+    let server = tokio::spawn(server::serve(listener, workspace.clone(), shutdown_rx));
+    eprintln!(
+        "xo-syncd serving workspace {} on http://{}",
+        workspace.workspace_id(),
+        address
     );
 
     tokio::signal::ctrl_c().await?;
-    log_event("info", "shutdown_requested", &json!({ "signal": "ctrl_c" }));
     let _ = shutdown_tx.send(());
-    operator_task.await.context("join operator server")??;
-    node.shutdown().await?;
-    log_event("info", "daemon_stopped", &json!({}));
+    server.await.context("join xo-syncd HTTP server")??;
     Ok(())
-}
-
-async fn register_daemon_device(
-    node: &IrohNode,
-    workspace: &xo_core::iroh_node::IrohWorkspace,
-) -> Result<()> {
-    WorkspaceRecords::new(workspace)
-        .put_device(&DeviceRecord {
-            schema: CURRENT_SCHEMA,
-            endpoint_id: node.endpoint_id().to_string(),
-            author_id: ActorId::new(workspace.author_id().to_string()),
-            label: "xo-syncd".to_owned(),
-            capabilities: std::collections::BTreeSet::from([
-                "write".to_owned(),
-                "daemon".to_owned(),
-            ]),
-            last_seen_ms: Some(wall_clock_ms()?),
-            retired_at: None,
-        })
-        .await?;
-    Ok(())
-}
-
-fn spawn_workspace_logging(workspace: xo_core::iroh_node::IrohWorkspace, workspace_id: String) {
-    tokio::spawn(async move {
-        let Ok(mut events) = workspace.subscribe().await else {
-            log_event(
-                "error",
-                "workspace_subscription_failed",
-                &json!({ "workspace_id": workspace_id }),
-            );
-            return;
-        };
-        while let Some(event) = events.next().await {
-            match event {
-                Ok(WorkspaceEvent::ContentChanged) => log_event(
-                    "info",
-                    "workspace_content_received",
-                    &json!({ "workspace_id": workspace_id }),
-                ),
-                Ok(WorkspaceEvent::StatusChanged) => log_event(
-                    "debug",
-                    "workspace_sync_status_changed",
-                    &json!({ "workspace_id": workspace_id }),
-                ),
-                Err(error) => {
-                    log_event(
-                        "error",
-                        "workspace_event_failed",
-                        &json!({ "workspace_id": workspace_id, "error": error.to_string() }),
-                    );
-                    break;
-                }
-            }
-        }
-    });
-}
-
-fn wall_clock_ms() -> Result<u64> {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .context("system clock precedes Unix epoch")?
-        .as_millis()
-        .try_into()
-        .context("system time does not fit u64")
-}
-
-fn load_or_create_token(path: &Path) -> Result<String> {
-    match std::fs::read_to_string(path) {
-        Ok(token) => validate_token(token.trim()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => create_token(path),
-        Err(error) => Err(error).with_context(|| format!("read token file {}", path.display())),
-    }
-}
-
-fn validate_token(token: &str) -> Result<String> {
-    if token.len() < 32 || token.chars().any(char::is_whitespace) {
-        bail!("operator token must contain at least 32 non-whitespace characters");
-    }
-    Ok(token.to_owned())
-}
-
-fn create_token(path: &Path) -> Result<String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create token directory {}", parent.display()))?;
-    }
-    let mut random = [0_u8; 32];
-    rand::rng().fill_bytes(&mut random);
-    let mut token = String::with_capacity(64);
-    for byte in random {
-        write!(&mut token, "{byte:02x}").expect("writing to a string cannot fail");
-    }
-    write_token_file(path, &token)?;
-    Ok(token)
-}
-
-#[cfg(unix)]
-fn write_token_file(path: &Path, token: &str) -> Result<()> {
-    use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
-
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-        .with_context(|| format!("create token file {}", path.display()))?;
-    file.write_all(token.as_bytes())?;
-    file.write_all(b"\n")?;
-    file.sync_all()?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn write_token_file(path: &Path, token: &str) -> Result<()> {
-    use std::io::Write as _;
-
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .with_context(|| format!("create token file {}", path.display()))?;
-    file.write_all(token.as_bytes())?;
-    file.write_all(b"\n")?;
-    file.sync_all()?;
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn operator_token_is_created_once_and_reused() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("operator.token");
-        let created = load_or_create_token(&path).unwrap();
-        assert_eq!(created.len(), 64);
-        assert_eq!(load_or_create_token(&path).unwrap(), created);
-    }
-
-    #[test]
-    fn short_operator_tokens_are_rejected() {
-        assert!(validate_token("too-short").is_err());
-    }
 }

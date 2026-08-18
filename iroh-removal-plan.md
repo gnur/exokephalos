@@ -67,12 +67,12 @@ may transfer the complete Automerge history through normal Automerge sync messag
 - [x] Add transport-neutral centralized sync handshake/control types and size limits
   to `xo-core`.
 - [x] Add Automerge sync-state methods to the durable record store.
-- [ ] Replace the multi-workspace daemon startup with one required durable workspace.
+- [x] Replace the multi-workspace daemon startup with one required durable workspace.
 - [x] Implement `/api/sync` WebSocket upgrade and per-connection Automerge sync state.
 - [x] Persist every accepted server change before acknowledging/broadcasting it.
 - [x] Track connected client IDs for status and the TUI peer view.
 - [ ] Make graceful shutdown close listeners, flush the workspace, and close sockets.
-- [ ] Remove the bearer-token operator server and obsolete setup/invitation endpoints;
+- [x] Remove the bearer-token operator server and obsolete setup/invitation endpoints;
   retain unauthenticated health and useful operational metrics only if they do not
   expose note content.
 

@@ -297,27 +297,22 @@ jobs:
           wait "${tui_driver_pid}"
 
           target/debug/xo-syncd \
-            --state-dir "${fixture}/state" \
-            --operator-bind 127.0.0.1:19464 > "${fixture}/syncd.log" 2>&1 &
+            --state-dir "${fixture}/central-state" \
+            --bind 127.0.0.1:19464 > "${fixture}/syncd.log" 2>&1 &
           syncd_pid=$!
           trap 'kill ${syncd_pid} 2>/dev/null || true' EXIT
           for attempt in {1..60}; do
-            if curl --fail --silent http://127.0.0.1:19464/healthz > /dev/null; then
+            if [[ "$(curl --fail --silent http://127.0.0.1:19464/healthz)" == "ok" ]]; then
               break
             fi
             sleep 0.5
           done
-          curl --fail --silent http://127.0.0.1:19464/healthz > /dev/null
-          operator_token=$(cat "${fixture}/state/operator.token")
-          invitation_json=$(curl --fail --silent \
-            -H "Authorization: Bearer ${operator_token}" \
-            "http://127.0.0.1:19464/v1/workspaces/${workspace_id}/invitation")
-          ticket=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["invitation"])' <<<"${invitation_json}")
+          test "$(curl --fail --silent http://127.0.0.1:19464/healthz)" = "ok"
           cd web
-          XO_IROH_TICKET="${ticket}" XO_OPERATOR_TOKEN="${operator_token}" npm run test:e2e
-          XO_IROH_TICKET="${ticket}" XO_OPERATOR_TOKEN="${operator_token}" npx playwright test \
-            --project=firefox --project=mobile-webkit \
-            --grep 'creates a local item|prevents mobile|receives native items'
+          npx playwright test --project=chromium \
+            --grep 'creates a local item|prevents mobile'
+          npx playwright test --project=firefox --project=mobile-webkit \
+            --grep 'creates a local item|prevents mobile'
 
       - name: Package static PWA
         run: tar -C web/dist -czf xo-web.tar.gz .

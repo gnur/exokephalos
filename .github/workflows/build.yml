@@ -96,7 +96,7 @@ jobs:
   web:
     name: xo-web static PWA
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v6

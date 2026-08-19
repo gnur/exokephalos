@@ -112,10 +112,7 @@ impl PageFetcher for NativePageFetcher {
                         .context("redirect is missing Location")?
                         .to_str()
                         .context("redirect Location is not valid text")?;
-                    current = current
-                        .join(location)
-                        .context("resolve redirect Location")?;
-                    validate_url(&current)?;
+                    current = validated_redirect(&current, location)?;
                     continue;
                 }
                 if !response.status().is_success() {
@@ -168,13 +165,26 @@ async fn pinned_client(url: &Url) -> Result<Client> {
         .context("build URL capture HTTP client")
 }
 
+fn validated_redirect(current: &Url, location: &str) -> Result<Url> {
+    let target = current
+        .join(location)
+        .context("resolve redirect Location")?;
+    validate_url(&target)?;
+    Ok(target)
+}
+
+fn append_limited(body: &mut Vec<u8>, chunk: &[u8]) -> Result<()> {
+    if body.len().saturating_add(chunk.len()) > MAX_BODY_BYTES {
+        bail!("response body exceeds {MAX_BODY_BYTES} bytes");
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
+}
+
 async fn read_limited(mut response: reqwest::Response) -> Result<Vec<u8>> {
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.context("read response body")? {
-        if body.len().saturating_add(chunk.len()) > MAX_BODY_BYTES {
-            bail!("response body exceeds {MAX_BODY_BYTES} bytes");
-        }
-        body.extend_from_slice(&chunk);
+        append_limited(&mut body, &chunk)?;
     }
     Ok(body)
 }
@@ -274,8 +284,14 @@ fn validate_url(url: &Url) -> Result<()> {
     if !matches!(url.scheme(), "http" | "https") {
         bail!("only http and https URLs are supported");
     }
-    if url.host_str().is_none() {
-        bail!("URL has no host");
+    let host = url.host().context("URL has no host")?;
+    let literal_ip = match host {
+        url::Host::Ipv4(ip) => Some(IpAddr::V4(ip)),
+        url::Host::Ipv6(ip) => Some(IpAddr::V6(ip)),
+        url::Host::Domain(_) => None,
+    };
+    if literal_ip.is_some_and(|ip| !is_public_ip(ip)) {
+        bail!("refusing private or special address");
     }
     if !url.username().is_empty() || url.password().is_some() {
         bail!("URL credentials are not allowed");
@@ -397,6 +413,28 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[test]
+    fn redirects_are_resolved_and_revalidated() {
+        let current = Url::parse("https://example.com/articles/one").unwrap();
+        assert_eq!(
+            validated_redirect(&current, "../two").unwrap().as_str(),
+            "https://example.com/two"
+        );
+        assert!(validated_redirect(&current, "http://127.0.0.1/private").is_err());
+        assert!(validated_redirect(&current, "https://user:secret@example.com/").is_err());
+        assert!(validated_redirect(&current, "file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn streamed_body_limit_is_enforced_across_chunks() {
+        let mut body = Vec::new();
+        append_limited(&mut body, &vec![0; MAX_BODY_BYTES - 1]).unwrap();
+        append_limited(&mut body, &[1]).unwrap();
+        assert_eq!(body.len(), MAX_BODY_BYTES);
+        assert!(append_limited(&mut body, &[2]).is_err());
+        assert_eq!(body.len(), MAX_BODY_BYTES);
     }
 
     #[test]

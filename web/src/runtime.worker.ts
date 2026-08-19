@@ -92,7 +92,7 @@ function openDatabase() {
       for (const store of [CHECKPOINT_STORE, SETTINGS_STORE, REPLICA_STORE]) {
         if (!db.objectStoreNames.contains(store)) db.createObjectStore(store, { keyPath: 'id' });
       }
-      // Version 3 stored an Iroh-specific replica envelope. The centralized
+      // Version 3 stored the obsolete transport-specific replica envelope. The centralized
       // transport is intentionally a fresh workspace migration.
       if ((event as IDBVersionChangeEvent).oldVersion < 4 && db.objectStoreNames.contains(REPLICA_STORE)) {
         request.transaction?.objectStore(REPLICA_STORE).clear();

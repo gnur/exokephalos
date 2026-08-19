@@ -106,7 +106,7 @@ download_and_extract() {
   }
 
   mkdir -p "${INSTALL_DIR}"
-  for binary in xo xo-admin xo-lsp xo-syncd; do
+  for binary in xo xo-lsp xo-syncd; do
     if [[ -f "${tmp_dir}/${binary}" ]]; then
       cp "${tmp_dir}/${binary}" "${INSTALL_DIR}/${binary}"
       chmod 0755 "${INSTALL_DIR}/${binary}"
@@ -245,7 +245,6 @@ main() {
 
   echo "Installed binaries:"
   echo "  ${INSTALL_DIR}/xo"
-  echo "  ${INSTALL_DIR}/xo-admin"
   echo "  ${INSTALL_DIR}/xo-lsp"
   echo "  ${INSTALL_DIR}/xo-syncd"
   echo ""

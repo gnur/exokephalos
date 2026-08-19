@@ -13,7 +13,7 @@ use tempfile::Builder as TempFileBuilder;
 use xo::keymap::{ACTION_ALIASES, ACTION_NAMES, KeyMap};
 use xo::steel_plugin::PluginChoice;
 use xo_core::behavior::{Query, WorkspaceBehavior};
-use xo_core::domain::{DeviceRecord, Frontmatter, FrontmatterValue};
+use xo_core::domain::{Frontmatter, FrontmatterValue};
 use xo_core::encryption;
 use xo_core::projection::Diagnostic;
 use xo_core::sync_state::{DurableOperation, SyncStatus};
@@ -41,7 +41,7 @@ pub enum Mode {
     PluginInput,
     PluginResults,
     Conflicts,
-    Devices,
+    Clients,
     Sync,
 }
 
@@ -52,7 +52,6 @@ pub struct App {
     pub deleted: BTreeMap<NoteId, Note>,
     pub conflicts: Vec<Conflict>,
     pub conflict_history: BTreeMap<NoteId, Vec<(RevisionId, NoteRevision)>>,
-    pub devices: Vec<DeviceRecord>,
     pub connected_clients: Vec<String>,
     pub client_id: String,
     pub diagnostics: Vec<Diagnostic>,
@@ -99,7 +98,6 @@ impl App {
             deleted: BTreeMap::new(),
             conflicts: vec![],
             conflict_history: BTreeMap::new(),
-            devices: vec![],
             connected_clients: vec![],
             client_id: String::new(),
             diagnostics: vec![],
@@ -827,7 +825,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         .find(|view| view.id == app.active_view)
         .map_or(app.active_view.as_str(), |view| view.name.as_str());
     let subviews = app.subview_header();
-    let header = if app.mode == Mode::Devices {
+    let header = if app.mode == Mode::Clients {
         format!("xo {} · Connected clients", xo_core::version::VERSION)
     } else if subviews.is_empty() {
         format!("xo {} · {}", xo_core::version::VERSION, view_name)
@@ -848,7 +846,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         vertical[0],
     );
     let key = |action: &str| app.keymap.footer_key(action);
-    let mut footer = if app.mode == Mode::Devices {
+    let mut footer = if app.mode == Mode::Clients {
         format!(
             "[{}/{}] select · connected clients are managed by xo-syncd · [Esc] close",
             key("cursor_down"),
@@ -1009,8 +1007,8 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         );
     }
     let content_area = vertical[usize::from(has_input) + 1];
-    if app.mode == Mode::Devices {
-        render_devices(frame, app, content_area);
+    if app.mode == Mode::Clients {
+        render_clients(frame, app, content_area);
         return;
     }
     let pane_constraints = if app.tags_visible {
@@ -1190,10 +1188,9 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 app.sync
                     .as_ref()
                     .map_or("offline", |status| match status.connectivity {
-                        xo_core::sync_state::Connectivity::Direct => "connected",
+                        xo_core::sync_state::Connectivity::Connected => "connected",
                         xo_core::sync_state::Connectivity::Connecting => "connecting",
-                        xo_core::sync_state::Connectivity::Offline
-                        | xo_core::sync_state::Connectivity::Relay => "offline",
+                        xo_core::sync_state::Connectivity::Offline => "offline",
                     }),
                 app.operations
                     .iter()
@@ -1246,7 +1243,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     );
 }
 
-fn render_devices(frame: &mut Frame<'_>, app: &App, area: Rect) {
+fn render_clients(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let selected = Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD);
@@ -1441,11 +1438,11 @@ mod tests {
     }
 
     #[test]
-    fn devices_mode_replaces_the_note_workspace_with_a_full_screen_list() {
+    fn clients_mode_replaces_the_note_workspace_with_a_full_screen_list() {
         let mut app = fixture();
         app.connected_clients = vec!["test-client".to_owned(), "browser".to_owned()];
         app.client_id = "test-client".to_owned();
-        app.mode = Mode::Devices;
+        app.mode = Mode::Clients;
         let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
         terminal.draw(|frame| render(frame, &app)).unwrap();
         let screen = terminal

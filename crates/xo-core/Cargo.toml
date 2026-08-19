@@ -23,16 +23,7 @@ native = [
     "dep:url",
     "dep:zeroize",
 ]
-peer-protocol = ["dep:base64", "dep:iroh"]
-iroh-sync = [
-    "native",
-    "peer-protocol",
-    "dep:futures-lite",
-    "dep:hostname",
-    "dep:iroh-gossip",
-]
 steel = ["dep:steel-core"]
-test-utils = ["iroh-sync", "iroh/test-utils"]
 
 [dependencies]
 aes-gcm = { workspace = true, optional = true }
@@ -43,11 +34,6 @@ base64 = { workspace = true, optional = true }
 blake3.workspace = true
 ciborium.workspace = true
 dom_smoothie = { workspace = true, optional = true }
-ed25519-dalek.workspace = true
-futures-lite = { workspace = true, optional = true }
-hostname = { workspace = true, optional = true }
-iroh = { workspace = true, optional = true }
-iroh-gossip = { workspace = true, optional = true }
 notify = { workspace = true, optional = true }
 quick_html2md = { workspace = true, optional = true }
 rand.workspace = true
@@ -67,7 +53,3 @@ zeroize = { workspace = true, optional = true }
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-# Enables the in-process TLS relay fixture for Iroh synchronization tests.
-iroh = { workspace = true, features = ["test-utils"] }

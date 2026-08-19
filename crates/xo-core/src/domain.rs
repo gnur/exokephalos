@@ -262,27 +262,6 @@ pub struct Tombstone {
     pub hlc: Hlc,
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct DeviceRecord {
-    pub schema: SchemaVersion,
-    pub endpoint_id: String,
-    pub author_id: ActorId,
-    pub label: String,
-    pub capabilities: BTreeSet<String>,
-    pub last_seen_ms: Option<u64>,
-    pub retired_at: Option<Hlc>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct WorkspaceDescriptor {
-    pub schema: SchemaVersion,
-    pub workspace_id: WorkspaceId,
-    pub invitation: String,
-    pub bootstrap_peers: Vec<String>,
-    pub relay_mode: String,
-    pub encrypted_workspace_key: Option<String>,
-}
-
 impl AssetRecord {
     pub fn validate(&self) -> Result<(), DomainError> {
         validate_schema(self.schema)?;
@@ -362,41 +341,6 @@ impl Tombstone {
         }
         if self.author_id != self.hlc.actor_id {
             return Err(DomainError::AuthorMismatch);
-        }
-        Ok(())
-    }
-}
-
-impl DeviceRecord {
-    pub fn validate(&self) -> Result<(), DomainError> {
-        validate_schema(self.schema)?;
-        if self.endpoint_id.is_empty() {
-            return Err(DomainError::EmptyField {
-                field: "endpoint_id",
-            });
-        }
-        if self.author_id.as_str().is_empty() {
-            return Err(DomainError::EmptyField { field: "author_id" });
-        }
-        if self.label.trim().is_empty() {
-            return Err(DomainError::EmptyField { field: "label" });
-        }
-        Ok(())
-    }
-}
-
-impl WorkspaceDescriptor {
-    pub fn validate(&self) -> Result<(), DomainError> {
-        validate_schema(self.schema)?;
-        if self.workspace_id.as_str().is_empty() {
-            return Err(DomainError::EmptyField {
-                field: "workspace_id",
-            });
-        }
-        if self.invitation.is_empty() {
-            return Err(DomainError::EmptyField {
-                field: "invitation",
-            });
         }
         Ok(())
     }

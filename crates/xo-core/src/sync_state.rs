@@ -8,18 +8,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum SyncCommand {
-    Connect { ticket: String },
-    Refresh,
-    Retry { operation_id: i64 },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Connectivity {
     Offline,
     Connecting,
-    Direct,
-    Relay,
+    Connected,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -275,8 +267,7 @@ fn connectivity_name(value: &Connectivity) -> &'static str {
     match value {
         Connectivity::Offline => "offline",
         Connectivity::Connecting => "connecting",
-        Connectivity::Direct => "direct",
-        Connectivity::Relay => "relay",
+        Connectivity::Connected => "connected",
     }
 }
 
@@ -287,8 +278,7 @@ fn sqlite_ms(value: u64) -> i64 {
 fn parse_connectivity(value: &str) -> Connectivity {
     match value {
         "connecting" => Connectivity::Connecting,
-        "direct" => Connectivity::Direct,
-        "relay" => Connectivity::Relay,
+        "connected" => Connectivity::Connected,
         _ => Connectivity::Offline,
     }
 }

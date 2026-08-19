@@ -224,15 +224,15 @@ fn sandbox(now: &str) -> Engine {
     engine
         .register_fn("schema", |value: isize| value.to_string())
         .register_fn("state-dir", |value: String| value)
-        .register_fn("peer-id", optional_config_value)
+        .register_fn("client-id", optional_config_value)
         .register_fn("projection", |value: String| value)
         .register_fn(
             "xo-config",
-            |schema: String, state_dir: String, peer_id: String, projection: String| {
+            |schema: String, state_dir: String, client_id: String, projection: String| {
                 serde_json::json!({
                     "schema": schema.parse::<u16>().unwrap_or_default(),
                     "state_dir": state_dir,
-                    "peer_id": (!peer_id.is_empty()).then_some(peer_id),
+                    "client_id": (!client_id.is_empty()).then_some(client_id),
                     "projection": projection,
                 })
                 .to_string()
@@ -839,7 +839,7 @@ fn native_error(message: impl Into<String>) -> SteelConfigError {
 struct NativeXoFields {
     schema: u16,
     state_dir: String,
-    peer_id: Option<String>,
+    client_id: Option<String>,
     projection: String,
 }
 
@@ -850,10 +850,10 @@ impl NativeXoFields {
         };
         let optional = |value: Option<&str>| value.map_or_else(|| "#f".to_owned(), string);
         format!(
-            "(xo-config (schema {}) (state-dir {}) (peer-id {}) (projection {}))",
+            "(xo-config (schema {}) (state-dir {}) (client-id {}) (projection {}))",
             self.schema,
             string(&self.state_dir),
-            optional(self.peer_id.as_deref()),
+            optional(self.client_id.as_deref()),
             string(&self.projection),
         )
     }
@@ -877,7 +877,7 @@ impl<'a> NativeXoParser<'a> {
         self.expect_token("xo-config")?;
         let mut schema = None;
         let mut state_dir = None;
-        let mut peer_id = None;
+        let mut client_id = None;
         let mut projection = None;
         loop {
             self.skip_ignored();
@@ -892,10 +892,10 @@ impl<'a> NativeXoParser<'a> {
                 "state-dir" => {
                     set_once(&mut state_dir, self.string()?, "state-dir", self.position)?;
                 }
-                "peer-id" => set_once(
-                    &mut peer_id,
+                "client-id" => set_once(
+                    &mut client_id,
                     self.optional_string()?,
-                    "peer-id",
+                    "client-id",
                     self.position,
                 )?,
                 "projection" => {
@@ -912,7 +912,7 @@ impl<'a> NativeXoParser<'a> {
         Ok(NativeXoFields {
             schema: required(schema, "schema", self.position)?,
             state_dir: required(state_dir, "state-dir", self.position)?,
-            peer_id: peer_id.unwrap_or(None),
+            client_id: client_id.unwrap_or(None),
             projection: required(projection, "projection", self.position)?,
         })
     }

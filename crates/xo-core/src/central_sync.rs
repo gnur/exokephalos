@@ -10,6 +10,29 @@ pub const SYNC_PROTOCOL_VERSION: u16 = 1;
 pub const MAX_CONTROL_MESSAGE_BYTES: usize = 16 * 1024;
 pub const MAX_SYNC_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 
+/// Human-readable presence label. This is not a security identity.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct ClientId(String);
+
+impl ClientId {
+    pub fn parse(value: impl Into<String>) -> Result<Self, SyncProtocolError> {
+        let value = value.into();
+        validate_client_id(&value)?;
+        Ok(Self(value))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ClientId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ControlMessage {

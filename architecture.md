@@ -59,7 +59,6 @@ from the browser runtime and onboarding.
   health probe, and embedded PWA host.
 - `xo-web`: Rust/Wasm IndexedDB Automerge replica, centralized WebSocket worker,
   and React offline-first PWA.
-- `xo-admin`: legacy offline import/backup tooling pending centralized cleanup.
 - `xo-lsp`: stdio editor diagnostics and completion over a native projection.
 
 Each mutable native state directory is protected by `.xo-workspace.lock` and is
@@ -80,6 +79,5 @@ Commit CI runs formatting, Clippy, deterministic workspace/server tests, Wasm an
 browser builds, browser offline UI tests, release-binary matrices, and the
 `xo-syncd` container. Published binaries embed the exact PWA artifact produced by
 the browser job. Release tags additionally run explicitly identified extensive
-workspace tests. Browser-central convergence, offline reload, and reconnect tests run against a
-real `xo-syncd`; remaining conflict and cross-client scenarios are tracked in
-`iroh-removal-plan.md`.
+workspace tests. Browser-central convergence, offline reload, conflict retention,
+reconnect, and three-client restarted-server tests run against a real `xo-syncd`.

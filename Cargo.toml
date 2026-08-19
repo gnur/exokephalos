@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/xo-core",
     "crates/xo",
-    "crates/xo-admin",
     "crates/xo-lsp",
     "crates/xo-syncd",
     "crates/xo-web",
@@ -20,7 +19,6 @@ repository = "https://github.com/gnur/exokephalos"
 aes-gcm = "0.10.3"
 anyhow = "1.0.98"
 argon2 = "0.5.3"
-# 0.7+ requires a sha2 0.11 release incompatible with Iroh 0.98's pinned RC.
 automerge = { version = "0.6.1", features = ["wasm"] }
 base64 = "0.22.1"
 blake3 = "1.8.2"
@@ -29,7 +27,6 @@ ciborium = "0.2.2"
 clap = { version = "4.5.41", features = ["derive"] }
 crossterm = { version = "0.29.0", features = ["event-stream"] }
 dom_smoothie = "0.18.0"
-ed25519-dalek = "=3.0.0-pre.6"
 futures-lite = "2.6.1"
 futures-util = "0.3.31"
 fs2 = "0.4.3"
@@ -37,8 +34,6 @@ http-body-util = "0.1.4"
 hyper = { version = "1.11.0", features = ["http1", "server"] }
 hyper-util = { version = "0.1.20", features = ["tokio"] }
 hostname = "0.4.2"
-iroh = "=0.98.0"
-iroh-gossip = "=0.98.0"
 notify = "=8.2.0"
 quick_html2md = { version = "0.2.1", features = ["url"] }
 rand = "0.9.2"

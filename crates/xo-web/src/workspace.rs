@@ -9,8 +9,8 @@ use xo_core::behavior::{Query, WorkspaceBehavior, default_views};
 use xo_core::domain::{Frontmatter, FrontmatterValue};
 use xo_core::steel_runtime::SteelWorkspace;
 use xo_core::{
-    ActorId, CURRENT_SCHEMA, ConfigRevision, Conflict, DeviceRecord, Head, Hlc, HlcClock, Note,
-    NoteId, NoteRevision, RevisionId, resolve_heads, validate_revision_graph,
+    ActorId, CURRENT_SCHEMA, ConfigRevision, Conflict, Head, HlcClock, Note, NoteId, NoteRevision,
+    RevisionId, resolve_heads, validate_revision_graph,
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -323,7 +323,6 @@ fn decode_records(entries: &[Entry]) -> Result<DecodedRecords> {
     let mut groups = BTreeMap::<NoteId, NoteGroup>::new();
     let mut config_records = Vec::new();
     let mut diagnostics = Vec::new();
-    let cutoffs = retirement_cutoffs(entries, &mut diagnostics)?;
     for entry in entries {
         let parts = entry.key.split('/').collect::<Vec<_>>();
         if parts.first() == Some(&"note") && parts.len() == 4 {
@@ -335,7 +334,6 @@ fn decode_records(entries: &[Entry]) -> Result<DecodedRecords> {
                     if revision.note_id != note_id
                         || revision.author_id.as_str() != entry.author
                         || revision.id()? != revision_id
-                        || !allows(&cutoffs, &revision.author_id, &revision.hlc)
                     {
                         diagnostics.push(format!("rejected mismatched record {}", entry.key));
                     } else {
@@ -364,7 +362,6 @@ fn decode_records(entries: &[Entry]) -> Result<DecodedRecords> {
             let revision_id = record.id()?;
             if entry.key == format!("config/{}/{revision_id}", record.path)
                 && record.author_id.as_str() == entry.author
-                && allows(&cutoffs, &record.author_id, &record.hlc)
             {
                 config_records.push((record, revision_id));
             } else {
@@ -376,48 +373,6 @@ fn decode_records(entries: &[Entry]) -> Result<DecodedRecords> {
         groups,
         configs: config_records,
         diagnostics,
-    })
-}
-
-fn retirement_cutoffs(
-    entries: &[Entry],
-    diagnostics: &mut Vec<String>,
-) -> Result<BTreeMap<ActorId, Hlc>> {
-    let mut cutoffs = BTreeMap::<ActorId, Hlc>::new();
-    for entry in entries
-        .iter()
-        .filter(|entry| entry.key.starts_with("device/"))
-    {
-        let device: DeviceRecord = decode(&entry.bytes()?)?;
-        let expected_signer = device
-            .retired_at
-            .as_ref()
-            .map_or(&device.author_id, |cutoff| &cutoff.actor_id);
-        if entry.key != format!("device/{}", device.endpoint_id)
-            || expected_signer.as_str() != entry.author
-            || device.validate().is_err()
-        {
-            diagnostics.push(format!("rejected mismatched record {}", entry.key));
-            continue;
-        }
-        let Some(cutoff) = device.retired_at else {
-            continue;
-        };
-        cutoffs
-            .entry(device.author_id)
-            .and_modify(|current| {
-                if (cutoff.physical_ms, cutoff.logical) < (current.physical_ms, current.logical) {
-                    *current = cutoff.clone();
-                }
-            })
-            .or_insert(cutoff);
-    }
-    Ok(cutoffs)
-}
-
-fn allows(cutoffs: &BTreeMap<ActorId, Hlc>, author: &ActorId, timestamp: &Hlc) -> bool {
-    cutoffs.get(author).is_none_or(|cutoff| {
-        (timestamp.physical_ms, timestamp.logical) <= (cutoff.physical_ms, cutoff.logical)
     })
 }
 
@@ -726,48 +681,6 @@ mod tests {
             serde_json::from_str(&snapshot_json(&entries_json(&entries)).unwrap()).unwrap();
         assert!(snapshot["notes"].as_array().unwrap().is_empty());
         assert_eq!(snapshot["deleted"][0]["frontmatter"]["title"], "Edited");
-    }
-
-    #[test]
-    fn retired_author_writes_after_the_cutoff_are_hidden() {
-        let author = "browser-author";
-        let mut entries = BTreeMap::new();
-        let created: PreparedMutation = serde_json::from_str(
-            &prepare_mutation_json(
-                "[]",
-                author,
-                r#"{"operation":"save","title":"Rejected","markdown":"---\ntitle: Rejected\ntype: note\n---\n"}"#,
-                2_000,
-                0,
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        apply(&mut entries, created, author);
-        let device = DeviceRecord {
-            schema: CURRENT_SCHEMA,
-            endpoint_id: "retired-endpoint".into(),
-            author_id: ActorId::new(author),
-            label: "Retired browser".into(),
-            capabilities: BTreeSet::new(),
-            last_seen_ms: None,
-            retired_at: Some(Hlc {
-                physical_ms: 1_999,
-                logical: 0,
-                actor_id: ActorId::new("administrator"),
-            }),
-        };
-        entries.insert(
-            "device/retired-endpoint".into(),
-            Entry {
-                key: "device/retired-endpoint".into(),
-                value_base64: BASE64.encode(encode(&device).unwrap()),
-                author: "administrator".into(),
-            },
-        );
-        let snapshot: serde_json::Value =
-            serde_json::from_str(&snapshot_json(&entries_json(&entries)).unwrap()).unwrap();
-        assert!(snapshot["notes"].as_array().unwrap().is_empty());
     }
 
     #[test]

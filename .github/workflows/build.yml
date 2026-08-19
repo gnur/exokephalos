@@ -216,7 +216,7 @@ jobs:
           HOME="${fixture}/home" target/debug/xo \
             --state-dir "${fixture}/native-state" \
             --projection "${fixture}/projection" \
-            --peer-id native-fixture \
+            --client-id native-fixture \
             --server http://127.0.0.1:19464 \
             import "${fixture}/source"
           python3 web/tests/tui-driver.py \
@@ -226,7 +226,7 @@ jobs:
             -- env HOME="${fixture}/home" target/debug/xo \
               --state-dir "${fixture}/native-state" \
               --projection "${fixture}/projection" \
-              --peer-id native-fixture \
+              --client-id native-fixture \
               --server http://127.0.0.1:19464 &
           tui_pid=$!
           trap 'kill ${tui_pid} 2>/dev/null || true; kill -INT ${server_pid} 2>/dev/null || true' EXIT
@@ -322,7 +322,7 @@ jobs:
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             extension=".exe"
           fi
-          for binary in xo xo-admin xo-lsp xo-syncd; do
+          for binary in xo xo-lsp xo-syncd; do
             "target/${{ matrix.target }}/release/${binary}${extension}" --version | grep -F "${XO_VERSION}"
           done
 
@@ -353,11 +353,10 @@ jobs:
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/xo dist/
-          cp target/${{ matrix.target }}/release/xo-admin dist/
           cp target/${{ matrix.target }}/release/xo-lsp dist/
           cp target/${{ matrix.target }}/release/xo-syncd dist/
           tar -C dist -czf "xo-${{ matrix.target }}.tar.gz" \
-            xo xo-admin xo-lsp xo-syncd
+            xo xo-lsp xo-syncd
 
       - name: Package Windows release binaries
         if: runner.os == 'Windows'
@@ -365,7 +364,6 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist
           Copy-Item target/${{ matrix.target }}/release/xo.exe dist/
-          Copy-Item target/${{ matrix.target }}/release/xo-admin.exe dist/
           Copy-Item target/${{ matrix.target }}/release/xo-lsp.exe dist/
           Copy-Item target/${{ matrix.target }}/release/xo-syncd.exe dist/
           Compress-Archive -Path dist/* -DestinationPath "xo-${{ matrix.target }}.zip"

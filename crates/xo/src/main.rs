@@ -37,9 +37,9 @@ struct Cli {
     /// Override the durable local replica directory from config.scm.
     #[arg(long)]
     state_dir: Option<PathBuf>,
-    /// Override the required human-readable peer ID (defaults to the host name).
+    /// Override the human-readable presence client ID (defaults to the host name).
     #[arg(long)]
-    peer_id: Option<String>,
+    client_id: Option<String>,
     /// Central xo-syncd HTTP(S) base URL.
     #[arg(long, default_value = "http://127.0.0.1:9464")]
     server: String,
@@ -111,7 +111,7 @@ async fn main() -> Result<()> {
                 &config.state_dir,
                 &cli.server,
                 config.projection.clone(),
-                config.resolved_peer_id()?,
+                config.resolved_client_id()?,
             )
             .await?;
             let result =
@@ -136,10 +136,10 @@ async fn main() -> Result<()> {
                 &config.state_dir,
                 &cli.server,
                 config.projection.clone(),
-                config.resolved_peer_id()?,
+                config.resolved_client_id()?,
             )
             .await?;
-            // Establish the main workspace descriptor before adding a module,
+            // Establish the main workspace configuration before adding a module,
             // so generated defaults never absorb and duplicate plugin actions.
             session.behavior().await?;
             session.install_config(path, source).await?;
@@ -153,7 +153,7 @@ async fn main() -> Result<()> {
                 &cli.server,
                 config.projection.clone(),
                 &config_path(&home_dir()?).with_file_name("keys.scm"),
-                config.resolved_peer_id()?,
+                config.resolved_client_id()?,
             )
             .await?;
         }
@@ -167,7 +167,7 @@ async fn import_command(cli: &Cli, source: &std::path::Path, item_type: &str) ->
         &config.state_dir,
         &cli.server,
         config.projection.clone(),
-        config.resolved_peer_id()?,
+        config.resolved_client_id()?,
     )
     .await?;
     let interactive = io::stderr().is_terminal();
@@ -216,12 +216,12 @@ fn configured(cli: &Cli) -> Result<XoConfig> {
     let config = XoConfig::load(&config_path(&home), &home)?.apply(
         CliOverrides {
             state_dir: cli.state_dir.clone(),
-            peer_id: cli.peer_id.clone(),
+            client_id: cli.client_id.clone(),
             projection: cli.projection.clone(),
         },
         &home,
     );
-    config.resolved_peer_id()?;
+    config.resolved_client_id()?;
     Ok(config)
 }
 
@@ -230,10 +230,10 @@ async fn run_tui(
     server: &str,
     projection: PathBuf,
     keys_path: &std::path::Path,
-    peer_id: xo_core::PeerId,
+    client_id: xo_core::ClientId,
 ) -> Result<()> {
     let mut session =
-        WorkspaceSession::open_central(state_dir, server, projection, peer_id).await?;
+        WorkspaceSession::open_central(state_dir, server, projection, client_id).await?;
     let workspace_events = session.subscribe()?;
     let behavior = session.behavior().await?;
     let snapshot = session.snapshot().await?;
@@ -293,7 +293,6 @@ async fn hydrate(
         .into_iter()
         .map(|note| (note.id.clone(), note))
         .collect();
-    app.devices = snapshot.devices;
     app.connected_clients = session.connected_clients().await;
     session.client_id().clone_into(&mut app.client_id);
     app.diagnostics = snapshot.diagnostics;
@@ -710,11 +709,11 @@ async fn event_loop(
                 }
                 _ => {}
             },
-            Mode::Devices if key.code == KeyCode::Esc => {
+            Mode::Clients if key.code == KeyCode::Esc => {
                 app.mode = Mode::Normal;
                 app.message.clear();
             }
-            Mode::Devices => {
+            Mode::Clients => {
                 let action = app.keymap.action_for(key).cloned();
                 if let Some(action) = action {
                     dispatch_action(terminal, app, session, &action).await?;
@@ -742,7 +741,7 @@ async fn dispatch_action(
 ) -> Result<bool> {
     match action.name.as_str() {
         "quit" => return Ok(true),
-        "cursor_down" if app.mode == Mode::Devices => {
+        "cursor_down" if app.mode == Mode::Clients => {
             let count = app.connected_clients.len();
             if count > 0 {
                 app.selected = (app.selected + 1).min(count - 1);
@@ -752,7 +751,7 @@ async fn dispatch_action(
             app::Pane::Tags => app.select_next_tag(),
             _ => app.select_next(),
         },
-        "cursor_up" if app.mode == Mode::Devices => {
+        "cursor_up" if app.mode == Mode::Clients => {
             app.selected = app.selected.saturating_sub(1);
         }
         "cursor_up" => match app.pane {
@@ -856,7 +855,7 @@ async fn dispatch_action(
         }
         "open_peers" => {
             app.selected = 0;
-            app.mode = Mode::Devices;
+            app.mode = Mode::Clients;
             app.message = device_summary(app);
         }
         "unlock_preview" => {
@@ -1123,10 +1122,9 @@ fn sync_summary(app: &App) -> String {
         .sync
         .as_ref()
         .map_or("offline", |status| match status.connectivity {
-            xo_core::sync_state::Connectivity::Direct => "connected",
+            xo_core::sync_state::Connectivity::Connected => "connected",
             xo_core::sync_state::Connectivity::Connecting => "connecting",
-            xo_core::sync_state::Connectivity::Offline
-            | xo_core::sync_state::Connectivity::Relay => "offline",
+            xo_core::sync_state::Connectivity::Offline => "offline",
         });
     format!(
         "server: {server}; operations: {}; missing blobs: {}",

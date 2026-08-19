@@ -56,7 +56,7 @@ pub enum WorkspaceEvent {
 pub struct WorkspaceSession {
     replica: std::sync::Arc<xo_core::central_replica::CentralReplica>,
     client: Option<crate::central_client::CentralClient>,
-    peer_id: xo_core::PeerId,
+    client_id: xo_core::ClientId,
     actor: ActorId,
     clock: HlcClock,
     projection: ProjectionState,
@@ -70,36 +70,42 @@ impl WorkspaceSession {
             .context("read system hostname")?
             .into_string()
             .map_err(|_| anyhow::anyhow!("system hostname is not valid UTF-8"))?;
-        let peer_id = xo_core::PeerId::parse(host).context("validate host client ID")?;
+        let client_id = xo_core::ClientId::parse(host).context("validate host client ID")?;
         let workspace_id = match workspace_id {
             Some(value) => value.to_owned(),
             None => read_active_workspace(state_dir)?.unwrap_or_else(local_workspace_id),
         };
-        Self::build(state_dir, &workspace_id, projection, peer_id, None)
+        Self::build(state_dir, &workspace_id, projection, client_id, None)
     }
 
     pub async fn open_central(
         state_dir: &Path,
         server: &str,
         projection: PathBuf,
-        peer_id: xo_core::PeerId,
+        client_id: xo_core::ClientId,
     ) -> Result<Self> {
         let workspace_id = match read_active_workspace(state_dir)? {
             Some(value) => value,
             None => {
-                crate::central_client::CentralClient::discover_workspace(server, peer_id.as_str())
+                crate::central_client::CentralClient::discover_workspace(server, client_id.as_str())
                     .await
                     .context("discover server workspace")?
             }
         };
-        Self::build(state_dir, &workspace_id, projection, peer_id, Some(server))
+        Self::build(
+            state_dir,
+            &workspace_id,
+            projection,
+            client_id,
+            Some(server),
+        )
     }
 
     fn build(
         state_dir: &Path,
         workspace_id: &str,
         projection: PathBuf,
-        peer_id: xo_core::PeerId,
+        client_id: xo_core::ClientId,
         server: Option<&str>,
     ) -> Result<Self> {
         std::fs::create_dir_all(state_dir)
@@ -118,7 +124,7 @@ impl WorkspaceSession {
             .map(|server| {
                 crate::central_client::CentralClient::start(
                     server,
-                    peer_id.to_string(),
+                    client_id.to_string(),
                     std::sync::Arc::clone(&replica),
                 )
             })
@@ -133,7 +139,7 @@ impl WorkspaceSession {
             projection: ProjectionState::open(projection)?,
             replica,
             client,
-            peer_id,
+            client_id,
             actor: actor.clone(),
             clock: HlcClock::new(actor),
             sync_state,
@@ -143,7 +149,7 @@ impl WorkspaceSession {
 
     #[must_use]
     pub fn client_id(&self) -> &str {
-        self.peer_id.as_str()
+        self.client_id.as_str()
     }
 
     pub async fn connected_clients(&self) -> Vec<String> {
@@ -389,7 +395,7 @@ impl WorkspaceSession {
             .as_ref()
             .map(crate::central_client::CentralClient::status)
         {
-            Some(crate::central_client::CentralClientStatus::Connected) => Connectivity::Direct,
+            Some(crate::central_client::CentralClientStatus::Connected) => Connectivity::Connected,
             Some(crate::central_client::CentralClientStatus::Connecting) => {
                 Connectivity::Connecting
             }

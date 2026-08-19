@@ -9,7 +9,7 @@ use tokio::sync::{Mutex, RwLock, broadcast};
 
 use crate::ActorId;
 use crate::automerge_store::PersistentAutomergeStore;
-use crate::record_workspace::{RecordWorkspace, SignedWorkspaceValue, record_author};
+use crate::record_workspace::{AuthoredWorkspaceValue, RecordWorkspace, record_author};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReplicaEvent {
@@ -127,15 +127,15 @@ impl RecordWorkspace for CentralReplica {
         Ok(self.store.lock().await.store().get(key)?)
     }
 
-    async fn get_signed_record(
+    async fn get_authored_record(
         &self,
         key: impl AsRef<[u8]> + Send,
-    ) -> Result<Option<SignedWorkspaceValue>> {
+    ) -> Result<Option<AuthoredWorkspaceValue>> {
         let key = key.as_ref();
         let Some(value) = self.get_record(key).await? else {
             return Ok(None);
         };
-        Ok(Some(SignedWorkspaceValue {
+        Ok(Some(AuthoredWorkspaceValue {
             key: key.to_vec(),
             author: record_author(key, &value).unwrap_or_else(|| self.actor.to_string()),
             value,
@@ -147,17 +147,17 @@ impl RecordWorkspace for CentralReplica {
         prefix: impl AsRef<[u8]> + Send,
     ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
         Ok(self
-            .list_signed_records(prefix)
+            .list_authored_records(prefix)
             .await?
             .into_iter()
             .map(|entry| (entry.key, entry.value))
             .collect())
     }
 
-    async fn list_signed_records(
+    async fn list_authored_records(
         &self,
         prefix: impl AsRef<[u8]> + Send,
-    ) -> Result<Vec<SignedWorkspaceValue>> {
+    ) -> Result<Vec<AuthoredWorkspaceValue>> {
         let prefix =
             std::str::from_utf8(prefix.as_ref()).context("workspace record prefix is not UTF-8")?;
         Ok(self
@@ -167,7 +167,7 @@ impl RecordWorkspace for CentralReplica {
             .store()
             .scan(prefix)?
             .into_iter()
-            .map(|(key, value)| SignedWorkspaceValue {
+            .map(|(key, value)| AuthoredWorkspaceValue {
                 author: record_author(key.as_bytes(), &value)
                     .unwrap_or_else(|| self.actor.to_string()),
                 key: key.into_bytes(),

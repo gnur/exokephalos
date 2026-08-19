@@ -88,7 +88,8 @@ may transfer the complete Automerge history through normal Automerge sync messag
 - [x] Keep `open_peers` and show connected client IDs; remove approve, reject, remove,
   retire-membership, invitation, and pairing actions.
 - [x] Update footer/status language from relay/peer terminology to server sync.
-- [ ] Update `xo-admin` or remove commands made obsolete by the HTTP API.
+- [x] Remove `xo-admin`; import/export belongs to `xo`, while server/client state uses
+  stopped-process filesystem backups.
 
 ## Phase 3: browser client
 
@@ -124,38 +125,39 @@ may transfer the complete Automerge history through normal Automerge sync messag
 
 ## Phase 5: removal and cleanup
 
-- [ ] Remove `iroh`, `iroh-gossip`, relay, Pkarr, and QUIC dependencies from every
+- [x] Remove `iroh`, `iroh-gossip`, relay, Pkarr, and QUIC dependencies from every
   Cargo manifest and the lockfile.
-- [ ] Delete Iroh transport modules, ALPN protocols, invitation codecs, Gossip topics,
+- [x] Delete Iroh transport modules, ALPN protocols, invitation codecs, Gossip topics,
   membership registry/identity/event code, and signed-change envelopes.
-- [ ] Remove endpoint IDs and cryptographic membership fingerprints from persisted and
+- [x] Remove endpoint IDs and cryptographic membership fingerprints from persisted and
   presentation contracts.
-- [ ] Remove Iroh-related configuration, environment variables, installer prompts,
-  operator setup pages, tests, CI services, and documentation.
-- [ ] Rename remaining generic concepts (`IrohWorkspace`, `IrohNode`, etc.) before the
-  migration is considered complete.
+- [x] Remove Iroh-related configuration, environment variables, installer prompts,
+  operator setup pages, tests, CI services, and active documentation.
+- [x] Replace transport-era node/workspace/peer identity concepts with centralized
+  replicas and non-security client IDs.
 - [x] Update architecture documents to describe a centralized but offline-first system.
-- [ ] Ensure `rg -i 'iroh|pkarr|gossip|relay|invitation|membership'` only finds explicit
+- [x] Ensure `rg -i 'iroh|pkarr|gossip|relay|invitation|membership'` only finds explicit
   historical migration notes where intentionally retained.
 
 ## Testing gates
 
 - [x] Unit-test protocol versioning, malformed controls, and frame size bounds.
 - [x] Deterministic local WebSocket test: server plus two native replicas converge.
-- [ ] Three-client conflict test: two offline edits converge through a restarted server.
+- [x] Three-client conflict test: two offline edits converge through a restarted server.
 - [x] Server restart test proves acknowledged data survives.
 - [x] Browser test proves cached notes render before WebSocket connection.
 - [x] Browser test proves an offline mutation synchronizes after reconnect.
 - [x] TUI and browser converge through the same `/api/sync` endpoint.
 - [x] API GET/PATCH/DELETE changes appear in connected clients.
 - [x] API changes appear in later-reconnected clients.
-- [ ] URL import tests cover redirect and streamed body-limit behavior in integration.
+- [x] Deterministic URL capture tests cover redirect-target revalidation and streamed
+  body-limit behavior across chunks.
 - [x] URL import tests cover private IPs, invalid content types, and successful readable
   Markdown extraction.
 - [x] Static asset tests cover service-worker offline reload in a browser.
 - [x] Static route tests cover SPA fallback and cache/content-type headers.
 - [x] `/healthz` returns status 200, `text/plain`, and exactly `ok\n` while ready.
-- [ ] Workspace tests and Clippy pass without ignored central-sync tests.
+- [x] Workspace tests and Clippy pass without ignored central-sync tests.
 
 ## Completion criteria
 

@@ -2,10 +2,10 @@
 
 use anyhow::Result;
 
-use crate::{ActorId, ConfigRevision, DeviceRecord, Head, NoteRevision, Tombstone};
+use crate::{ActorId, ConfigRevision, Head, NoteRevision, Tombstone};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SignedWorkspaceValue {
+pub struct AuthoredWorkspaceValue {
     pub key: Vec<u8>,
     pub value: Vec<u8>,
     pub author: String,
@@ -29,20 +29,20 @@ pub trait RecordWorkspace: Send + Sync {
 
     async fn get_record(&self, key: impl AsRef<[u8]> + Send) -> Result<Option<Vec<u8>>>;
 
-    async fn get_signed_record(
+    async fn get_authored_record(
         &self,
         key: impl AsRef<[u8]> + Send,
-    ) -> Result<Option<SignedWorkspaceValue>>;
+    ) -> Result<Option<AuthoredWorkspaceValue>>;
 
     async fn list_records(
         &self,
         prefix: impl AsRef<[u8]> + Send,
     ) -> Result<Vec<(Vec<u8>, Vec<u8>)>>;
 
-    async fn list_signed_records(
+    async fn list_authored_records(
         &self,
         prefix: impl AsRef<[u8]> + Send,
-    ) -> Result<Vec<SignedWorkspaceValue>>;
+    ) -> Result<Vec<AuthoredWorkspaceValue>>;
 }
 
 #[must_use]
@@ -67,17 +67,6 @@ pub fn record_author(key: &[u8], value: &[u8]) -> Option<String> {
         return ciborium::from_reader::<Tombstone, _>(value)
             .ok()
             .map(|record| record.author_id.to_string());
-    }
-    if key.starts_with("device/") {
-        return ciborium::from_reader::<DeviceRecord, _>(value)
-            .ok()
-            .map(|record| {
-                record
-                    .retired_at
-                    .as_ref()
-                    .map_or(record.author_id.clone(), |cutoff| cutoff.actor_id.clone())
-                    .to_string()
-            });
     }
     None
 }

@@ -47,8 +47,9 @@ reverse-proxy-protected origin:
 JSON request bodies are limited to 1 MiB. URL capture independently limits
 responses, validates every redirect, and rejects private or special addresses.
 
-The Iroh removal is intentionally breaking and still in progress. See
-[`iroh-removal-plan.md`](iroh-removal-plan.md) for completed and remaining work.
+The centralized transport migration is intentionally breaking. Existing legacy
+workspaces move through Markdown export/import rather than in-place state migration.
+See [`iroh-removal-plan.md`](iroh-removal-plan.md) for the completed migration.
 
 ## Example workflows
 
@@ -102,13 +103,13 @@ currently implemented workflow.
 The workspace requires Rust 1.89 or newer.
 
 ```console
-cargo build --release -p xo -p xo-admin -p xo-syncd
+cargo build --release -p xo -p xo-lsp -p xo-syncd
 ```
 
 The resulting programs are:
 
-- `target/release/xo` — the terminal UI
-- `target/release/xo-admin` — offline workspace administration
+- `target/release/xo` — the terminal UI and import/export client
+- `target/release/xo-lsp` — editor diagnostics and completion
 - `target/release/xo-syncd` — the centralized synchronization and web server
 
 The examples below assume those binaries have been copied somewhere in
@@ -133,7 +134,7 @@ changes exist. Pushing the tag starts the GitHub Release workflow.
 
 ## Quick Install (`xo` or `xo-syncd`)
 
-You can install the native `xo` TUI, `xo-syncd` background daemon, `xo-admin`, and `xo-lsp` directly from the deployed static site:
+You can install the native `xo` TUI, `xo-syncd` background daemon, and `xo-lsp` directly from the deployed static site:
 
 ```console
 curl -sSL https://xo.exokephalos.dev/install.sh | bash
@@ -289,7 +290,7 @@ release binaries containing the same tested PWA artifact as the binary release.
 Every normal-mode interaction is a named action. Press `:` to open the
 autocompleting action picker, type part of an action name, use Up/Down to select,
 Tab to complete, and Enter to run it. Short aliases are accepted where listed;
-for example, `:q` runs `quit`, while `:p` opens peer management.
+for example, `:q` runs `quit`, while `:p` opens the connected-client view.
 
 | Action | Alias | Arguments | Effect |
 | --- | --- | --- | --- |
@@ -401,7 +402,7 @@ converted to the equivalent instant in the system time zone, including the
 historically correct daylight-saving offset. The source tree is never modified.
 The command reports the number of discovered items, updates an in-place
 `current/total` counter on terminals, and does not report completion until the
-projection, Automerge snapshot, signed-change log, and local index have been finalized and closed.
+projection, durable Automerge replica, and local index have been finalized and closed.
 
 `xo export` writes winning workspace notes as conventional Markdown:
 
@@ -536,14 +537,10 @@ the supported handoff from legacy Iroh workspaces; there is intentionally no
 in-place transport-state migration.
 
 Native mutable state is single-process locked. Do not run two `xo` processes
-against the same state directory. `xo-admin` still contains legacy Iroh-oriented
-commands and is scheduled for removal or centralized redesign.
+against the same state directory. Server and client directory backups are ordinary
+stopped-process filesystem backups; Markdown import/export is provided by `xo`.
 
 ## Current limitations
 
 - `xo-syncd` has no authentication or TLS termination; use an authenticating HTTPS
   reverse proxy for browser deployments.
-- Remaining Iroh, membership, invitation, and signed-change modules in `xo-core`
-  and `xo-admin` are migration leftovers.
-- Deterministic browser conflict retention and direct TUI/browser convergence tests
-  remain to be added.

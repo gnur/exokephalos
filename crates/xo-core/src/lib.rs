@@ -1,11 +1,6 @@
 //! Shared domain, storage, and synchronization contracts for exokephalos.
 
-pub mod authenticated_change;
-#[cfg(feature = "iroh-sync")]
-pub mod automerge_node;
 pub mod automerge_store;
-#[cfg(feature = "native")]
-pub mod backup;
 pub mod behavior;
 #[cfg(feature = "native")]
 pub mod central_replica;
@@ -15,14 +10,9 @@ pub mod domain;
 pub mod encryption;
 pub mod hlc;
 pub mod id;
-#[cfg(feature = "iroh-sync")]
-pub mod iroh_node;
 #[cfg(feature = "native")]
 pub mod local_index;
 pub mod markdown;
-pub mod membership;
-#[cfg(feature = "peer-protocol")]
-pub mod peer_protocol;
 #[cfg(feature = "native")]
 pub mod projection;
 pub mod record_workspace;
@@ -41,15 +31,13 @@ pub mod version;
 pub mod watcher;
 #[cfg(feature = "native")]
 pub mod wikilink;
-#[cfg(feature = "iroh-sync")]
-pub mod workspace_projection;
 
+pub use central_sync::ClientId;
 pub use domain::{
-    ActorId, AssetId, AssetRecord, ConfigRevision, Conflict, DeviceRecord, DomainError, Head, Note,
-    NoteId, NoteRevision, RevisionId, SchemaVersion, Tombstone, WorkspaceDescriptor, WorkspaceId,
+    ActorId, AssetId, AssetRecord, ConfigRevision, Conflict, DomainError, Head, Note, NoteId,
+    NoteRevision, RevisionId, SchemaVersion, Tombstone, WorkspaceId,
 };
 pub use hlc::{Hlc, HlcClock};
-pub use membership::{MembershipIdentity, PeerId};
 pub use resolution::{ResolvedNote, RevisionGraphError, resolve_heads, validate_revision_graph};
 
 /// Version of the replicated record schema written by this build.

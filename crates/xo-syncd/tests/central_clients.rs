@@ -94,7 +94,7 @@ async fn two_native_replicas_converge_through_the_central_server() -> Result<()>
                 &directory.path().join("first-tui"),
                 &format!("http://{address}"),
                 directory.path().join("first-projection"),
-                xo_core::PeerId::parse("first-tui")?,
+                xo_core::ClientId::parse("first-tui")?,
             )
             .await?;
             first_tui.behavior().await?;
@@ -102,7 +102,7 @@ async fn two_native_replicas_converge_through_the_central_server() -> Result<()>
                 &directory.path().join("second-tui"),
                 &format!("http://{address}"),
                 directory.path().join("second-projection"),
-                xo_core::PeerId::parse("second-tui")?,
+                xo_core::ClientId::parse("second-tui")?,
             )
             .await?;
             let note_id = NoteId::new("central");
@@ -168,7 +168,7 @@ async fn two_native_replicas_converge_through_the_central_server() -> Result<()>
                 &directory.path().join("second-tui"),
                 &format!("http://{address}"),
                 directory.path().join("second-projection"),
-                xo_core::PeerId::parse("second-tui")?,
+                xo_core::ClientId::parse("second-tui")?,
             )
             .await?;
             wait_for_note(
@@ -194,6 +194,69 @@ async fn two_native_replicas_converge_through_the_central_server() -> Result<()>
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     bail!("native replicas did not converge through /api/sync")
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn three_clients_retain_offline_conflicts_through_server_restart() -> Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let directory = tempfile::tempdir()?;
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    drop(listener);
+    let state = directory.path().join("conflict-server");
+    let server = Server::start(&state, address)?;
+    let workspace_id = wait_for_workspace_id(&state.join("workspace-id")).await?;
+    let server_url = format!("http://{address}");
+    let note_id = NoteId::new("offline");
+
+    let mut first = open_session(directory.path(), "first-conflict", &server_url).await?;
+    let second = open_session(directory.path(), "second-conflict", &server_url).await?;
+    let third = open_session(directory.path(), "third-conflict", &server_url).await?;
+    first.save(&test_note(&note_id, "shared base")).await?;
+    wait_for_note(&second, &note_id, Some("shared base")).await?;
+    wait_for_note(&third, &note_id, Some("shared base")).await?;
+    first.shutdown().await?;
+    second.shutdown().await?;
+    third.shutdown().await?;
+    server.stop()?;
+
+    let mut second = WorkspaceSession::open(
+        &directory.path().join("second-conflict"),
+        Some(&workspace_id),
+        directory.path().join("second-conflict-projection"),
+    )?;
+    second.save(&test_note(&note_id, "offline second")).await?;
+    second.shutdown().await?;
+    let mut third = WorkspaceSession::open(
+        &directory.path().join("third-conflict"),
+        Some(&workspace_id),
+        directory.path().join("third-conflict-projection"),
+    )?;
+    third.save(&test_note(&note_id, "offline third")).await?;
+    third.shutdown().await?;
+
+    let restarted = Server::start(&state, address)?;
+    wait_for_server(address).await?;
+    let first = open_session(directory.path(), "first-conflict", &server_url).await?;
+    let second = open_session(directory.path(), "second-conflict", &server_url).await?;
+    let third = open_session(directory.path(), "third-conflict", &server_url).await?;
+    let first_result = wait_for_conflict(&first, &note_id).await?;
+    let second_result = wait_for_conflict(&second, &note_id).await?;
+    let third_result = wait_for_conflict(&third, &note_id).await?;
+    assert_eq!(first_result, second_result);
+    assert_eq!(second_result, third_result);
+    first.shutdown().await?;
+    second.shutdown().await?;
+    third.shutdown().await?;
+    restarted.stop()?;
+
+    let _restarted_again = Server::start(&state, address)?;
+    wait_for_server(address).await?;
+    let recovered = open_session(directory.path(), "recovered-conflict", &server_url).await?;
+    assert_eq!(wait_for_conflict(&recovered, &note_id).await?, first_result);
+    recovered.shutdown().await?;
+    Ok(())
 }
 
 #[tokio::test]
@@ -240,6 +303,65 @@ async fn acknowledged_server_data_survives_restart() -> Result<()> {
     Ok(())
 }
 
+async fn open_session(
+    root: &std::path::Path,
+    name: &str,
+    server: &str,
+) -> Result<WorkspaceSession> {
+    WorkspaceSession::open_central(
+        &root.join(name),
+        server,
+        root.join(format!("{name}-projection")),
+        xo_core::ClientId::parse(name)?,
+    )
+    .await
+}
+
+fn test_note(note_id: &NoteId, body: &str) -> Note {
+    Note {
+        id: note_id.clone(),
+        path: "offline-conflict.md".to_owned(),
+        frontmatter: Frontmatter::from([
+            (
+                "id".to_owned(),
+                FrontmatterValue::String(note_id.to_string()),
+            ),
+            (
+                "title".to_owned(),
+                FrontmatterValue::String("Offline conflict".to_owned()),
+            ),
+            (
+                "type".to_owned(),
+                FrontmatterValue::String("note".to_owned()),
+            ),
+        ]),
+        body: body.to_owned(),
+    }
+}
+
+async fn wait_for_conflict(
+    session: &WorkspaceSession,
+    note_id: &NoteId,
+) -> Result<xo_core::ResolvedNote> {
+    for _ in 0..400 {
+        if let Some(resolved) = session
+            .snapshot()
+            .await?
+            .resolved
+            .into_iter()
+            .find(|resolved| {
+                resolved.conflict.as_ref().is_some_and(|conflict| {
+                    &conflict.note_id == note_id && conflict.concurrent_revisions.len() == 1
+                })
+            })
+        {
+            return Ok(resolved);
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    bail!("clients did not converge on the retained offline conflict")
+}
+
 fn open_replica(
     root: &std::path::Path,
     name: &str,
@@ -282,6 +404,19 @@ async fn wait_for_note(
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     bail!("API item change did not synchronize to the native replica")
+}
+
+async fn wait_for_server(address: std::net::SocketAddr) -> Result<()> {
+    for _ in 0..200 {
+        if reqwest::get(format!("http://{address}/healthz"))
+            .await
+            .is_ok_and(|response| response.status().is_success())
+        {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    bail!("xo-syncd did not become ready")
 }
 
 async fn wait_for_workspace_id(path: &std::path::Path) -> Result<String> {

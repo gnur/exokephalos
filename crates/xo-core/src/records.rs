@@ -11,9 +11,9 @@ use crate::local_index::{IndexError, LocalIndex};
 use crate::projection::{Diagnostic, ProjectedAsset};
 use crate::record_workspace::RecordWorkspace;
 use crate::{
-    ActorId, AssetId, AssetRecord, CURRENT_SCHEMA, ConfigRevision, DeviceRecord, DomainError, Head,
-    Hlc, Note, NoteId, NoteRevision, ResolvedNote, RevisionGraphError, RevisionId, Tombstone,
-    WorkspaceDescriptor, resolve_heads, validate_revision_graph,
+    ActorId, AssetId, AssetRecord, CURRENT_SCHEMA, ConfigRevision, DomainError, Head, Hlc, Note,
+    NoteId, NoteRevision, ResolvedNote, RevisionGraphError, RevisionId, Tombstone, resolve_heads,
+    validate_revision_graph,
 };
 
 const NOTE_PREFIX: &str = "note/";
@@ -22,8 +22,6 @@ const ASSET_BLOB_PREFIX: &str = "asset-blob/";
 const CONFIG_PREFIX: &str = "config/";
 const CONFIG_BLOB_PREFIX: &str = "config-blob/";
 const TOMBSTONE_PREFIX: &str = "tombstone/";
-const DEVICE_PREFIX: &str = "device/";
-const WORKSPACE_DESCRIPTOR_KEY: &str = "workspace/descriptor";
 
 #[derive(Debug, Error)]
 pub enum RecordError {
@@ -33,7 +31,7 @@ pub enum RecordError {
     Graph(#[from] RevisionGraphError),
     #[error(transparent)]
     Index(#[from] IndexError),
-    #[error("Iroh record transport failed: {0}")]
+    #[error("record storage failed: {0}")]
     Transport(#[from] anyhow::Error),
     #[error("invalid record key: {0}")]
     InvalidKey(String),
@@ -45,10 +43,8 @@ pub enum RecordError {
     MissingRevision(RevisionId),
     #[error("record key does not match its value: {0}")]
     KeyMismatch(String),
-    #[error("record signer does not match its claimed author: {0}")]
-    SignerMismatch(String),
-    #[error("write by retired author is after its cutoff: {0}")]
-    RetiredWrite(ActorId),
+    #[error("record author does not match its key: {0}")]
+    AuthorMismatch(String),
     #[error("asset blob is unavailable: {0}")]
     MissingBlob(AssetId),
     #[error("asset blob does not match its record: {0}")]
@@ -73,8 +69,6 @@ pub struct WorkspaceSnapshot {
     pub assets: Vec<ProjectedAsset>,
     pub configs: Vec<ProjectedConfig>,
     pub tombstones: Vec<Tombstone>,
-    pub devices: Vec<DeviceRecord>,
-    pub descriptor: Option<WorkspaceDescriptor>,
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -104,8 +98,7 @@ impl<'a, W: RecordWorkspace> WorkspaceRecords<'a, W> {
     }
 
     pub async fn put_revision(&self, revision: &NoteRevision) -> Result<RevisionId, RecordError> {
-        self.ensure_local_author(&revision.author_id, &revision.hlc)
-            .await?;
+        self.ensure_local_author(&revision.author_id, &revision.hlc)?;
         let revision_id = revision.id()?;
         self.workspace
             .put_record(
@@ -119,7 +112,7 @@ impl<'a, W: RecordWorkspace> WorkspaceRecords<'a, W> {
     pub async fn set_head(&self, head: &Head) -> Result<(), RecordError> {
         head.validate()?;
         if head.author_id != self.actor_id() {
-            return Err(RecordError::SignerMismatch(head_key(
+            return Err(RecordError::AuthorMismatch(head_key(
                 &head.note_id,
                 &head.author_id,
             )));
@@ -156,8 +149,7 @@ impl<'a, W: RecordWorkspace> WorkspaceRecords<'a, W> {
     pub async fn load_note(&self, note_id: &NoteId) -> Result<Option<ResolvedNote>, RecordError> {
         let prefix = format!("{NOTE_PREFIX}{note_id}/");
         let mut group = NoteRecords::default();
-        let cutoffs = self.retirement_cutoffs().await?;
-        for entry in self.workspace.list_signed_records(prefix).await? {
+        for entry in self.workspace.list_authored_records(prefix).await? {
             let key = String::from_utf8(entry.key).map_err(|error| {
                 RecordError::InvalidKey(String::from_utf8_lossy(error.as_bytes()).into_owned())
             })?;
@@ -166,7 +158,6 @@ impl<'a, W: RecordWorkspace> WorkspaceRecords<'a, W> {
                 &entry.value,
                 &ActorId::new(entry.author),
                 Some(note_id),
-                &cutoffs,
                 &mut group,
             )?;
         }
@@ -180,8 +171,7 @@ impl<'a, W: RecordWorkspace> WorkspaceRecords<'a, W> {
     ) -> Result<Vec<(RevisionId, NoteRevision)>, RecordError> {
         let prefix = format!("{NOTE_PREFIX}{note_id}/");
         let mut group = NoteRecords::default();
-        let cutoffs = self.retirement_cutoffs().await?;
-        for entry in self.workspace.list_signed_records(prefix).await? {
+        for entry in self.workspace.list_authored_records(prefix).await? {
             let key = String::from_utf8(entry.key).map_err(|error| {
                 RecordError::InvalidKey(String::from_utf8_lossy(error.as_bytes()).into_owned())
             })?;
@@ -190,7 +180,6 @@ impl<'a, W: RecordWorkspace> WorkspaceRecords<'a, W> {
                 &entry.value,
                 &ActorId::new(entry.author),
                 Some(note_id),
-                &cutoffs,
                 &mut group,
             )?;
         }
@@ -203,9 +192,8 @@ impl<'a, W: RecordWorkspace> WorkspaceRecords<'a, W> {
 
     /// Return the latest content of currently deleted notes so frontends can restore them.
     pub async fn deleted_notes(&self) -> Result<Vec<Note>, RecordError> {
-        let cutoffs = self.retirement_cutoffs().await?;
         let mut groups = BTreeMap::<NoteId, NoteRecords>::new();
-        for entry in self.workspace.list_signed_records(NOTE_PREFIX).await? {
+        for entry in self.workspace.list_authored_records(NOTE_PREFIX).await? {
             let key = String::from_utf8_lossy(&entry.key).into_owned();
             let Some(note_id) = note_id_from_key(&key) else {
                 continue;
@@ -215,7 +203,6 @@ impl<'a, W: RecordWorkspace> WorkspaceRecords<'a, W> {
                 &entry.value,
                 &ActorId::new(entry.author),
                 Some(&note_id),
-                &cutoffs,
                 groups.entry(note_id.clone()).or_default(),
             )?;
         }
@@ -247,7 +234,7 @@ impl<'a, W: RecordWorkspace> WorkspaceRecords<'a, W> {
     ) -> Result<Option<NoteRevision>, RecordError> {
         let Some(entry) = self
             .workspace
-            .get_signed_record(revision_key(note_id, revision_id))
+            .get_authored_record(revision_key(note_id, revision_id))
             .await?
         else {
             return Ok(None);
@@ -257,18 +244,11 @@ impl<'a, W: RecordWorkspace> WorkspaceRecords<'a, W> {
         if revision.note_id != *note_id || revision.id()? != *revision_id {
             return Err(RecordError::KeyMismatch(revision_key(note_id, revision_id)));
         }
-        verify_signer(
+        verify_author(
             &revision_key(note_id, revision_id),
             &revision.author_id,
             &ActorId::new(entry.author),
         )?;
-        if !self
-            .retirement_cutoffs()
-            .await?
-            .allows(&revision.author_id, &revision.hlc)
-        {
-            return Ok(None);
-        }
         Ok(Some(revision))
     }
 
@@ -347,7 +327,7 @@ impl<'a, W: RecordWorkspace> WorkspaceRecords<'a, W> {
         hlc: Hlc,
         predecessors: std::collections::BTreeSet<RevisionId>,
     ) -> Result<ProjectedConfig, RecordError> {
-        self.ensure_local_author(&hlc.actor_id, &hlc).await?;
+        self.ensure_local_author(&hlc.actor_id, &hlc)?;
         let path = path.into();
         let size = u64::try_from(bytes.len())
             .map_err(|_| RecordError::Encoding("configuration size exceeds u64".to_owned()))?;
@@ -381,8 +361,7 @@ impl<'a, W: RecordWorkspace> WorkspaceRecords<'a, W> {
 
     pub async fn list_configs(&self) -> Result<Vec<ProjectedConfig>, RecordError> {
         let mut winners = BTreeMap::<String, ProjectedConfig>::new();
-        let cutoffs = self.retirement_cutoffs().await?;
-        for entry in self.workspace.list_signed_records(CONFIG_PREFIX).await? {
+        for entry in self.workspace.list_authored_records(CONFIG_PREFIX).await? {
             let key = String::from_utf8_lossy(&entry.key).into_owned();
             let record: ConfigRevision = decode(&entry.value)?;
             record.validate()?;
@@ -390,10 +369,7 @@ impl<'a, W: RecordWorkspace> WorkspaceRecords<'a, W> {
             if key != config_key(&record, &revision_id) {
                 return Err(RecordError::KeyMismatch(key));
             }
-            verify_signer(&key, &record.author_id, &ActorId::new(entry.author))?;
-            if !cutoffs.allows(&record.author_id, &record.hlc) {
-                continue;
-            }
+            verify_author(&key, &record.author_id, &ActorId::new(entry.author))?;
             let bytes = self
                 .workspace
                 .get_record(config_blob_key(&revision_id))
@@ -422,8 +398,7 @@ impl<'a, W: RecordWorkspace> WorkspaceRecords<'a, W> {
 
     pub async fn put_tombstone(&self, record: &Tombstone) -> Result<(), RecordError> {
         record.validate()?;
-        self.ensure_local_author(&record.author_id, &record.hlc)
-            .await?;
+        self.ensure_local_author(&record.author_id, &record.hlc)?;
         self.workspace
             .put_record(tombstone_key(record), encode(record)?)
             .await?;
@@ -431,97 +406,32 @@ impl<'a, W: RecordWorkspace> WorkspaceRecords<'a, W> {
     }
 
     pub async fn list_tombstones(&self) -> Result<Vec<Tombstone>, RecordError> {
-        let cutoffs = self.retirement_cutoffs().await?;
         let mut records = Vec::new();
-        for entry in self.workspace.list_signed_records(TOMBSTONE_PREFIX).await? {
+        for entry in self
+            .workspace
+            .list_authored_records(TOMBSTONE_PREFIX)
+            .await?
+        {
             let key = String::from_utf8_lossy(&entry.key).into_owned();
             let record: Tombstone = decode(&entry.value)?;
             record.validate()?;
-            verify_signer(&key, &record.author_id, &ActorId::new(entry.author))?;
-            if cutoffs.allows(&record.author_id, &record.hlc) {
-                records.push(record);
-            }
-        }
-        records.sort();
-        Ok(records)
-    }
-
-    pub async fn put_device(&self, record: &DeviceRecord) -> Result<(), RecordError> {
-        record.validate()?;
-        let expected_signer = record
-            .retired_at
-            .as_ref()
-            .map_or(&record.author_id, |cutoff| &cutoff.actor_id);
-        verify_signer(&device_key(record), expected_signer, &self.actor_id())?;
-        self.workspace
-            .put_record(device_key(record), encode(record)?)
-            .await?;
-        Ok(())
-    }
-
-    pub async fn list_devices(&self) -> Result<Vec<DeviceRecord>, RecordError> {
-        let mut records = Vec::new();
-        for entry in self.workspace.list_signed_records(DEVICE_PREFIX).await? {
-            let key = String::from_utf8_lossy(&entry.key).into_owned();
-            let record: DeviceRecord = decode(&entry.value)?;
-            record.validate()?;
-            if key != device_key(&record) {
-                return Err(RecordError::KeyMismatch(key));
-            }
-            let expected_signer = record
-                .retired_at
-                .as_ref()
-                .map_or(&record.author_id, |cutoff| &cutoff.actor_id);
-            verify_signer(&key, expected_signer, &ActorId::new(entry.author))?;
+            verify_author(&key, &record.author_id, &ActorId::new(entry.author))?;
             records.push(record);
         }
         records.sort();
         Ok(records)
     }
 
-    pub async fn put_descriptor(
-        &self,
-        descriptor: &WorkspaceDescriptor,
-    ) -> Result<(), RecordError> {
-        descriptor.validate()?;
-        self.workspace
-            .put_record(WORKSPACE_DESCRIPTOR_KEY, encode(descriptor)?)
-            .await?;
-        Ok(())
-    }
-
-    pub async fn descriptor(&self) -> Result<Option<WorkspaceDescriptor>, RecordError> {
-        let Some(bytes) = self.workspace.get_record(WORKSPACE_DESCRIPTOR_KEY).await? else {
-            return Ok(None);
-        };
-        let descriptor: WorkspaceDescriptor = decode(&bytes)?;
-        descriptor.validate()?;
-        Ok(Some(descriptor))
-    }
-
-    async fn retirement_cutoffs(&self) -> Result<RetirementCutoffs, RecordError> {
-        Ok(RetirementCutoffs::from_devices(&self.list_devices().await?))
-    }
-
-    async fn ensure_local_author(&self, author: &ActorId, hlc: &Hlc) -> Result<(), RecordError> {
-        verify_signer("local write", author, &self.actor_id())?;
-        if self.retirement_cutoffs().await?.allows(author, hlc) {
-            Ok(())
-        } else {
-            Err(RecordError::RetiredWrite(author.clone()))
-        }
+    fn ensure_local_author(self, author: &ActorId, _hlc: &Hlc) -> Result<(), RecordError> {
+        verify_author("local write", author, &self.actor_id())
     }
 
     /// Resolve every note from Automerge while retaining invalid-record diagnostics.
     pub async fn snapshot(&self) -> Result<WorkspaceSnapshot, RecordError> {
         let mut groups = BTreeMap::<NoteId, NoteRecords>::new();
-        let mut snapshot = WorkspaceSnapshot {
-            devices: self.list_devices().await?,
-            ..WorkspaceSnapshot::default()
-        };
-        let cutoffs = RetirementCutoffs::from_devices(&snapshot.devices);
+        let mut snapshot = WorkspaceSnapshot::default();
 
-        for entry in self.workspace.list_signed_records(NOTE_PREFIX).await? {
+        for entry in self.workspace.list_authored_records(NOTE_PREFIX).await? {
             let key = String::from_utf8_lossy(&entry.key).into_owned();
             let Some(note_id) = note_id_from_key(&key) else {
                 snapshot.diagnostics.push(record_diagnostic(
@@ -536,7 +446,6 @@ impl<'a, W: RecordWorkspace> WorkspaceRecords<'a, W> {
                 &entry.value,
                 &ActorId::new(entry.author),
                 Some(&note_id),
-                &cutoffs,
                 group,
             ) {
                 snapshot
@@ -576,7 +485,6 @@ impl<'a, W: RecordWorkspace> WorkspaceRecords<'a, W> {
         }
         snapshot.configs = self.list_configs().await?;
         snapshot.tombstones = self.list_tombstones().await?;
-        snapshot.descriptor = self.descriptor().await?;
         Ok(snapshot)
     }
 
@@ -595,47 +503,13 @@ impl<'a, W: RecordWorkspace> WorkspaceRecords<'a, W> {
 struct NoteRecords {
     revisions: BTreeMap<RevisionId, NoteRevision>,
     heads: Vec<Head>,
-    retired_revisions: BTreeMap<RevisionId, NoteRevision>,
 }
 
-#[derive(Default)]
-struct RetirementCutoffs(BTreeMap<ActorId, Hlc>);
-
-impl RetirementCutoffs {
-    fn from_devices(devices: &[DeviceRecord]) -> Self {
-        let mut cutoffs = BTreeMap::<ActorId, Hlc>::new();
-        for device in devices {
-            let Some(cutoff) = &device.retired_at else {
-                continue;
-            };
-            cutoffs
-                .entry(device.author_id.clone())
-                .and_modify(|current| {
-                    if event_time(cutoff) < event_time(current) {
-                        *current = cutoff.clone();
-                    }
-                })
-                .or_insert_with(|| cutoff.clone());
-        }
-        Self(cutoffs)
-    }
-
-    fn allows(&self, author: &ActorId, hlc: &Hlc) -> bool {
-        self.0
-            .get(author)
-            .is_none_or(|cutoff| event_time(hlc) <= event_time(cutoff))
-    }
-}
-
-fn event_time(hlc: &Hlc) -> (u64, u32) {
-    (hlc.physical_ms, hlc.logical)
-}
-
-fn verify_signer(key: &str, claimed: &ActorId, signer: &ActorId) -> Result<(), RecordError> {
-    if claimed == signer {
+fn verify_author(key: &str, claimed: &ActorId, stored_author: &ActorId) -> Result<(), RecordError> {
+    if claimed == stored_author {
         Ok(())
     } else {
-        Err(RecordError::SignerMismatch(key.to_owned()))
+        Err(RecordError::AuthorMismatch(key.to_owned()))
     }
 }
 
@@ -670,10 +544,6 @@ fn tombstone_key(record: &Tombstone) -> String {
     )
 }
 
-fn device_key(record: &DeviceRecord) -> String {
-    format!("{DEVICE_PREFIX}{}", record.endpoint_id)
-}
-
 fn note_id_from_key(key: &str) -> Option<NoteId> {
     let mut parts = key.split('/');
     let valid = parts.next() == Some("note")
@@ -687,9 +557,8 @@ fn note_id_from_key(key: &str) -> Option<NoteId> {
 fn decode_record(
     key: &str,
     value: &[u8],
-    signer: &ActorId,
+    stored_author: &ActorId,
     expected_note: Option<&NoteId>,
-    cutoffs: &RetirementCutoffs,
     group: &mut NoteRecords,
 ) -> Result<(), RecordError> {
     let parts = key.split('/').collect::<Vec<_>>();
@@ -708,12 +577,8 @@ fn decode_record(
             if revision.note_id != note_id || revision_id.as_str() != parts[3] {
                 return Err(RecordError::KeyMismatch(key.to_owned()));
             }
-            verify_signer(key, &revision.author_id, signer)?;
-            if cutoffs.allows(&revision.author_id, &revision.hlc) {
-                group.revisions.insert(revision_id, revision);
-            } else {
-                group.retired_revisions.insert(revision_id, revision);
-            }
+            verify_author(key, &revision.author_id, stored_author)?;
+            group.revisions.insert(revision_id, revision);
         }
         "head" => {
             let head: Head = decode(value)?;
@@ -721,7 +586,7 @@ fn decode_record(
             if head.note_id != note_id || head.author_id.as_str() != parts[3] {
                 return Err(RecordError::KeyMismatch(key.to_owned()));
             }
-            verify_signer(key, &head.author_id, signer)?;
+            verify_author(key, &head.author_id, stored_author)?;
             group.heads.push(head);
         }
         _ => return Err(RecordError::InvalidKey(key.to_owned())),
@@ -731,39 +596,12 @@ fn decode_record(
 
 fn resolve_group(group: &NoteRecords) -> Result<Option<ResolvedNote>, RecordError> {
     validate_revision_graph(&group.revisions)?;
-    let mut heads = Vec::new();
     for head in &group.heads {
-        if group.retired_revisions.contains_key(&head.revision_id) {
-            let mut pending = vec![head.revision_id.clone()];
-            let mut visited = std::collections::BTreeSet::new();
-            while let Some(revision_id) = pending.pop() {
-                if !visited.insert(revision_id.clone()) {
-                    continue;
-                }
-                if group.revisions.contains_key(&revision_id) {
-                    heads.push(Head {
-                        note_id: head.note_id.clone(),
-                        author_id: head.author_id.clone(),
-                        revision_id,
-                    });
-                } else if let Some(revision) = group.retired_revisions.get(&revision_id) {
-                    pending.extend(revision.predecessors.iter().cloned());
-                }
-            }
-        } else {
-            heads.push(head.clone());
-        }
-    }
-    heads.sort_by(|left, right| {
-        (&left.author_id, &left.revision_id).cmp(&(&right.author_id, &right.revision_id))
-    });
-    heads.dedup();
-    for head in &heads {
         if !group.revisions.contains_key(&head.revision_id) {
             return Err(RecordError::MissingRevision(head.revision_id.clone()));
         }
     }
-    Ok(resolve_heads(&group.revisions, &heads))
+    Ok(resolve_heads(&group.revisions, &group.heads))
 }
 
 fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, RecordError> {
@@ -782,507 +620,5 @@ fn record_diagnostic(path: &str, message: &str) -> Diagnostic {
         path: path.to_owned(),
         code: "invalid-record".to_owned(),
         message: message.to_owned(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeSet;
-    use std::time::Duration;
-
-    use crate::domain::{Frontmatter, FrontmatterValue};
-    use crate::iroh_node::{IrohNode, IrohWorkspace};
-    use crate::{Hlc, SchemaVersion};
-
-    use super::*;
-
-    async fn add_metadata_records(
-        node: &IrohNode,
-        workspace: &crate::iroh_node::IrohWorkspace,
-        records: WorkspaceRecords<'_, IrohWorkspace>,
-        revision_id: RevisionId,
-    ) -> anyhow::Result<()> {
-        let actor = records.actor_id();
-        let hlc = Hlc {
-            physical_ms: 2,
-            logical: 0,
-            actor_id: actor.clone(),
-        };
-        records
-            .put_config(
-                "xo.scm",
-                b"(workspace)".to_vec(),
-                hlc.clone(),
-                BTreeSet::new(),
-            )
-            .await?;
-        records
-            .put_tombstone(&Tombstone {
-                schema: CURRENT_SCHEMA,
-                target_id: "obsolete".to_owned(),
-                author_id: actor.clone(),
-                revision_id,
-                hlc,
-            })
-            .await?;
-        records
-            .put_device(&DeviceRecord {
-                schema: CURRENT_SCHEMA,
-                endpoint_id: node.endpoint_id().to_string(),
-                author_id: actor,
-                label: "test device".to_owned(),
-                capabilities: BTreeSet::from(["write".to_owned()]),
-                last_seen_ms: Some(2),
-                retired_at: None,
-            })
-            .await?;
-        records
-            .put_descriptor(&WorkspaceDescriptor {
-                schema: CURRENT_SCHEMA,
-                workspace_id: crate::WorkspaceId::new(workspace.id().to_string()),
-                invitation: workspace.share(true).await?,
-                bootstrap_peers: vec![node.endpoint_id().to_string()],
-                relay_mode: "default".to_owned(),
-                encrypted_workspace_key: None,
-            })
-            .await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn committed_records_resolve_and_rebuild_the_index() -> anyhow::Result<()> {
-        let _guard = crate::iroh_node::IROH_TEST_LOCK.lock().await;
-        let directory = tempfile::tempdir()?;
-        let node = IrohNode::persistent(directory.path().join("iroh")).await?;
-        let workspace = node.create_workspace().await?;
-        let author = ActorId::new(workspace.author_id().to_string());
-        let revision = NoteRevision {
-            schema: SchemaVersion(1),
-            note_id: NoteId::new("note002"),
-            frontmatter: Frontmatter::from([
-                (
-                    "id".to_owned(),
-                    FrontmatterValue::String("note002".to_owned()),
-                ),
-                (
-                    "title".to_owned(),
-                    FrontmatterValue::String("Stored".to_owned()),
-                ),
-            ]),
-            body: "authoritative\n".to_owned(),
-            materialized_path: "notes/stored.md".to_owned(),
-            hlc: Hlc {
-                physical_ms: 1,
-                logical: 0,
-                actor_id: author.clone(),
-            },
-            author_id: author,
-            predecessors: BTreeSet::new(),
-            deleted: false,
-        };
-        let records = WorkspaceRecords::new(&workspace);
-        let revision_id = records.commit_revision(&revision).await?;
-        add_metadata_records(&node, &workspace, records, revision_id.clone()).await?;
-        let asset = records
-            .put_asset(
-                AssetId::new("image001"),
-                "image/png",
-                "assets/example.png",
-                b"asset bytes".to_vec(),
-            )
-            .await?;
-        assert_eq!(
-            records
-                .get_asset(&asset.id)
-                .await?
-                .expect("stored asset")
-                .bytes,
-            b"asset bytes"
-        );
-        assert_eq!(
-            records
-                .load_note(&revision.note_id)
-                .await?
-                .expect("resolved note")
-                .winning_revision,
-            revision_id
-        );
-
-        let index = LocalIndex::open(directory.path().join("index.sqlite"))?;
-        let snapshot = records.rebuild_index(&index).await?;
-        assert_eq!(snapshot.notes.len(), 1);
-        assert_eq!(snapshot.assets.len(), 1);
-        assert_eq!(snapshot.configs[0].bytes, b"(workspace)");
-        assert_eq!(snapshot.tombstones.len(), 1);
-        assert_eq!(snapshot.devices.len(), 1);
-        assert_eq!(
-            snapshot
-                .descriptor
-                .expect("workspace descriptor")
-                .relay_mode,
-            "default"
-        );
-        assert_eq!(index.all()?.first().expect("indexed note").title, "Stored");
-        node.shutdown().await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn asset_record_and_blob_replicate_to_a_second_peer() -> anyhow::Result<()> {
-        let _guard = crate::iroh_node::IROH_TEST_LOCK.lock().await;
-        let first_dir = tempfile::tempdir()?;
-        let second_dir = tempfile::tempdir()?;
-        let first =
-            IrohNode::persistent_with_peer(first_dir.path(), crate::PeerId::parse("asset-first")?)
-                .await?;
-        let workspace = first.create_workspace().await?;
-        WorkspaceRecords::new(&workspace)
-            .put_asset(
-                AssetId::new("image001"),
-                "image/png",
-                "assets/example.png",
-                b"replicated asset".to_vec(),
-            )
-            .await?;
-        let ticket = workspace.share(true).await?;
-
-        let second = IrohNode::persistent_with_peer(
-            second_dir.path(),
-            crate::PeerId::parse("asset-second")?,
-        )
-        .await?;
-        let imported = second.import_workspace(&ticket).await?;
-        let records = WorkspaceRecords::new(&imported);
-        let mut replicated = None;
-        for _ in 0..300 {
-            match records.get_asset(&AssetId::new("image001")).await {
-                Ok(Some(asset)) => {
-                    replicated = Some(asset);
-                    break;
-                }
-                Ok(None) | Err(RecordError::MissingBlob(_) | RecordError::Transport(_)) => {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
-                Err(error) => return Err(error.into()),
-            }
-        }
-        assert_eq!(
-            replicated.expect("replicated asset").bytes,
-            b"replicated asset"
-        );
-        second.shutdown().await?;
-        first.shutdown().await?;
-        Ok(())
-    }
-
-    async fn wait_for_device(
-        records: WorkspaceRecords<'_, IrohWorkspace>,
-        author: &ActorId,
-    ) -> anyhow::Result<DeviceRecord> {
-        for _ in 0..200 {
-            match records.list_devices().await {
-                Ok(devices) => {
-                    if let Some(device) = devices
-                        .into_iter()
-                        .find(|device| &device.author_id == author)
-                    {
-                        return Ok(device);
-                    }
-                }
-                Err(RecordError::Transport(_)) => {}
-                Err(error) => return Err(error.into()),
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        anyhow::bail!("device did not replicate")
-    }
-
-    async fn wait_for_retained_revision(
-        records: WorkspaceRecords<'_, IrohWorkspace>,
-        revision_id: &RevisionId,
-    ) -> anyhow::Result<ResolvedNote> {
-        for _ in 0..200 {
-            let retired = match records.list_devices().await {
-                Ok(devices) => devices.iter().any(|device| device.retired_at.is_some()),
-                Err(RecordError::Transport(_)) => false,
-                Err(error) => return Err(error.into()),
-            };
-            if retired {
-                match records.load_note(&NoteId::new("note002")).await {
-                    Ok(Some(resolved)) if resolved.winning_revision == *revision_id => {
-                        return Ok(resolved);
-                    }
-                    Ok(_) | Err(RecordError::Transport(_)) => {}
-                    Err(error) => return Err(error.into()),
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        anyhow::bail!("retirement cutoff did not converge")
-    }
-
-    #[tokio::test]
-    async fn signed_retirement_ignores_later_writes_and_retains_history() -> anyhow::Result<()> {
-        let _guard = crate::iroh_node::IROH_TEST_LOCK.lock().await;
-        let directory = tempfile::tempdir()?;
-        let a_dir = directory.path().join("a");
-        let b_dir = directory.path().join("b");
-        let a = IrohNode::persistent_with_peer(&a_dir, crate::PeerId::parse("retire-a")?).await?;
-        let workspace_a = a.create_workspace().await?;
-        let workspace_id = workspace_a.id();
-        let ticket = workspace_a.share(true).await?;
-        let b = IrohNode::persistent_with_peer(&b_dir, crate::PeerId::parse("retire-b")?).await?;
-        let workspace_b = b.import_workspace(&ticket).await?;
-        let records_b = WorkspaceRecords::new(&workspace_b);
-        let author_b = records_b.actor_id();
-        records_b
-            .put_device(&DeviceRecord {
-                schema: CURRENT_SCHEMA,
-                endpoint_id: b.endpoint_id().to_string(),
-                author_id: author_b.clone(),
-                label: "device B".to_owned(),
-                capabilities: BTreeSet::from(["write".to_owned()]),
-                last_seen_ms: Some(100),
-                retired_at: None,
-            })
-            .await?;
-        let before = isolated_revision_at(author_b.clone(), "before retirement", 100, None);
-        let before_id = records_b.commit_revision(&before).await?;
-
-        let records_a = WorkspaceRecords::new(&workspace_a);
-        let device_b = wait_for_device(records_a, &author_b).await?;
-        b.shutdown().await?;
-        a.shutdown().await?;
-        drop((workspace_a, workspace_b, a, b));
-
-        let a = IrohNode::persistent_with_peer(&a_dir, crate::PeerId::parse("retire-a")?).await?;
-        let workspace_a = a.open_workspace(&workspace_id).await?.expect("workspace A");
-        let records_a = WorkspaceRecords::new(&workspace_a);
-        let cutoff = Hlc {
-            physical_ms: 200,
-            logical: 0,
-            actor_id: records_a.actor_id(),
-        };
-        records_a
-            .put_device(&DeviceRecord {
-                retired_at: Some(cutoff),
-                ..device_b
-            })
-            .await?;
-        a.shutdown().await?;
-        drop((workspace_a, a));
-
-        // B has not received the retirement and can still create a signed offline write.
-        let b = IrohNode::persistent_with_peer(&b_dir, crate::PeerId::parse("retire-b")?).await?;
-        let workspace_b = b.open_workspace(&workspace_id).await?.expect("workspace B");
-        let after =
-            isolated_revision_at(author_b, "after retirement", 300, Some(before_id.clone()));
-        let after_id = WorkspaceRecords::new(&workspace_b)
-            .commit_revision(&after)
-            .await?;
-        b.shutdown().await?;
-        drop((workspace_b, b));
-
-        let a = IrohNode::persistent_with_peer(&a_dir, crate::PeerId::parse("retire-a")?).await?;
-        let workspace_a = a.open_workspace(&workspace_id).await?.expect("workspace A");
-        let reconnect = workspace_a.share(true).await?;
-        let b = IrohNode::persistent_with_peer(&b_dir, crate::PeerId::parse("retire-b")?).await?;
-        let workspace_b = b.open_workspace(&workspace_id).await?.expect("workspace B");
-        workspace_b.start_sync(&reconnect).await?;
-        let records_a = WorkspaceRecords::new(&workspace_a);
-        let resolved = wait_for_retained_revision(records_a, &before_id).await?;
-        assert_eq!(
-            resolved.visible.expect("historical revision").body,
-            "before retirement"
-        );
-        assert!(
-            records_a
-                .get_revision(&NoteId::new("note002"), &after_id)
-                .await?
-                .is_none()
-        );
-        b.shutdown().await?;
-        a.shutdown().await?;
-        Ok(())
-    }
-
-    fn isolated_revision(actor: ActorId, body: &str) -> NoteRevision {
-        isolated_revision_at(actor, body, 100, None)
-    }
-
-    fn isolated_revision_at(
-        actor: ActorId,
-        body: &str,
-        physical_ms: u64,
-        predecessor: Option<RevisionId>,
-    ) -> NoteRevision {
-        NoteRevision {
-            schema: CURRENT_SCHEMA,
-            note_id: NoteId::new("note002"),
-            frontmatter: crate::domain::Frontmatter::from([(
-                "id".to_owned(),
-                crate::domain::FrontmatterValue::String("note002".to_owned()),
-            )]),
-            body: body.to_owned(),
-            materialized_path: "notes/concurrent.md".to_owned(),
-            hlc: Hlc {
-                physical_ms,
-                logical: 0,
-                actor_id: actor.clone(),
-            },
-            author_id: actor,
-            predecessors: predecessor.into_iter().collect(),
-            deleted: false,
-        }
-    }
-
-    async fn wait_for_conflict(
-        records: WorkspaceRecords<'_, IrohWorkspace>,
-    ) -> anyhow::Result<ResolvedNote> {
-        let mut last_state = String::from("no observation");
-        for _ in 0..900 {
-            match records.load_note(&NoteId::new("note002")).await {
-                Ok(Some(resolved))
-                    if resolved
-                        .conflict
-                        .as_ref()
-                        .is_some_and(|conflict| conflict.concurrent_revisions.len() == 1) =>
-                {
-                    return Ok(resolved);
-                }
-                Ok(Some(resolved)) => {
-                    last_state = format!(
-                        "visible revision {}, conflict={}",
-                        resolved.winning_revision,
-                        resolved.conflict.is_some()
-                    );
-                }
-                Ok(None) => last_state = "note not available".to_owned(),
-                Err(RecordError::Transport(error)) => {
-                    last_state = format!("transport error: {error}");
-                }
-                Err(RecordError::MissingRevision(revision)) => {
-                    last_state = format!("missing revision: {revision}");
-                }
-                Err(error) => return Err(error.into()),
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        anyhow::bail!("peer did not converge on both concurrent revisions after 90s ({last_state})")
-    }
-
-    #[tokio::test]
-    #[ignore = "release-only extensive 1000-item workspace test"]
-    async fn extensive_thousand_item_workspace_rebuilds_and_resolves() -> anyhow::Result<()> {
-        let _guard = crate::iroh_node::IROH_TEST_LOCK.lock().await;
-        let directory = tempfile::tempdir()?;
-        let node = IrohNode::persistent(directory.path()).await?;
-        let workspace = node.create_workspace().await?;
-        let records = WorkspaceRecords::new(&workspace);
-        for index in 0..1_000_u64 {
-            let id = NoteId::new(format!("{:a>7}", crate::id::encode_base32(index + 1)));
-            records
-                .commit_revision(&NoteRevision {
-                    schema: CURRENT_SCHEMA,
-                    note_id: id.clone(),
-                    frontmatter: Frontmatter::from([
-                        ("id".to_owned(), FrontmatterValue::String(id.to_string())),
-                        (
-                            "title".to_owned(),
-                            FrontmatterValue::String(format!("Knowledge item {index}")),
-                        ),
-                    ]),
-                    body: format!("Body for knowledge item {index}"),
-                    materialized_path: format!("bulk/{index}.md"),
-                    hlc: Hlc {
-                        physical_ms: 1_000_000 + index,
-                        logical: 0,
-                        actor_id: records.actor_id(),
-                    },
-                    author_id: records.actor_id(),
-                    predecessors: BTreeSet::new(),
-                    deleted: false,
-                })
-                .await?;
-        }
-        let snapshot = records.snapshot().await?;
-        assert_eq!(snapshot.notes.len(), 1_000);
-        assert_eq!(snapshot.resolved.len(), 1_000);
-        assert!(snapshot.diagnostics.is_empty());
-        node.shutdown().await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn three_persisted_peers_converge_after_isolated_edits_and_restarts() -> anyhow::Result<()>
-    {
-        let _guard = crate::iroh_node::IROH_TEST_LOCK.lock().await;
-        let (relay_map, _relay_url, _relay_server) = iroh::test_utils::run_relay_server().await?;
-        let a_dir = tempfile::tempdir()?;
-        let b_dir = tempfile::tempdir()?;
-        let c_dir = tempfile::tempdir()?;
-        let a = IrohNode::persistent_with_relay_map(a_dir.path(), relay_map.clone()).await?;
-        let workspace_a = a.create_workspace().await?;
-        let workspace_id = workspace_a.id();
-        let ticket = workspace_a.share(true).await?;
-        let b = IrohNode::persistent_with_relay_map(b_dir.path(), relay_map.clone()).await?;
-        b.import_workspace(&ticket).await?;
-        let c = IrohNode::persistent_with_relay_map(c_dir.path(), relay_map.clone()).await?;
-        c.import_workspace(&ticket).await?;
-        c.shutdown().await?;
-        b.shutdown().await?;
-        a.shutdown().await?;
-        drop((workspace_a, a, b, c));
-
-        let b = IrohNode::persistent_with_relay_map(b_dir.path(), relay_map.clone()).await?;
-        let workspace_b = b.open_workspace(&workspace_id).await?.expect("workspace B");
-        let records_b = WorkspaceRecords::new(&workspace_b);
-        records_b
-            .commit_revision(&isolated_revision(records_b.actor_id(), "offline B"))
-            .await?;
-        b.shutdown().await?;
-        drop((workspace_b, b));
-
-        let c = IrohNode::persistent_with_relay_map(c_dir.path(), relay_map.clone()).await?;
-        let workspace_c = c.open_workspace(&workspace_id).await?.expect("workspace C");
-        let records_c = WorkspaceRecords::new(&workspace_c);
-        records_c
-            .commit_revision(&isolated_revision(records_c.actor_id(), "offline C"))
-            .await?;
-        c.shutdown().await?;
-        drop((workspace_c, c));
-
-        let a = IrohNode::persistent_with_relay_map(a_dir.path(), relay_map.clone()).await?;
-        let workspace_a = a.open_workspace(&workspace_id).await?.expect("workspace A");
-        let b = IrohNode::persistent_with_relay_map(b_dir.path(), relay_map.clone()).await?;
-        let workspace_b = b.open_workspace(&workspace_id).await?.expect("workspace B");
-        let c = IrohNode::persistent_with_relay_map(c_dir.path(), relay_map.clone()).await?;
-        let workspace_c = c.open_workspace(&workspace_id).await?.expect("workspace C");
-
-        let ticket_a = workspace_a.share(true).await?;
-        let ticket_b = workspace_b.share(true).await?;
-        let ticket_c = workspace_c.share(true).await?;
-        // Serialize sync starts per workspace. Iroh Docs can coalesce concurrent
-        // starts, which otherwise lets one readiness event race the next request.
-        for _ in 0..2 {
-            workspace_b.sync_and_wait(&ticket_a).await?;
-            workspace_c.sync_and_wait(&ticket_a).await?;
-            workspace_a.sync_and_wait(&ticket_b).await?;
-            workspace_c.sync_and_wait(&ticket_b).await?;
-            workspace_a.sync_and_wait(&ticket_c).await?;
-            workspace_b.sync_and_wait(&ticket_c).await?;
-        }
-
-        let (resolved_a, resolved_b, resolved_c) = tokio::try_join!(
-            wait_for_conflict(WorkspaceRecords::new(&workspace_a)),
-            wait_for_conflict(WorkspaceRecords::new(&workspace_b)),
-            wait_for_conflict(WorkspaceRecords::new(&workspace_c)),
-        )?;
-        assert_eq!(resolved_a, resolved_b);
-        assert_eq!(resolved_b, resolved_c);
-        c.shutdown().await?;
-        b.shutdown().await?;
-        a.shutdown().await?;
-        Ok(())
     }
 }

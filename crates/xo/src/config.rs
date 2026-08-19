@@ -12,12 +12,12 @@ pub struct XoConfig {
     pub schema: u16,
     pub state_dir: PathBuf,
     #[serde(default)]
-    pub peer_id: Option<String>,
+    pub client_id: Option<String>,
     pub projection: PathBuf,
 }
 
 const fn schema() -> u16 {
-    3
+    4
 }
 
 impl Default for XoConfig {
@@ -25,7 +25,7 @@ impl Default for XoConfig {
         Self {
             schema: schema(),
             state_dir: PathBuf::from("~/.local/share/xo"),
-            peer_id: None,
+            client_id: None,
             projection: PathBuf::from("~/notes"),
         }
     }
@@ -34,7 +34,7 @@ impl Default for XoConfig {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CliOverrides {
     pub state_dir: Option<PathBuf>,
-    pub peer_id: Option<String>,
+    pub client_id: Option<String>,
     pub projection: Option<PathBuf>,
 }
 
@@ -55,8 +55,8 @@ impl XoConfig {
         if config.schema != schema() {
             bail!("unsupported xo configuration schema {}", config.schema);
         }
-        if let Some(peer_id) = &config.peer_id {
-            xo_core::PeerId::parse(peer_id.clone()).context("validate peer-id")?;
+        if let Some(client_id) = &config.client_id {
+            xo_core::ClientId::parse(client_id.clone()).context("validate client-id")?;
         }
         config.state_dir = expand_home(&config.state_dir, home);
         config.projection = expand_home(&config.projection, home);
@@ -68,8 +68,8 @@ impl XoConfig {
         if let Some(value) = overrides.state_dir {
             self.state_dir = expand_home(&value, home);
         }
-        if let Some(value) = overrides.peer_id {
-            self.peer_id = Some(value);
+        if let Some(value) = overrides.client_id {
+            self.client_id = Some(value);
         }
         if let Some(value) = overrides.projection {
             self.projection = expand_home(&value, home);
@@ -77,8 +77,8 @@ impl XoConfig {
         self
     }
 
-    pub fn resolved_peer_id(&self) -> Result<xo_core::PeerId> {
-        let value = self.peer_id.clone().map_or_else(
+    pub fn resolved_client_id(&self) -> Result<xo_core::ClientId> {
+        let value = self.client_id.clone().map_or_else(
             || {
                 hostname::get()
                     .context("read system hostname")?
@@ -87,7 +87,7 @@ impl XoConfig {
             },
             Ok,
         )?;
-        xo_core::PeerId::parse(value).context("validate peer-id")
+        xo_core::ClientId::parse(value).context("validate client-id")
     }
 
     pub fn document(&self) -> Result<String> {
@@ -100,11 +100,11 @@ impl XoConfig {
              (xo-config\n\
              \x20 (schema {})\n\
              \x20 (state-dir {})\n\
-             \x20 (peer-id {})\n\
+             \x20 (client-id {})\n\
              \x20 (projection {}))\n",
             self.schema,
             string(&self.state_dir.to_string_lossy())?,
-            optional(self.peer_id.as_deref())?,
+            optional(self.client_id.as_deref())?,
             string(&self.projection.to_string_lossy())?,
         ))
     }
@@ -154,30 +154,30 @@ mod tests {
         let config = XoConfig::default().apply(
             CliOverrides {
                 state_dir: Some("~/state".into()),
-                peer_id: Some("alice-laptop".into()),
+                client_id: Some("alice-laptop".into()),
                 projection: Some("~/knowledge".into()),
             },
             Path::new("/users/alice"),
         );
         assert_eq!(config.state_dir, Path::new("/users/alice/state"));
-        assert_eq!(config.peer_id.as_deref(), Some("alice-laptop"));
+        assert_eq!(config.client_id.as_deref(), Some("alice-laptop"));
         assert_eq!(config.projection, Path::new("/users/alice/knowledge"));
     }
 
     #[test]
-    fn schema_two_configuration_is_rejected() -> Result<()> {
+    fn schema_three_configuration_is_rejected() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("config.scm");
         std::fs::write(
             &path,
             XoConfig::default()
                 .document()?
-                .replace("(schema 3)", "(schema 2)"),
+                .replace("(schema 4)", "(schema 3)"),
         )?;
         let error = XoConfig::load(&path, Path::new("/home/tester"))
             .unwrap_err()
             .to_string();
-        assert!(error.contains("unsupported xo configuration schema 2"));
+        assert!(error.contains("unsupported xo configuration schema 3"));
         Ok(())
     }
 

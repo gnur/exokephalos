@@ -118,8 +118,8 @@ jobs:
         with:
           key: xo-web-wasm
 
-      - name: Install Wasm C compiler
-        run: sudo apt-get update && sudo apt-get install --yes clang
+      - name: Verify Wasm C compiler
+        run: clang --version
 
       - name: Cache wasm-pack
         id: wasm-pack-cache

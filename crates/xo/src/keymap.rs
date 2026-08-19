@@ -20,7 +20,6 @@ pub const ACTION_NAMES: &[&str] = &[
     "focus_subview_previous",
     "goto_view",
     "open_conflicts",
-    "open_devices",
     "open_goto",
     "open_item_actions",
     "open_peers",

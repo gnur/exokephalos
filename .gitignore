@@ -13,6 +13,7 @@ plugin-scripts/
 test-results
 web/dist
 web/src/generated/
+crates/xo-syncd/pwa-dist/
 
 dist
 

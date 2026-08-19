@@ -1,4 +1,5 @@
 mod central;
+mod pwa;
 mod server;
 
 use std::net::SocketAddr;

@@ -1,5 +1,5 @@
 use std::convert::Infallible;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use anyhow::Result;
 use bytes::Bytes;
@@ -11,7 +11,8 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
+use tokio::task::JoinSet;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::protocol::Role;
 use xo_core::NoteId;
@@ -46,49 +47,79 @@ pub async fn serve(
     workspace: Arc<CentralWorkspace>,
     mut shutdown: oneshot::Receiver<()>,
 ) -> Result<()> {
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let sockets = Arc::new(StdMutex::new(JoinSet::new()));
+    let mut connections = JoinSet::new();
     loop {
         tokio::select! {
-            _ = &mut shutdown => return Ok(()),
+            _ = &mut shutdown => break,
             accepted = listener.accept() => {
                 let (stream, _) = accepted?;
                 let workspace = Arc::clone(&workspace);
-                tokio::spawn(async move {
+                let sockets = Arc::clone(&sockets);
+                let mut connection_shutdown = shutdown_rx.clone();
+                let request_shutdown = connection_shutdown.clone();
+                connections.spawn(async move {
                     let service = service_fn(move |request| {
                         let workspace = Arc::clone(&workspace);
-                        async move { Ok::<_, Infallible>(handle(request, workspace).await) }
+                        let sockets = Arc::clone(&sockets);
+                        let socket_shutdown = request_shutdown.clone();
+                        async move {
+                            Ok::<_, Infallible>(
+                                handle(request, workspace, sockets, socket_shutdown).await,
+                            )
+                        }
                     });
-                    if let Err(error) = http1::Builder::new()
+                    let connection = http1::Builder::new()
                         .serve_connection(TokioIo::new(stream), service)
-                        .with_upgrades()
-                        .await
-                    {
-                        eprintln!("xo-syncd connection failed: {error}");
+                        .with_upgrades();
+                    tokio::select! {
+                        result = connection => {
+                            if let Err(error) = result {
+                                eprintln!("xo-syncd connection failed: {error}");
+                            }
+                        }
+                        _ = connection_shutdown.changed() => {}
                     }
                 });
             }
         }
     }
+    let _ = shutdown_tx.send(true);
+    while connections.join_next().await.is_some() {}
+    let mut socket_tasks = std::mem::take(
+        &mut *sockets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+    while socket_tasks.join_next().await.is_some() {}
+    Ok(())
 }
 
 async fn handle(
     mut request: Request<Incoming>,
     workspace: Arc<CentralWorkspace>,
+    sockets: Arc<StdMutex<JoinSet<()>>>,
+    socket_shutdown: watch::Receiver<bool>,
 ) -> Response<Body> {
     let path = request.uri().path().to_owned();
     let method = request.method().clone();
     match (&method, path.as_str()) {
         (&Method::GET, "/healthz") => response(StatusCode::OK, "text/plain; charset=utf-8", "ok\n"),
-        (&Method::GET, "/api/sync") => websocket_upgrade(&mut request, workspace),
+        (&Method::GET, "/api/sync") => {
+            websocket_upgrade(&mut request, workspace, &sockets, socket_shutdown)
+        }
         (&Method::POST, "/api/items") => create_item(request, &workspace).await,
         (method, path) if path.starts_with("/api/items/") => {
             item_request(method, path, request, &workspace).await
         }
-        _ if path.starts_with("/api/") => json_error(StatusCode::NOT_FOUND, "not found"),
-        _ => response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "text/plain; charset=utf-8",
-            "PWA assets are not embedded in this migration build\n",
-        ),
+        _ if path == "/api" || path.starts_with("/api/") => {
+            json_error(StatusCode::NOT_FOUND, "not found")
+        }
+        _ if path == "/healthz" => json_error(StatusCode::METHOD_NOT_ALLOWED, "method not allowed"),
+        (&Method::GET, _) => crate::pwa::serve(&path),
+        (&Method::HEAD, _) => crate::pwa::serve_head(&path),
+        _ => json_error(StatusCode::METHOD_NOT_ALLOWED, "method not allowed"),
     }
 }
 
@@ -238,6 +269,8 @@ fn internal_error(error: &(impl std::fmt::Display + ?Sized)) -> Response<Body> {
 fn websocket_upgrade(
     request: &mut Request<Incoming>,
     workspace: Arc<CentralWorkspace>,
+    sockets: &StdMutex<JoinSet<()>>,
+    mut shutdown: watch::Receiver<bool>,
 ) -> Response<Body> {
     let Some(key) = request
         .headers()
@@ -268,19 +301,27 @@ fn websocket_upgrade(
     }
     let accept = tokio_tungstenite::tungstenite::handshake::derive_accept_key(&key);
     let upgraded = hyper::upgrade::on(request);
-    tokio::spawn(async move {
-        match upgraded.await {
-            Ok(stream) => {
-                let socket =
-                    WebSocketStream::from_raw_socket(TokioIo::new(stream), Role::Server, None)
-                        .await;
-                if let Err(error) = workspace.serve_socket(socket).await {
-                    eprintln!("xo-syncd synchronization connection failed: {error:#}");
+    sockets
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .spawn(async move {
+            match upgraded.await {
+                Ok(stream) => {
+                    let socket =
+                        WebSocketStream::from_raw_socket(TokioIo::new(stream), Role::Server, None)
+                            .await;
+                    tokio::select! {
+                        result = workspace.serve_socket(socket) => {
+                            if let Err(error) = result {
+                                eprintln!("xo-syncd synchronization connection failed: {error:#}");
+                            }
+                        }
+                        _ = shutdown.changed() => {}
+                    }
                 }
+                Err(error) => eprintln!("xo-syncd WebSocket upgrade failed: {error}"),
             }
-            Err(error) => eprintln!("xo-syncd WebSocket upgrade failed: {error}"),
-        }
-    });
+        });
     Response::builder()
         .status(StatusCode::SWITCHING_PROTOCOLS)
         .header("connection", "Upgrade")
@@ -479,8 +520,17 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         assert!(synchronized, "server did not durably apply client change");
-        socket.close(None).await.unwrap();
         let _ = shutdown_tx.send(());
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                match socket.next().await {
+                    None | Some(Err(_) | Ok(Message::Close(_))) => break,
+                    Some(Ok(_)) => {}
+                }
+            }
+        })
+        .await
+        .expect("active socket was not closed during shutdown");
         task.await.unwrap().unwrap();
     }
 }

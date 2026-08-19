@@ -854,7 +854,7 @@ async fn dispatch_action(
             app.mode = Mode::Conflicts;
             app.message = conflict_summary(app);
         }
-        "open_devices" | "open_peers" => {
+        "open_peers" => {
             app.selected = 0;
             app.mode = Mode::Devices;
             app.message = device_summary(app);

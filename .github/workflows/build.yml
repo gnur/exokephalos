@@ -163,7 +163,7 @@ jobs:
           preview_pid=$!
           trap 'kill ${preview_pid}' EXIT
           for attempt in {1..20}; do
-            if curl --fail --silent http://127.0.0.1:4173/healthz > /dev/null; then
+            if curl --fail --silent http://127.0.0.1:4173/ > /dev/null; then
               break
             fi
             sleep 0.25
@@ -182,101 +182,9 @@ jobs:
         working-directory: web
         run: npx playwright install --with-deps chromium firefox webkit
 
-      - name: Test browser Iroh convergence and offline recovery
-        shell: bash
+      - name: Test browser layouts and offline local writes
+        working-directory: web
         run: |
-          set -euo pipefail
-          cargo build --locked -p xo -p xo-admin -p xo-syncd
-          fixture=$(mktemp -d)
-          mkdir -p "${fixture}/source"
-          cat > "${fixture}/source/fixture.md" <<'EOF'
-          ---
-          id: abcdefg
-          type: note
-          title: Browser fixture
-          tags: []
-          created: 2026-01-01T00:00:00Z
-          ---
-          Browser fixture created by a native peer.
-          EOF
-          cat > "${fixture}/source/reading.md" <<'EOF'
-          ---
-          id: bkabcde
-          type: book
-          title: TUI Reading Fixture
-          tags: [reading]
-          created: 2026-01-02T00:00:00Z
-          ---
-          Reading item created by a native TUI peer.
-          EOF
-          cat > "${fixture}/source/finished.md" <<'EOF'
-          ---
-          id: bkabcdf
-          type: book
-          title: TUI Finished Fixture
-          tags: [finished]
-          created: 2026-01-03T00:00:00Z
-          ---
-          Finished item created by a native TUI peer.
-          EOF
-          cat > "${fixture}/source/xo.scm" <<'EOF'
-          (workspace-config
-            (schema 1)
-            (default-view "library")
-            (query-limit 500)
-            (views
-              (view
-                (id "library")
-                (name "Library")
-                (key #f)
-                (show-tags #t)
-                (title-field "title")
-                (subtitle-field "type")
-                (sort-field "title")
-                (descending #f)
-                (preview #f)
-                (predicate (field-equals "type" "book"))
-                (subviews
-                  (subview
-                    (id "reading")
-                    (name "Reading")
-                    (predicate (has-tag "reading")))))
-              (view
-                (id "notes")
-                (name "Notes")
-                (key #f)
-                (show-tags #t)
-                (title-field "title")
-                (subtitle-field "type")
-                (sort-field "title")
-                (descending #f)
-                (preview #f)
-                (predicate (field-equals "type" "note"))
-                (subviews)))
-            (actions)
-            (templates)
-            (capability-grants))
-          EOF
-          mkdir -p "${fixture}/source/plugins"
-          cp plugins/hardcover.scm "${fixture}/source/plugins/hardcover.scm"
-          target/debug/xo-admin import-workspace \
-            "${fixture}/source" "${fixture}/state" > "${fixture}/import.out"
-          ticket=$(grep '^ticket=' "${fixture}/import.out" | cut -d= -f2-)
-          workspace_id=$(grep '^workspace_id=' "${fixture}/import.out" | cut -d= -f2-)
-
-          target/debug/xo-syncd \
-            --state-dir "${fixture}/central-state" \
-            --bind 127.0.0.1:19464 > "${fixture}/syncd.log" 2>&1 &
-          syncd_pid=$!
-          trap 'kill ${syncd_pid} 2>/dev/null || true' EXIT
-          for attempt in {1..60}; do
-            if [[ "$(curl --fail --silent http://127.0.0.1:19464/healthz)" == "ok" ]]; then
-              break
-            fi
-            sleep 0.5
-          done
-          test "$(curl --fail --silent http://127.0.0.1:19464/healthz)" = "ok"
-          cd web
           npx playwright test --project=chromium \
             --grep 'creates a local item|prevents mobile'
           npx playwright test --project=firefox --project=mobile-webkit \
@@ -292,68 +200,11 @@ jobs:
           path: xo-web.tar.gz
           if-no-files-found: error
 
-  deploy-pages:
-    name: Deploy xo-web to Cloudflare Pages
-    if: >-
-      (github.ref == 'refs/heads/main' || github.ref_type == 'tag') &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-      vars.CLOUDFLARE_PAGES_PROJECT != ''
-    needs: web
-    concurrency:
-      group: cloudflare-pages-production
-      cancel-in-progress: true
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      deployments: write
-    steps:
-      - name: Download tested xo-web artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: xo-web
-          path: pages-artifact
-
-      - name: Extract static PWA
-        run: |
-          mkdir pages-dist
-          tar -xzf pages-artifact/xo-web.tar.gz -C pages-dist
-          test -f pages-dist/index.html
-          test -f pages-dist/_headers
-          test -f pages-dist/version.json
-
-      - name: Validate Cloudflare Pages configuration
-        env:
-          CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
-        run: |
-          if [[ -z "${CLOUDFLARE_PAGES_PROJECT}" ]]; then
-            echo 'Set the CLOUDFLARE_PAGES_PROJECT repository variable.' >&2
-            exit 1
-          fi
-
-      - name: Deploy tested artifact
-        id: deploy
-        uses: cloudflare/wrangler-action@v4
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
-          command: pages deploy pages-dist --project-name=${{ vars.CLOUDFLARE_PAGES_PROJECT }} --branch=main
-
-      - name: Smoke-test deployment
-        env:
-          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment-url }}
-        run: |
-          test -n "${DEPLOYMENT_URL}"
-          curl --fail --show-error --silent \
-            --retry 5 --retry-all-errors --retry-delay 2 \
-            "${DEPLOYMENT_URL}/healthz" | grep -Fx 'ok'
-          curl --fail --show-error --silent --head \
-            "${DEPLOYMENT_URL}/version.json" | grep -i '^cache-control:.*no-store'
-
   binaries:
     name: Binaries (${{ matrix.target }})
-    needs: quality
+    needs:
+      - quality
+      - web
     runs-on: ${{ fromJSON(github.event_name == 'pull_request' && matrix.pull_request_runner || matrix.trusted_runner) }}
     timeout-minutes: 30
     strategy:
@@ -380,6 +231,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Download production PWA
+        uses: actions/download-artifact@v8
+        with:
+          name: xo-web
+          path: pwa-artifact
+
+      - name: Prepare embedded production PWA
+        shell: bash
+        run: |
+          mkdir -p crates/xo-syncd/pwa-dist
+          tar -C crates/xo-syncd/pwa-dist -xzf pwa-artifact/xo-web.tar.gz
+          test -f crates/xo-syncd/pwa-dist/index.html
+          test -f crates/xo-syncd/pwa-dist/sw.js
+          test -f crates/xo-syncd/pwa-dist/manifest.webmanifest
+
       - name: Install Rust 1.89
         uses: dtolnay/rust-toolchain@1.89.0
 
@@ -388,7 +254,9 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Build release binaries
+      - name: Build release binaries with embedded PWA
+        env:
+          XO_PWA_DIR: ${{ github.workspace }}/crates/xo-syncd/pwa-dist
         run: cargo build --workspace --release --locked --target ${{ matrix.target }}
 
       - name: Verify embedded release version
@@ -401,6 +269,27 @@ jobs:
           for binary in xo xo-admin xo-lsp xo-syncd; do
             "target/${{ matrix.target }}/release/${binary}${extension}" --version | grep -F "${XO_VERSION}"
           done
+
+      - name: Smoke-test embedded PWA
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          state=$(mktemp -d)
+          binary="target/${{ matrix.target }}/release/xo-syncd"
+          "${binary}" --state-dir "${state}" --bind 127.0.0.1:19466 > /tmp/xo-syncd-embedded.log 2>&1 &
+          pid=$!
+          trap 'kill ${pid} 2>/dev/null || true' EXIT
+          for attempt in {1..40}; do
+            if curl --fail --silent http://127.0.0.1:19466/healthz > /dev/null; then
+              break
+            fi
+            sleep 0.25
+          done
+          curl --fail --silent http://127.0.0.1:19466/manifest.webmanifest | grep -F '"name":"xo"'
+          curl --fail --silent http://127.0.0.1:19466/client/route | grep -F '<title>xo</title>'
+          curl --fail --silent --dump-header /tmp/xo-pwa-headers \
+            http://127.0.0.1:19466/sw.js > /dev/null
+          grep -i '^cache-control: no-cache' /tmp/xo-pwa-headers
 
       - name: Package Unix release binaries
         if: runner.os != 'Windows'
@@ -504,65 +393,6 @@ jobs:
           annotations: ${{ steps.meta.outputs.annotations }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  web-container:
-    name: xo-web container
-    needs: web
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Login to GitHub Container Registry
-        if: github.event_name == 'push'
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Generate image metadata
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/xo-web
-          tags: |
-            type=ref,event=pr
-            type=ref,event=branch
-            type=ref,event=tag
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha
-          labels: |
-            org.opencontainers.image.title=xo-web
-            org.opencontainers.image.description=Static offline-first xo PWA
-
-      - name: Build and publish xo-web image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: Dockerfile.xo-web
-          target: xo-web
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name == 'push' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          annotations: ${{ steps.meta.outputs.annotations }}
-          build-args: |
-            XO_VERSION=${{ env.XO_VERSION }}
-          cache-from: type=gha,scope=xo-web
-          cache-to: type=gha,mode=max,scope=xo-web
 
   release:
     name: GitHub Release

@@ -71,7 +71,7 @@ may transfer the complete Automerge history through normal Automerge sync messag
 - [x] Implement `/api/sync` WebSocket upgrade and per-connection Automerge sync state.
 - [x] Persist every accepted server change before acknowledging/broadcasting it.
 - [x] Track connected client IDs for status and the TUI peer view.
-- [ ] Make graceful shutdown close listeners, flush the workspace, and close sockets.
+- [x] Make graceful shutdown close listeners, rely on mutation-time durable flushes, and close active sockets.
 - [x] Remove the bearer-token operator server and obsolete setup/invitation endpoints;
   retain unauthenticated health and useful operational metrics only if they do not
   expose note content.
@@ -106,15 +106,15 @@ may transfer the complete Automerge history through normal Automerge sync messag
 
 ## Phase 4: embedded PWA and item API
 
-- [ ] Make the PWA build reproducible before `xo-syncd` embedding.
-- [ ] Embed hashed assets, `index.html`, manifest, icons, service worker, and installer.
-- [ ] Remove the standalone Cloudflare Pages deployment and its workflow after
-  `xo-syncd` serves the embedded PWA; production web traffic must terminate at the
+- [x] Make the PWA build reproducible before `xo-syncd` embedding.
+- [x] Embed hashed assets, `index.html`, manifest, icons, service worker, and installer.
+- [x] Remove the standalone Cloudflare Pages deployment and its workflow after
+  `xo-syncd` serves the embedded PWA; production web traffic now terminates at the
   proxy in front of `xo-syncd`, not at a separately deployed static origin.
-- [ ] Remove Cloudflare-specific deployment secrets, health checks, documentation,
+- [x] Remove Cloudflare-specific deployment secrets, health checks, documentation,
   and release dependencies.
-- [ ] Serve SPA fallbacks without shadowing `/api/*` or `/healthz`.
-- [ ] Set immutable caching for hashed assets and no-cache headers for HTML, manifest,
+- [x] Serve SPA fallbacks without shadowing `/api/*` or `/healthz`.
+- [x] Set immutable caching for hashed assets and no-cache headers for HTML, manifest,
   service worker, and version metadata.
 - [x] Implement the item API through the same authoritative revision/head model used
   by synchronized clients.
@@ -133,7 +133,7 @@ may transfer the complete Automerge history through normal Automerge sync messag
   operator setup pages, tests, CI services, and documentation.
 - [ ] Rename remaining generic concepts (`IrohWorkspace`, `IrohNode`, etc.) before the
   migration is considered complete.
-- [ ] Update architecture documents to describe a centralized but offline-first system.
+- [x] Update architecture documents to describe a centralized but offline-first system.
 - [ ] Ensure `rg -i 'iroh|pkarr|gossip|relay|invitation|membership'` only finds explicit
   historical migration notes where intentionally retained.
 
@@ -150,9 +150,9 @@ may transfer the complete Automerge history through normal Automerge sync messag
 - [x] API changes appear in later-reconnected clients.
 - [ ] URL import tests cover private IPs, redirects, body limits, invalid content types,
   and successful readable Markdown extraction.
-- [ ] Static asset tests cover SPA fallback, cache headers, service worker, and offline
-  reload.
-- [ ] `/healthz` returns status 200, `text/plain`, and exactly `ok\n` while ready.
+- [ ] Static asset tests cover service-worker offline reload in a browser.
+- [x] Static route tests cover SPA fallback and cache/content-type headers.
+- [x] `/healthz` returns status 200, `text/plain`, and exactly `ok\n` while ready.
 - [ ] Workspace tests and Clippy pass without ignored central-sync tests.
 
 ## Completion criteria

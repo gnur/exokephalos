@@ -1,46 +1,83 @@
 # xo architecture
 
-xo is an offline-first personal knowledge system. One Automerge document is the authoritative replica for each workspace. Canonical CBOR revisions, heads, configuration, assets, devices, tombstones, and membership events are stored directly as Automerge byte records. Native clients materialize winning records as Markdown; the PWA resolves the same records in Rust/Wasm.
+xo is an offline-first knowledge system. One Automerge document is authoritative
+for each workspace. Canonical CBOR revisions, per-author heads, configuration,
+assets, devices, and tombstones are stored as Automerge byte records. Immutable
+revision history and concurrent conflicts are retained even when one revision is
+selected as the visible winner.
 
-## Replication and transport
+## Central synchronization
 
-Iroh Endpoint supplies authenticated end-to-end encrypted QUIC connectivity, direct native paths, relay fallback, and Pkarr addressing. Browser peers are relay-only. Iroh Gossip discovers active peers and announces signed Automerge heads; bounded `/xo/automerge/1` streams transfer signed Automerge changes. Gossip is not the record transport.
+Each `xo-syncd` process owns one durable server workspace. Native and browser
+clients keep independent local Automerge replicas and synchronize through the
+same `/api/sync` WebSocket endpoint. JSON is used only for the bounded versioned
+hello and presence controls; binary frames contain opaque Automerge sync
+messages with independent sync state per connection.
 
-Every native workspace snapshot is atomically replaced and fsynced before writes are acknowledged. Signed change envelopes are persisted separately and restored with the snapshot. Browser snapshots, signed changes, encrypted identity material, invitations, cached records, and pending writes are durable in IndexedDB.
+The server fsyncs accepted Automerge changes before they can be observed by
+another client. Native clients also persist local changes before reporting local
+success. Clients remain usable while disconnected and reconnect with bounded
+backoff. Human-readable client IDs are presence labels, not security identities.
+`xo-syncd` performs no authentication; browser deployments require an
+authenticating HTTPS reverse proxy, while directly connected TUI clients are
+trusted.
 
-## Records and conflicts
+## Records, HTTP API, and conflicts
 
-Notes retain xo's immutable revision graph and per-author heads. HLC ordering selects a deterministic visible revision while concurrent revisions remain available as conflicts. Deletion and restoration are revisions. Workspace Steel configuration is replicated state rather than a projection file. Small assets are stored directly in Automerge; large-blob storage and selective synchronization are out of scope.
+Notes retain immutable revisions and per-author heads. HLC ordering chooses a
+deterministic visible revision while concurrent revisions remain explicit
+conflicts. Deletion and restoration are revisions. Workspace Steel configuration
+is replicated state rather than a projection file.
 
-## Identity and membership
+`xo-syncd` exposes `GET`, `PATCH`, and `DELETE /api/items/{id}` plus URL capture
+through `POST /api/items`. API writes use the same typed record repository,
+revision graph, heads, HLC, and Automerge document as synchronized clients. URL
+capture resolves and pins public addresses, revalidates redirects, rejects
+private or special networks, and bounds response sizes.
 
-Each process has:
+## Embedded PWA
 
-- a required human-readable peer ID;
-- a persistent Ed25519 membership key, whose fingerprint is the canonical actor identity;
-- a separate persistent Iroh endpoint key.
+Release builds package the tested Vite output directly into `xo-syncd`. The
+server supplies `index.html`, hashed JavaScript/CSS/Wasm assets, manifest, icons,
+service worker, version metadata, and installer. Hashed assets are immutable;
+the application shell and update metadata are revalidated. Extensionless client
+routes use the SPA fallback without shadowing `/api/*` or `/healthz`.
 
-The creator writes the self-signed genesis event. Candidates submit signed requests over `/xo/join/1`; an active invitation peer validates the request and endpoint binding and records a signed approval automatically. Active members can permanently remove a key. Removed keys cannot be reactivated. Rejoining requires a fresh membership key and a new signed admission.
-
-Every Automerge change has an Ed25519 sidecar signature binding its workspace, actor, sequence, hash, and raw bytes. Authenticated sync validates the Iroh endpoint binding, membership status, signature, actor, sequence, and revocation cutoff. A removal records accepted heads and actor sequence, rotates the membership epoch and Gossip topic, and causes informed peers to deny further synchronization. Revocation is eventually consistent for offline peers.
-
-Invitations contain a workspace ID, bootstrap endpoint addresses, current Gossip topic, protocol version, and genesis fingerprint. They are discovery material, not bearer write capabilities. Read-only membership and namespace capabilities are intentionally unsupported.
+The browser is still being migrated from its transitional Iroh worker to a
+Wasm-owned IndexedDB Automerge replica using `/api/sync`. Until that phase is
+complete, browser invitation, membership, relay, and signed-change code remains
+legacy code rather than part of the target architecture.
 
 ## Components
 
-- `xo-core`: domain records, Automerge persistence, membership, signed changes, protocols, projection, encryption, and Steel behavior.
-- `xo`: native TUI, projection reconciliation, peer approval/removal, import/export, capture, and plugins.
-- `xo-syncd`: durable user-level replica with health, metrics, setup, invitation, and membership operator endpoints.
-- `xo-web`: static React PWA. A dedicated worker owns Rust/Wasm, Iroh, Automerge, encrypted identity, and IndexedDB persistence.
-- `xo-admin`: offline import, invitation, peer administration, diagnostics, and verified backup/restore.
+- `xo-core`: domain records, Automerge persistence, centralized sync contracts,
+  projection, encryption, shared safe URL capture, and Steel behavior.
+- `xo`: durable native replica, reconnecting WebSocket client, TUI, Markdown
+  projection, import/export, capture, and plugins.
+- `xo-syncd`: authoritative workspace, WebSocket synchronization, item API,
+  health probe, and embedded PWA host.
+- `xo-web`: transitional Rust/Wasm browser runtime and React PWA; its transport
+  migration remains in progress.
+- `xo-admin`: legacy offline import/backup tooling pending centralized cleanup.
 - `xo-lsp`: stdio editor diagnostics and completion over a native projection.
 
-TUI and daemon use separate state directories and each mutable native state directory is protected by `.xo-workspace.lock`. The production PWA is static and has no application API or synchronization gateway.
+Each mutable native state directory is protected by `.xo-workspace.lock` and is
+single-process owned.
 
 ## Security boundaries
 
-Steel executes in a fresh bounded VM. Plugins receive only explicitly granted host capabilities and secrets. Browser identity and invitation data are AES-GCM encrypted with a non-extractable WebCrypto key. Membership keys are independent of endpoint keys, allowing endpoint rebinding without changing logical identity. Network authentication does not replace durable change signatures.
+Steel executes in a fresh bounded VM. Plugins receive only explicitly granted
+host capabilities and secrets. `xo-syncd` trusts requests that reach it, so the
+reverse proxy is the browser authentication boundary. URL capture does not trust
+DNS names or redirects to remain public. Passphrase-encrypted note ciphertext is
+authenticated to the note identity and may synchronize without exposing its
+plaintext.
 
 ## Testing
 
-Commit CI runs formatting, Clippy, workspace tests, Wasm builds, browser offline/restart tests, native-browser admission and convergence tests, binary matrices, containers, and deployment. Release tags additionally run the ignored 1,000-item rebuild and three-persisted-peer relay/restart/conflict scenarios. Skipped release-only tests are reported separately from successful tests.
+Commit CI runs formatting, Clippy, deterministic workspace/server tests, Wasm and
+browser builds, browser offline UI tests, release-binary matrices, and the
+`xo-syncd` container. Published binaries embed the exact PWA artifact produced by
+the browser job. Release tags additionally run explicitly identified extensive
+workspace tests. The remaining browser-central convergence and offline-reconnect
+tests are tracked in `iroh-removal-plan.md`.

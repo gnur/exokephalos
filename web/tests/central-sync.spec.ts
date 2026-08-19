@@ -30,7 +30,8 @@ test('restores the durable Automerge replica before reconnecting', async ({ page
   await context.setOffline(true);
   await page.reload();
   await expect(page.getByText(title, { exact: true })).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByText('Working from the durable local replica')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'New note' })).toBeVisible();
+  expect(await page.evaluate(() => navigator.onLine)).toBe(false);
   await wipe(context);
 });
 

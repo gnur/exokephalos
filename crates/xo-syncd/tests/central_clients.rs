@@ -207,6 +207,7 @@ async fn three_clients_retain_offline_conflicts_through_server_restart() -> Resu
     let state = directory.path().join("conflict-server");
     let server = Server::start(&state, address)?;
     let workspace_id = wait_for_workspace_id(&state.join("workspace-id")).await?;
+    wait_for_server(address).await?;
     let server_url = format!("http://{address}");
     let note_id = NoteId::new("offline");
 

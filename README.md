@@ -10,8 +10,8 @@ The project has three clients:
 - **`xo`** is the terminal workspace and Markdown projection. Connect it with
   `xo --server https://notes.example.test` (the default is
   `http://127.0.0.1:9464`).
-- **`xo-web`** is an installable offline-first PWA. During the transport migration
-  its worker is being moved to the same-origin `/api/sync` endpoint.
+- **`xo-web`** is an installable offline-first PWA. Its worker owns a durable
+  Automerge replica and synchronizes with the same-origin `/api/sync` endpoint.
 - **`xo-syncd`** is the authoritative durable synchronization server. It hosts one
   workspace and will also serve the embedded PWA and item HTTP API.
 
@@ -118,7 +118,7 @@ The examples below assume those binaries have been copied somewhere in
 GitHub Actions builds release archives for Linux x86-64, Linux ARM64, macOS
 ARM64, and Windows x86-64. Pushing a UTC timestamp tag creates the corresponding
 GitHub Release automatically with generated release notes, all four archives,
-the static PWA, and a `SHA256SUMS` file. The exact tag is embedded as the version
+the embedded-PWA binaries, and a `SHA256SUMS` file. The exact tag is embedded as the version
 reported by every binary and by the PWA.
 
 Create a release tag from a clean, fully committed checkout with:
@@ -134,7 +134,7 @@ changes exist. Pushing the tag starts the GitHub Release workflow.
 
 ## Quick Install (`xo` or `xo-syncd`)
 
-You can install the native `xo` TUI, `xo-syncd` background daemon, and `xo-lsp` directly from the deployed static site:
+You can install the native `xo` TUI, `xo-syncd` background daemon, and `xo-lsp` directly from the release installer:
 
 ```console
 curl -sSL https://xo.exokephalos.dev/install.sh | bash
@@ -165,7 +165,7 @@ removed.
 Production PWA assets are embedded in `xo-syncd`; there is no separate static
 production deployment. Open the authenticated origin serving the daemon. Static
 assets and cached UI remain client-side, while synchronization and the item API
-share that origin.
+share that origin. The development fallback page is not the production PWA.
 
 Build the Wasm package and static application locally with:
 
@@ -216,28 +216,125 @@ configuration.
 
 ## Start a centralized workspace
 
-Start one daemon for the workspace:
+The following is the complete laptop-plus-mobile setup flow. It assumes the
+laptop will run the authoritative server and that a DNS name such as
+`notes.example.com` can point to the laptop or home-server network.
+
+### 1. Install the binaries
+
+On the laptop, install a release archive or build the three required binaries:
 
 ```console
+cargo build --release -p xo -p xo-lsp -p xo-syncd
+```
+
+Copy `xo`, `xo-syncd`, and optionally `xo-lsp` into `PATH`. There is no
+`xo-admin` binary.
+
+### 2. Start the server locally
+
+Create a directory that will be backed up separately from the Markdown
+projection, then start one server workspace:
+
+```console
+mkdir -p ~/.local/share/xo-syncd
 xo-syncd --state-dir ~/.local/share/xo-syncd --bind 127.0.0.1:9464
 ```
 
-Create native configuration and connect the TUI:
+Keep this process running, or use the systemd user service created by the
+installer. Verify it locally:
+
+```console
+curl -fsS http://127.0.0.1:9464/healthz
+# ok
+```
+
+The first server start creates the workspace. One `xo-syncd` process hosts one
+workspace; do not point two independent server state directories at the same
+workspace.
+
+### 3. Prepare and import existing Markdown
+
+Initialize the native client configuration and choose a projection directory:
 
 ```console
 mkdir -p ~/.config/xo
 xo config-init > ~/.config/xo/config.scm
-xo --server http://127.0.0.1:9464
+# Edit config.scm if you want a projection other than ~/notes.
 ```
 
-Each native client needs its own state and projection directories but points at
-the same server. `--server` is the only native server-discovery mechanism. There
-are no tickets, invitations, approvals, endpoint identities, or pairing steps.
+The Markdown tree is a projection, not the authoritative store. For an existing
+folder, make a copy outside the configured projection and import the copy into
+the fresh server workspace:
 
-`open_peers` shows currently connected client IDs. These are presence labels;
-they do not grant or revoke access. Protect browser access with an authenticating
-HTTPS reverse proxy and expose WebSocket upgrades for `/api/sync`. `xo-syncd`
-itself intentionally trusts every request that reaches it.
+```console
+mv ~/notes ~/notes-before-xo
+mkdir -p ~/notes
+cp -a ~/notes-before-xo ~/xo-import
+xo --server http://127.0.0.1:9464 import ~/xo-import --type note
+```
+
+`xo import` validates the source before writing, leaves the source untouched,
+commits the items to `xo-syncd`, and materializes the authoritative notes into
+`~/notes`. If the source contains books or another item type, use the matching
+`--type` value. Do not import the active projection itself, and do not run two
+`xo` processes against one client state directory.
+
+After import, start the TUI against the same server:
+
+```console
+xo --server http://127.0.0.1:9464 --client-id laptop
+```
+
+The laptop's local Automerge replica is durable and can continue operating when
+the server is temporarily unavailable. Its state directory is separate from
+the server directory and should also be backed up.
+
+### 4. Publish the server for mobile access
+
+Do not expose unauthenticated `xo-syncd` directly to the Internet. Put an
+HTTPS reverse proxy with authentication in front of it, preserve WebSocket
+upgrades, and proxy the same origin to `127.0.0.1:9464`. For example, the
+proxy must route:
+
+```text
+https://notes.example.com/          -> http://127.0.0.1:9464/
+https://notes.example.com/api/sync  -> WebSocket http://127.0.0.1:9464/api/sync
+https://notes.example.com/api/...   -> http://127.0.0.1:9464/api/...
+```
+
+Configure DNS and HTTPS certificates for `notes.example.com`, and require the
+same authentication policy for the PWA, item API, and WebSocket endpoint. A
+reverse proxy is also the TLS termination point; `xo-syncd` intentionally does
+not implement authentication or TLS.
+
+For a LAN-only setup, a trusted HTTP reverse proxy or direct LAN binding can be
+used instead, but it provides no application authentication and should not be
+Internet-facing.
+
+### 5. Open the PWA on the phone
+
+On the phone, open `https://notes.example.com/`, complete the proxy
+authentication, choose a human-readable client ID such as `phone`, and connect.
+The PWA restores its IndexedDB replica before connecting, so it remains usable
+offline after its first successful load. Install it to the home screen if
+desired. The phone and laptop then synchronize through the same `/api/sync`
+endpoint; no invitation, ticket, pairing, or separate mobile server is needed.
+
+### 6. Back up and operate it
+
+Back up both `~/.local/share/xo-syncd` and the laptop's `~/.local/share/xo`
+state directory with their processes stopped. Markdown export is the portable
+handoff format:
+
+```console
+xo --server http://127.0.0.1:9464 export ~/xo-export
+```
+
+For additional native clients, use a separate state and projection directory
+and point each client at the same server. `--server` is the only native
+server-discovery mechanism. `open_peers` shows currently connected client IDs;
+these are presence labels and do not grant or revoke access.
 
 ### Server routes
 

@@ -52,13 +52,13 @@ may transfer the complete Automerge history through normal Automerge sync messag
 ## HTTP surface
 
 - [x] Specify `GET /healthz` as an unauthenticated probe returning exactly `ok\n`.
-- [ ] Add `GET /api/items/{id}` returning `{ frontmatter, body }`.
-- [ ] Add `POST /api/items` with `{ url }`, safe URL capture, and
+- [x] Add `GET /api/items/{id}` returning `{ frontmatter, body }`.
+- [x] Add `POST /api/items` with `{ url }`, safe URL capture, and
   `{ id, frontmatter, body }` response.
-- [ ] Add `PATCH /api/items/{id}` with optional `frontmatter` and `body`; reject a
+- [x] Add `PATCH /api/items/{id}` with optional `frontmatter` and `body`; reject a
   mismatched frontmatter ID and preserve omitted values.
-- [ ] Add `DELETE /api/items/{id}` using an immutable deleted revision.
-- [ ] Use consistent JSON errors, body limits, content types, and status codes.
+- [x] Add `DELETE /api/items/{id}` using an immutable deleted revision.
+- [x] Use consistent JSON errors, body limits, content types, and status codes.
 - [ ] Add conditional request/concurrency documentation; Automerge remains the source
   of truth when API and synchronized clients race.
 
@@ -116,9 +116,9 @@ may transfer the complete Automerge history through normal Automerge sync messag
 - [ ] Serve SPA fallbacks without shadowing `/api/*` or `/healthz`.
 - [ ] Set immutable caching for hashed assets and no-cache headers for HTML, manifest,
   service worker, and version metadata.
-- [ ] Implement the item API through the same authoritative revision/head model used
+- [x] Implement the item API through the same authoritative revision/head model used
   by synchronized clients.
-- [ ] Reuse the existing URL-capture parser, response limits, Rustls provider setup,
+- [x] Reuse the existing URL-capture parser, response limits, Rustls provider setup,
   redirect validation, and private-network rejection.
 
 ## Phase 5: removal and cleanup
@@ -146,7 +146,8 @@ may transfer the complete Automerge history through normal Automerge sync messag
 - [ ] Browser test proves cached notes render before WebSocket connection.
 - [ ] Browser test proves an offline mutation synchronizes after reconnect.
 - [ ] TUI and browser converge through the same `/api/sync` endpoint.
-- [ ] API GET/PATCH/DELETE changes appear in connected and later-reconnected clients.
+- [x] API GET/PATCH/DELETE changes appear in connected clients.
+- [x] API changes appear in later-reconnected clients.
 - [ ] URL import tests cover private IPs, redirects, body limits, invalid content types,
   and successful readable Markdown extraction.
 - [ ] Static asset tests cover SPA fallback, cache headers, service worker, and offline

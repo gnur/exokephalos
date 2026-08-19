@@ -46,6 +46,7 @@ impl Drop for Server {
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn two_native_replicas_converge_through_the_central_server() -> Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let directory = tempfile::tempdir()?;
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let address = listener.local_addr()?;
@@ -144,6 +145,46 @@ async fn two_native_replicas_converge_through_the_central_server() -> Result<()>
                 tui_converged,
                 "TUI sessions did not converge through /api/sync"
             );
+
+            let http = reqwest::Client::new();
+            let patched = http
+                .patch(format!("http://{address}/api/items/{note_id}"))
+                .header("content-type", "application/json")
+                .body(r#"{"body":"updated through HTTP"}"#)
+                .send()
+                .await?;
+            assert_eq!(patched.status(), reqwest::StatusCode::OK);
+            wait_for_note(&second_tui, &note_id, Some("updated through HTTP")).await?;
+
+            second_tui.shutdown().await?;
+            let patched_offline = http
+                .patch(format!("http://{address}/api/items/{note_id}"))
+                .header("content-type", "application/json; charset=utf-8")
+                .body(r#"{"body":"changed while client was offline"}"#)
+                .send()
+                .await?;
+            assert_eq!(patched_offline.status(), reqwest::StatusCode::OK);
+            let second_tui = WorkspaceSession::open_central(
+                &directory.path().join("second-tui"),
+                &format!("http://{address}"),
+                directory.path().join("second-projection"),
+                xo_core::PeerId::parse("second-tui")?,
+            )
+            .await?;
+            wait_for_note(
+                &second_tui,
+                &note_id,
+                Some("changed while client was offline"),
+            )
+            .await?;
+
+            let deleted = http
+                .delete(format!("http://{address}/api/items/{note_id}"))
+                .send()
+                .await?;
+            assert_eq!(deleted.status(), reqwest::StatusCode::NO_CONTENT);
+            wait_for_note(&second_tui, &note_id, None).await?;
+
             first_tui.shutdown().await?;
             second_tui.shutdown().await?;
             first_client.shutdown().await?;
@@ -220,6 +261,27 @@ async fn wait_for_record(replica: &CentralReplica, key: &str, expected: &[u8]) -
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     bail!("replica did not receive {key}")
+}
+
+async fn wait_for_note(
+    session: &WorkspaceSession,
+    note_id: &NoteId,
+    expected_body: Option<&str>,
+) -> Result<()> {
+    for _ in 0..200 {
+        let body = session
+            .snapshot()
+            .await?
+            .notes
+            .into_iter()
+            .find(|note| &note.id == note_id)
+            .map(|note| note.body);
+        if body.as_deref() == expected_body {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    bail!("API item change did not synchronize to the native replica")
 }
 
 async fn wait_for_workspace_id(path: &std::path::Path) -> Result<String> {

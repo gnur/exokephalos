@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -10,8 +10,11 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{Mutex, broadcast};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
-use xo_core::automerge_store::PersistentAutomergeStore;
+use xo_core::central_replica::CentralReplica;
 use xo_core::central_sync::{ControlMessage, MAX_CONTROL_MESSAGE_BYTES};
+use xo_core::domain::{Frontmatter, FrontmatterValue};
+use xo_core::records::WorkspaceRecords;
+use xo_core::{ActorId, CURRENT_SCHEMA, HlcClock, Note, NoteId, NoteRevision, RevisionId};
 
 const WORKSPACE_ID_FILE: &str = "workspace-id";
 const SERVER_ACTOR_FILE: &str = "server-actor";
@@ -25,7 +28,9 @@ enum WorkspaceNotification {
 #[derive(Debug)]
 pub struct CentralWorkspace {
     workspace_id: String,
-    store: Mutex<PersistentAutomergeStore>,
+    replica: Arc<CentralReplica>,
+    clock: Mutex<HlcClock>,
+    mutation: Mutex<()>,
     clients: Mutex<BTreeMap<String, usize>>,
     notifications: broadcast::Sender<WorkspaceNotification>,
 }
@@ -36,16 +41,16 @@ impl CentralWorkspace {
             .with_context(|| format!("create central workspace {}", state_dir.display()))?;
         let workspace_id = load_or_create_hex(&state_dir.join(WORKSPACE_ID_FILE), 16, "workspace")?;
         let actor_hex = load_or_create_hex(&state_dir.join(SERVER_ACTOR_FILE), 32, "actor")?;
-        let actor = decode_hex(&actor_hex)?;
-        let store = PersistentAutomergeStore::open_or_create(
-            &state_dir.join("replica"),
-            &workspace_id,
-            &actor,
-        )?;
+        let automerge_actor = decode_hex(&actor_hex)?;
+        let actor = ActorId::new(format!("server-{}", &actor_hex[..16]));
+        let replica =
+            CentralReplica::open(state_dir, &workspace_id, actor.clone(), &automerge_actor)?;
         let (notifications, _) = broadcast::channel(128);
         Ok(Arc::new(Self {
             workspace_id,
-            store: Mutex::new(store),
+            replica,
+            clock: Mutex::new(HlcClock::new(actor)),
+            mutation: Mutex::new(()),
             clients: Mutex::new(BTreeMap::new()),
             notifications,
         }))
@@ -58,7 +63,155 @@ impl CentralWorkspace {
 
     #[cfg(test)]
     pub async fn record(&self, key: &str) -> Result<Option<Vec<u8>>> {
-        Ok(self.store.lock().await.store().get(key)?)
+        use xo_core::record_workspace::RecordWorkspace as _;
+        self.replica.get_record(key).await
+    }
+
+    #[cfg(test)]
+    pub async fn revision_count(&self, note_id: &NoteId) -> Result<usize> {
+        Ok(WorkspaceRecords::new(self.replica.as_ref())
+            .revision_history(note_id)
+            .await?
+            .len())
+    }
+
+    pub async fn create_item(&self, note: &Note) -> Result<bool> {
+        let _mutation = self.mutation.lock().await;
+        let records = WorkspaceRecords::new(self.replica.as_ref());
+        if records.load_note(&note.id).await?.is_some() {
+            return Ok(false);
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis()
+            .try_into()?;
+        let hlc = self.clock.lock().await.next(now);
+        records
+            .commit_revision(&NoteRevision {
+                schema: CURRENT_SCHEMA,
+                note_id: note.id.clone(),
+                frontmatter: note.frontmatter.clone(),
+                body: note.body.clone(),
+                materialized_path: xo_core::projection::canonical_note_path(
+                    &note.id,
+                    &note.frontmatter,
+                ),
+                hlc,
+                author_id: records.actor_id(),
+                predecessors: BTreeSet::new(),
+                deleted: false,
+            })
+            .await?;
+        let _ = self
+            .notifications
+            .send(WorkspaceNotification::DocumentChanged);
+        Ok(true)
+    }
+
+    pub async fn item(&self, note_id: &NoteId) -> Result<Option<Note>> {
+        Ok(WorkspaceRecords::new(self.replica.as_ref())
+            .load_note(note_id)
+            .await?
+            .and_then(|resolved| resolved.visible)
+            .map(revision_note))
+    }
+
+    pub async fn patch_item(
+        &self,
+        note_id: &NoteId,
+        frontmatter: Option<Frontmatter>,
+        body: Option<String>,
+    ) -> Result<Option<Note>> {
+        let _mutation = self.mutation.lock().await;
+        let records = WorkspaceRecords::new(self.replica.as_ref());
+        let Some(resolved) = records.load_note(note_id).await? else {
+            return Ok(None);
+        };
+        let Some(existing) = resolved.visible else {
+            return Ok(None);
+        };
+        let note = Note {
+            id: note_id.clone(),
+            frontmatter: frontmatter.unwrap_or(existing.frontmatter),
+            body: body.unwrap_or(existing.body),
+            path: existing.materialized_path,
+        };
+        if let Some(value) = note.frontmatter.get("id")
+            && value != &FrontmatterValue::String(note_id.to_string())
+        {
+            bail!("frontmatter id must match the item id");
+        }
+        self.commit_item(
+            &records,
+            &note,
+            false,
+            resolved.winning_revision,
+            resolved.conflict,
+        )
+        .await?;
+        Ok(Some(note))
+    }
+
+    pub async fn delete_item(&self, note_id: &NoteId) -> Result<bool> {
+        let _mutation = self.mutation.lock().await;
+        let records = WorkspaceRecords::new(self.replica.as_ref());
+        let Some(resolved) = records.load_note(note_id).await? else {
+            return Ok(false);
+        };
+        let Some(revision) = resolved.visible else {
+            return Ok(false);
+        };
+        let note = revision_note(revision);
+        self.commit_item(
+            &records,
+            &note,
+            true,
+            resolved.winning_revision,
+            resolved.conflict,
+        )
+        .await?;
+        Ok(true)
+    }
+
+    async fn commit_item(
+        &self,
+        records: &WorkspaceRecords<'_>,
+        note: &Note,
+        deleted: bool,
+        winner: RevisionId,
+        conflict: Option<xo_core::Conflict>,
+    ) -> Result<()> {
+        let mut predecessors = BTreeSet::from([winner]);
+        predecessors.extend(
+            conflict
+                .into_iter()
+                .flat_map(|value| value.concurrent_revisions),
+        );
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis()
+            .try_into()?;
+        let hlc = self.clock.lock().await.next(now);
+        records
+            .commit_revision(&NoteRevision {
+                schema: CURRENT_SCHEMA,
+                note_id: note.id.clone(),
+                frontmatter: note.frontmatter.clone(),
+                body: note.body.clone(),
+                materialized_path: xo_core::projection::canonical_note_path(
+                    &note.id,
+                    &note.frontmatter,
+                ),
+                hlc,
+                author_id: records.actor_id(),
+                predecessors,
+                deleted,
+            })
+            .await?;
+        let _ = self
+            .notifications
+            .send(WorkspaceNotification::DocumentChanged);
+        Ok(())
     }
 
     async fn client_ids(&self) -> Vec<String> {
@@ -121,12 +274,7 @@ impl CentralWorkspace {
                 ))
                 .await?;
             let mut sync_state = SyncState::new();
-            if let Some(message) = self
-                .store
-                .lock()
-                .await
-                .generate_sync_message(&mut sync_state)
-            {
+            if let Some(message) = self.replica.generate_sync_message(&mut sync_state).await {
                 sender.send(Message::Binary(message.into())).await?;
             }
             let mut notifications = self.notifications.subscribe();
@@ -135,17 +283,16 @@ impl CentralWorkspace {
                     incoming = receiver.next() => {
                         match incoming {
                             Some(Ok(Message::Binary(bytes))) => {
-                                let changed = self.store.lock().await.receive_sync_message(
-                                    &mut sync_state,
-                                    &bytes,
-                                )?;
+                                let changed = self.replica
+                                    .receive_sync_message(&mut sync_state, &bytes)
+                                    .await?;
                                 if changed {
                                     let _ = self.notifications.send(
                                         WorkspaceNotification::DocumentChanged,
                                     );
                                 }
-                                if let Some(message) = self.store.lock().await
-                                    .generate_sync_message(&mut sync_state)
+                                if let Some(message) = self.replica
+                                    .generate_sync_message(&mut sync_state).await
                                 {
                                     sender.send(Message::Binary(message.into())).await?;
                                 }
@@ -161,8 +308,8 @@ impl CentralWorkspace {
                     notification = notifications.recv() => {
                         match notification {
                             Ok(WorkspaceNotification::DocumentChanged) => {
-                                if let Some(message) = self.store.lock().await
-                                    .generate_sync_message(&mut sync_state)
+                                if let Some(message) = self.replica
+                                    .generate_sync_message(&mut sync_state).await
                                 {
                                     sender.send(Message::Binary(message.into())).await?;
                                 }
@@ -183,6 +330,15 @@ impl CentralWorkspace {
         .await;
         self.remove_client(&client_id).await;
         result
+    }
+}
+
+fn revision_note(revision: NoteRevision) -> Note {
+    Note {
+        id: revision.note_id,
+        frontmatter: revision.frontmatter,
+        body: revision.body,
+        path: revision.materialized_path,
     }
 }
 

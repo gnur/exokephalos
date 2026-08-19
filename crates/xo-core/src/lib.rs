@@ -34,6 +34,8 @@ pub mod steel_runtime;
 #[cfg(feature = "native")]
 pub mod sync_state;
 pub mod timestamp;
+#[cfg(feature = "native")]
+pub mod url_capture;
 pub mod version;
 #[cfg(feature = "native")]
 pub mod watcher;

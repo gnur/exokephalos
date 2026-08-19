@@ -12,11 +12,15 @@ native = [
     "dep:aes-gcm",
     "dep:argon2",
     "dep:base64",
+    "dep:dom_smoothie",
     "dep:notify",
+    "dep:quick_html2md",
+    "dep:reqwest",
     "dep:regex",
     "dep:rusqlite",
     "dep:tempfile",
     "dep:tokio",
+    "dep:url",
     "dep:zeroize",
 ]
 peer-protocol = ["dep:base64", "dep:iroh"]
@@ -38,13 +42,16 @@ automerge.workspace = true
 base64 = { workspace = true, optional = true }
 blake3.workspace = true
 ciborium.workspace = true
+dom_smoothie = { workspace = true, optional = true }
 ed25519-dalek.workspace = true
 futures-lite = { workspace = true, optional = true }
 hostname = { workspace = true, optional = true }
 iroh = { workspace = true, optional = true }
 iroh-gossip = { workspace = true, optional = true }
 notify = { workspace = true, optional = true }
+quick_html2md = { workspace = true, optional = true }
 rand.workspace = true
+reqwest = { workspace = true, optional = true }
 regex = { workspace = true, optional = true }
 rusqlite = { workspace = true, optional = true }
 serde.workspace = true
@@ -55,6 +62,7 @@ tempfile = { workspace = true, optional = true }
 thiserror.workspace = true
 time.workspace = true
 tokio = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
 zeroize = { workspace = true, optional = true }
 
 [lints]

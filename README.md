@@ -35,6 +35,18 @@ The Markdown directory remains a projection rather than the synchronization
 transport or a complete backup. Keep the local state directory and server state
 in normal backup procedures.
 
+`xo-syncd` also exposes an unauthenticated item API on the same trusted or
+reverse-proxy-protected origin:
+
+- `GET /api/items/{id}` returns `frontmatter` and `body`.
+- `POST /api/items` accepts `{ "url": "https://…" }` and safely captures a public
+  HTML page as a new item.
+- `PATCH /api/items/{id}` accepts optional `frontmatter` and `body` fields.
+- `DELETE /api/items/{id}` creates an immutable deleted revision.
+
+JSON request bodies are limited to 1 MiB. URL capture independently limits
+responses, validates every redirect, and rejects private or special addresses.
+
 The Iroh removal is intentionally breaking and still in progress. See
 [`iroh-removal-plan.md`](iroh-removal-plan.md) for completed and remaining work.
 

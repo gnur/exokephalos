@@ -61,6 +61,7 @@ pub struct WorkspaceSession {
     clock: HlcClock,
     projection: ProjectionState,
     pub sync_state: SyncStateStore,
+    plugin_sources: BTreeMap<String, String>,
     _lock: WorkspaceLock,
 }
 
@@ -75,7 +76,14 @@ impl WorkspaceSession {
             Some(value) => value.to_owned(),
             None => read_active_workspace(state_dir)?.unwrap_or_else(local_workspace_id),
         };
-        Self::build(state_dir, &workspace_id, projection, client_id, None)
+        Self::build(
+            state_dir,
+            &workspace_id,
+            projection,
+            client_id,
+            None,
+            BTreeMap::new(),
+        )
     }
 
     pub async fn open_central(
@@ -83,6 +91,17 @@ impl WorkspaceSession {
         server: &str,
         projection: PathBuf,
         client_id: xo_core::ClientId,
+    ) -> Result<Self> {
+        Self::open_central_with_plugins(state_dir, server, projection, client_id, BTreeMap::new())
+            .await
+    }
+
+    pub async fn open_central_with_plugins(
+        state_dir: &Path,
+        server: &str,
+        projection: PathBuf,
+        client_id: xo_core::ClientId,
+        plugin_sources: BTreeMap<String, String>,
     ) -> Result<Self> {
         let workspace_id = match read_active_workspace(state_dir)? {
             Some(value) => value,
@@ -98,6 +117,7 @@ impl WorkspaceSession {
             projection,
             client_id,
             Some(server),
+            plugin_sources,
         )
     }
 
@@ -107,6 +127,7 @@ impl WorkspaceSession {
         projection: PathBuf,
         client_id: xo_core::ClientId,
         server: Option<&str>,
+        plugin_sources: BTreeMap<String, String>,
     ) -> Result<Self> {
         std::fs::create_dir_all(state_dir)
             .with_context(|| format!("create state directory {}", state_dir.display()))?;
@@ -143,6 +164,7 @@ impl WorkspaceSession {
             actor: actor.clone(),
             clock: HlcClock::new(actor),
             sync_state,
+            plugin_sources,
             _lock: lock,
         })
     }
@@ -188,16 +210,24 @@ impl WorkspaceSession {
                 .with_context(|| format!("configuration {} is not UTF-8", config.record.path))?;
             match config.record.path.as_str() {
                 "xo.scm" => xo_main = Some(source),
-                _ => {
+                _ if xo_core::steel_runtime::valid_module_path(&config.record.path) => {
                     modules.insert(config.record.path.clone(), source);
                 }
+                _ if xo_core::steel_runtime::valid_plugin_path(&config.record.path) => {
+                    // Plugins are local xo configuration, never replicated workspace state.
+                }
+                _ => anyhow::bail!(
+                    "invalid workspace configuration path {}",
+                    config.record.path
+                ),
             }
         }
         let had_workspace_config = xo_main.is_some();
         let mut behavior = match xo_main {
-            Some(source) => xo_core::steel_runtime::SteelWorkspace::load(
+            Some(source) => xo_core::steel_runtime::SteelWorkspace::load_with_plugins(
                 &source,
                 &modules,
+                &self.plugin_sources,
                 "1970-01-01T00:00:00+00:00",
             )
             .context("load replicated workspace configuration xo.scm")?,
@@ -207,6 +237,15 @@ impl WorkspaceSession {
         if install_default_views {
             behavior.default_view = "notes".into();
             behavior.views = default_views();
+        }
+        if !had_workspace_config && !self.plugin_sources.is_empty() {
+            behavior = xo_core::steel_runtime::SteelWorkspace::load_with_plugins(
+                &xo_core::steel_runtime::encode_config(&behavior, false),
+                &BTreeMap::new(),
+                &self.plugin_sources,
+                "1970-01-01T00:00:00+00:00",
+            )
+            .context("load local Forge plugins")?;
         }
         let install_url_capture = !had_workspace_config
             && !behavior
@@ -232,10 +271,23 @@ impl WorkspaceSession {
                 .find(|config| config.record.path == "xo.scm")
                 .map(|config| BTreeSet::from([config.revision_id.clone()]))
                 .unwrap_or_default();
+            let mut persisted_behavior = behavior.clone();
+            persisted_behavior.actions.retain(|action| {
+                !matches!(
+                    action.plugin,
+                    Some(ActionPlugin::Steel { .. } | ActionPlugin::TagPicker)
+                )
+            });
+            persisted_behavior.capability_grants.retain(|action, _| {
+                persisted_behavior
+                    .actions
+                    .iter()
+                    .any(|value| &value.id == action)
+            });
             records
                 .put_config(
                     "xo.scm",
-                    xo_core::steel_runtime::encode_config(&behavior, false).into_bytes(),
+                    xo_core::steel_runtime::encode_config(&persisted_behavior, false).into_bytes(),
                     self.clock.next(now_ms()?),
                     predecessors,
                 )
@@ -287,31 +339,10 @@ impl WorkspaceSession {
         Ok(())
     }
 
-    pub async fn install_config(&mut self, path: &str, source: &[u8]) -> Result<()> {
-        if !path.starts_with("plugins/") || !xo_core::steel_runtime::valid_config_path(path) {
-            anyhow::bail!("plugin path must be below plugins/ and end in .scm");
-        }
-        let records = WorkspaceRecords::new(self.replica.as_ref());
-        let configs = records.list_configs().await?;
-        let predecessors = configs
-            .iter()
-            .find(|config| config.record.path == path)
-            .map(|config| BTreeSet::from([config.revision_id.clone()]))
-            .unwrap_or_default();
-        records
-            .put_config(
-                path,
-                source.to_vec(),
-                self.clock.next(now_ms()?),
-                predecessors,
-            )
-            .await?;
-        self.projection
-            .reconcile_configs(&records.list_configs().await?)?;
-        Ok(())
-    }
-
     pub async fn config_source(&self, path: &str) -> Result<String> {
+        if let Some(source) = self.plugin_sources.get(path) {
+            return Ok(source.clone());
+        }
         let config = WorkspaceRecords::new(self.replica.as_ref())
             .list_configs()
             .await?

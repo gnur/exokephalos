@@ -1,8 +1,8 @@
 //! Sandboxed Steel configuration loader.
 //!
 //! `xo.scm` evaluates to a workspace descriptor. Optional `modules/**/*.scm`
-//! files use `(workspace-module ...)`. Executable `plugins/**/*.scm` files run
-//! only for manifest discovery here; action execution uses a fresh sandboxed
+//! files use `(workspace-module ...)`. Local Forge plugins are loaded by the
+//! native host for manifest discovery; action execution uses a fresh sandboxed
 //! VM with capability-checked host services.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -54,19 +54,31 @@ impl SteelWorkspace {
         modules: &BTreeMap<String, String>,
         deterministic_now: &str,
     ) -> Result<WorkspaceBehavior, SteelConfigError> {
+        Self::load_with_plugins(xo_scm, modules, &BTreeMap::new(), deterministic_now)
+    }
+
+    pub fn load_with_plugins(
+        xo_scm: &str,
+        modules: &BTreeMap<String, String>,
+        plugins: &BTreeMap<String, String>,
+        deterministic_now: &str,
+    ) -> Result<WorkspaceBehavior, SteelConfigError> {
         let mut behavior = evaluate(xo_scm, "workspace-config", deterministic_now)?;
         for (path, source) in modules {
-            if valid_module_path(path) {
-                let module = evaluate(source, "workspace-module", deterministic_now)?;
-                behavior.views.extend(module.views);
-                behavior.actions.extend(module.actions);
-                behavior.templates.extend(module.templates);
-                behavior.capability_grants.extend(module.capability_grants);
-            } else if valid_plugin_path(path) {
-                merge_plugin(&mut behavior, path, source)?;
-            } else {
+            if !valid_module_path(path) {
                 return Err(SteelConfigError::InvalidPath(path.clone()));
             }
+            let module = evaluate(source, "workspace-module", deterministic_now)?;
+            behavior.views.extend(module.views);
+            behavior.actions.extend(module.actions);
+            behavior.templates.extend(module.templates);
+            behavior.capability_grants.extend(module.capability_grants);
+        }
+        for (path, source) in plugins {
+            if !valid_plugin_path(path) {
+                return Err(SteelConfigError::InvalidPath(path.clone()));
+            }
+            merge_plugin(&mut behavior, path, source)?;
         }
         behavior.validate()?;
         Ok(behavior)
@@ -102,6 +114,16 @@ struct PluginAction {
     effects: Vec<ActionEffect>,
     #[serde(default)]
     capabilities: BTreeSet<Capability>,
+    #[serde(default)]
+    interaction: PluginInteraction,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum PluginInteraction {
+    #[default]
+    Prompt,
+    TagPicker,
 }
 
 fn plugin_entrypoint() -> String {
@@ -154,11 +176,14 @@ fn merge_plugin(
         });
     }
     for action in manifest.actions {
-        let plugin = action.effects.is_empty().then(|| ActionPlugin::Steel {
-            path: path.to_owned(),
-            entrypoint: action.entrypoint,
-            prompt: action.prompt,
-            capabilities: action.capabilities.clone(),
+        let plugin = action.effects.is_empty().then(|| match action.interaction {
+            PluginInteraction::Prompt => ActionPlugin::Steel {
+                path: path.to_owned(),
+                entrypoint: action.entrypoint,
+                prompt: action.prompt,
+                capabilities: action.capabilities.clone(),
+            },
+            PluginInteraction::TagPicker => ActionPlugin::TagPicker,
         });
         behavior
             .capability_grants
@@ -531,6 +556,7 @@ fn parse_plugin(form: &NativeForm) -> Result<ActionPlugin, SteelConfigError> {
     let (name, args) = native_call(form)?;
     match (name, args) {
         ("capture-url", []) => Ok(ActionPlugin::CaptureUrl),
+        ("tag-picker", []) => Ok(ActionPlugin::TagPicker),
         (
             "steel",
             [
@@ -1065,10 +1091,11 @@ fn update_tags(tags: &str, tag: &str, add: bool) -> String {
 
 #[must_use]
 pub fn valid_config_path(path: &str) -> bool {
-    path == "xo.scm" || valid_module_path(path) || valid_plugin_path(path)
+    path == "xo.scm" || valid_module_path(path)
 }
 
-fn valid_module_path(path: &str) -> bool {
+#[must_use]
+pub fn valid_module_path(path: &str) -> bool {
     path.starts_with("modules/")
         && std::path::Path::new(path)
             .extension()
@@ -1078,7 +1105,8 @@ fn valid_module_path(path: &str) -> bool {
             .any(|part| part.is_empty() || part == "." || part == "..")
 }
 
-fn valid_plugin_path(path: &str) -> bool {
+#[must_use]
+pub fn valid_plugin_path(path: &str) -> bool {
     path.starts_with("plugins/")
         && std::path::Path::new(path)
             .extension()
@@ -1207,6 +1235,7 @@ fn encode_action(action: &ActionDescriptor, indent: usize) -> String {
 fn encode_plugin(plugin: &ActionPlugin) -> String {
     match plugin {
         ActionPlugin::CaptureUrl => "(capture-url)".into(),
+        ActionPlugin::TagPicker => "(tag-picker)".into(),
         ActionPlugin::Steel {
             path,
             entrypoint,
@@ -1452,9 +1481,30 @@ mod tests {
     }
 
     #[test]
-    fn executable_plugin_manifest_adds_only_hardcover_search() {
-        let behavior = SteelWorkspace::load(
+    fn tag_picker_plugin_manifest_adds_host_interaction() {
+        let behavior = SteelWorkspace::load_with_plugins(
             &encode_config(&WorkspaceBehavior::default(), false),
+            &BTreeMap::new(),
+            &BTreeMap::from([(
+                "plugins/manage-tags.scm".into(),
+                include_str!("../../../plugins/manage-tags.scm").into(),
+            )]),
+            "fixed",
+        )
+        .unwrap();
+        let action = behavior.action(None, "manage-tags").unwrap();
+        assert!(matches!(action.plugin, Some(ActionPlugin::TagPicker)));
+        assert_eq!(
+            behavior.capability_grants["manage-tags"],
+            BTreeSet::from([Capability::MutateNote])
+        );
+    }
+
+    #[test]
+    fn executable_plugin_manifest_adds_only_hardcover_search() {
+        let behavior = SteelWorkspace::load_with_plugins(
+            &encode_config(&WorkspaceBehavior::default(), false),
+            &BTreeMap::new(),
             &BTreeMap::from([(
                 "plugins/hardcover.scm".into(),
                 include_str!("../../../plugins/hardcover.scm").into(),

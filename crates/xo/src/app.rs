@@ -37,6 +37,7 @@ pub enum Mode {
     ViewPicker,
     ActionPicker,
     ItemActionPicker,
+    TagPicker,
     CaptureUrl,
     PluginInput,
     PluginResults,
@@ -65,7 +66,10 @@ pub struct App {
     pub pane: Pane,
     pub mode: Mode,
     pub selected: usize,
+    pub selected_notes: BTreeSet<NoteId>,
     pub tag_index: usize,
+    pub tag_picker_index: usize,
+    pub tag_picker_tags: BTreeSet<String>,
     pub action_query: String,
     pub action_index: usize,
     pub keymap: KeyMap,
@@ -111,7 +115,10 @@ impl App {
             pane: Pane::Notes,
             mode: Mode::Normal,
             selected: 0,
+            selected_notes: BTreeSet::new(),
             tag_index: 0,
+            tag_picker_index: 0,
+            tag_picker_tags: BTreeSet::new(),
             action_query: String::new(),
             action_index: 0,
             keymap: KeyMap::default(),
@@ -172,6 +179,81 @@ impl App {
     pub fn selected_note(&self) -> Option<&Note> {
         self.visible_notes().get(self.selected_index()?).copied()
     }
+
+    #[must_use]
+    pub fn selected_note_ids(&self) -> Vec<NoteId> {
+        let mut ids = self.selected_notes.clone();
+        if ids.is_empty()
+            && let Some(note) = self.selected_note()
+        {
+            ids.insert(note.id.clone());
+        }
+        ids.into_iter().collect()
+    }
+
+    pub fn toggle_selected_note(&mut self) {
+        if let Some(note) = self.selected_note().cloned() {
+            if !self.selected_notes.remove(&note.id) {
+                self.selected_notes.insert(note.id);
+            }
+            self.select_next();
+        }
+    }
+
+    pub fn clear_selected_notes(&mut self) {
+        self.selected_notes.clear();
+    }
+
+    #[must_use]
+    pub fn tag_picker_choices(&self) -> Vec<String> {
+        let mut tags = BTreeSet::new();
+        for note in &self.notes {
+            tags.extend(note_tags(note));
+        }
+        tags.extend(self.tag_picker_tags.iter().cloned());
+        tags.into_iter().collect()
+    }
+
+    pub fn toggle_tag_picker_tag(&mut self) {
+        if let Some(tag) = self
+            .tag_picker_choices()
+            .get(self.tag_picker_index)
+            .cloned()
+            && !self.tag_picker_tags.remove(&tag)
+        {
+            self.tag_picker_tags.insert(tag);
+        }
+    }
+
+    pub fn selected_tags_for_picker(&mut self) {
+        let ids = self.selected_note_ids();
+        self.tag_picker_tags = self
+            .notes
+            .iter()
+            .filter(|note| ids.contains(&note.id))
+            .flat_map(note_tags)
+            .collect();
+        self.tag_picker_index = 0;
+    }
+
+    pub fn apply_tag_picker(&mut self) -> Vec<Note> {
+        let ids = self.selected_note_ids();
+        let tags = self.tag_picker_tags.clone();
+        self.notes
+            .iter_mut()
+            .filter(|note| ids.contains(&note.id))
+            .map(|note| {
+                note.frontmatter.insert(
+                    "tags".into(),
+                    FrontmatterValue::Sequence(
+                        tags.iter().cloned().map(FrontmatterValue::String).collect(),
+                    ),
+                );
+                note.path = xo_core::projection::canonical_note_path(&note.id, &note.frontmatter);
+                note.clone()
+            })
+            .collect()
+    }
     pub fn selected_index(&self) -> Option<usize> {
         let len = self.visible_notes().len();
         (len > 0).then(|| self.selected.min(len - 1))
@@ -206,6 +288,16 @@ impl App {
         self.selected = self.selected.saturating_sub(1);
         self.decrypted_preview = None;
     }
+    #[must_use]
+    pub fn all_note_tags(&self) -> Vec<String> {
+        self.notes
+            .iter()
+            .flat_map(note_tags)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
     pub fn available_tags(&self) -> Vec<(String, usize)> {
         let mut tags = BTreeSet::new();
         for note in self.query_notes(BTreeSet::new()) {
@@ -490,12 +582,26 @@ impl App {
                     .map(|(alias, _)| (*alias).to_owned()),
             );
         }
+        for action in &self.behavior.actions {
+            if !ACTION_NAMES.contains(&action.id.as_str())
+                && (action.id.contains(&needle) || fuzzy(&action.id, &needle).is_some())
+                && (self
+                    .selected_note()
+                    .is_some_and(|note| action.predicate.matches(note))
+                    || (self.selected_note().is_none()
+                        && action.plugin.is_some()
+                        && action.predicate == xo_core::behavior::Predicate::Always))
+            {
+                actions.push(action.id.clone());
+            }
+        }
         actions.sort_by_key(|name| {
             (
                 name != &needle,
                 std::cmp::Reverse(fuzzy(name, &needle).unwrap_or_default()),
             )
         });
+        actions.dedup();
         actions
     }
 
@@ -784,6 +890,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             | Mode::ViewPicker
             | Mode::ActionPicker
             | Mode::ItemActionPicker
+            | Mode::TagPicker
             | Mode::CaptureUrl
             | Mode::PluginInput
             | Mode::PluginResults
@@ -798,6 +905,9 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         }
         Mode::ActionPicker => {
             u16::try_from((app.matching_tui_actions().len() + 3).clamp(4, 12)).unwrap_or(12)
+        }
+        Mode::TagPicker => {
+            u16::try_from((app.tag_picker_choices().len() + 3).clamp(4, 12)).unwrap_or(12)
         }
         _ => 3,
     };
@@ -967,6 +1077,33 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                     format!(">{}  → {selected}", app.action_query),
                 )
             }
+            Mode::TagPicker => {
+                let menu = app
+                    .tag_picker_choices()
+                    .iter()
+                    .enumerate()
+                    .map(|(index, tag)| {
+                        format!(
+                            "{} [{}] {tag}",
+                            if index == app.tag_picker_index {
+                                "▶"
+                            } else {
+                                " "
+                            },
+                            if app.tag_picker_tags.contains(tag) {
+                                "x"
+                            } else {
+                                " "
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (
+                    "Manage tags · Space toggle · Enter apply · Esc cancel",
+                    menu,
+                )
+            }
             Mode::CaptureUrl => (
                 "Capture URL · Enter fetch · Esc cancel",
                 format!("URL: {}", app.capture_url),
@@ -1111,16 +1248,18 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         if Some(index) == selected_index {
             selected_row = Some(note_items.len());
         }
+        let marked = app.selected_notes.contains(&note.id);
         note_items.push(
             ListItem::new(format!(
-                "{} {title}",
+                "{}{} {title}",
                 if Some(index) == selected_index {
                     "▶"
                 } else {
                     " "
-                }
+                },
+                if marked { "[x]" } else { "[ ]" },
             ))
-            .style(if Some(index) == selected_index {
+            .style(if Some(index) == selected_index || marked {
                 selected
             } else {
                 Style::default()
@@ -1311,23 +1450,36 @@ mod tests {
                 predicate: Predicate::Always,
                 subviews: vec![],
             }],
-            actions: vec![ActionDescriptor {
-                id: "done".into(),
-                description: "Mark done".into(),
-                predicate: Predicate::Always,
-                effects: vec![
-                    ActionEffect::AddTag { tag: "done".into() },
-                    ActionEffect::SetFieldNow {
-                        field: "finished".into(),
-                    },
-                ],
-                plugin: None,
-            }],
+            actions: vec![
+                ActionDescriptor {
+                    id: "done".into(),
+                    description: "Mark done".into(),
+                    predicate: Predicate::Always,
+                    effects: vec![
+                        ActionEffect::AddTag { tag: "done".into() },
+                        ActionEffect::SetFieldNow {
+                            field: "finished".into(),
+                        },
+                    ],
+                    plugin: None,
+                },
+                ActionDescriptor {
+                    id: "manage-tags".into(),
+                    description: "Manage tags".into(),
+                    predicate: Predicate::Always,
+                    effects: vec![],
+                    plugin: Some(ActionPlugin::TagPicker),
+                },
+            ],
             ..WorkspaceBehavior::default()
         };
         behavior
             .capability_grants
             .insert("done".into(), BTreeSet::from([Capability::MutateNote]));
+        behavior.capability_grants.insert(
+            "manage-tags".into(),
+            BTreeSet::from([Capability::MutateNote]),
+        );
         App::new(
             behavior,
             vec![Note {
@@ -1343,11 +1495,40 @@ mod tests {
     }
 
     #[test]
+    fn multi_selection_tag_picker_updates_every_selected_note() {
+        let mut app = fixture();
+        app.notes.push(Note {
+            id: NoteId::new("note002"),
+            frontmatter: Frontmatter::from([
+                ("title".into(), FrontmatterValue::String("Second".into())),
+                (
+                    "tags".into(),
+                    FrontmatterValue::Sequence(vec![FrontmatterValue::String("old".into())]),
+                ),
+            ]),
+            body: "Second body".into(),
+            path: "second.md".into(),
+        });
+        app.selected = 0;
+        app.toggle_selected_note();
+        app.selected = 1;
+        app.toggle_selected_note();
+        app.tag_picker_tags = BTreeSet::from(["managed".into(), "shared".into()]);
+        let changed = app.apply_tag_picker();
+        assert_eq!(changed.len(), 2);
+        for note in changed {
+            assert_eq!(note_tags(&note), vec!["managed", "shared"]);
+        }
+    }
+
+    #[test]
     fn shell_renders_navigation_preview_search_and_action_picker() {
         let mut app = fixture();
         app.search = "fir".into();
         app.action_query = "dn".into();
         assert_eq!(app.matching_actions()[0].id, "done");
+        app.action_query = "manage".into();
+        assert!(app.matching_tui_actions().contains(&"manage-tags".into()));
         let changed = app.run_action("done").unwrap();
         let finished = match changed.frontmatter.get("finished") {
             Some(FrontmatterValue::String(value)) => value,

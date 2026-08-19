@@ -3,7 +3,7 @@ mod app;
 use std::io::{self, IsTerminal as _, Write as _, stdout};
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use app::{App, Mode, external_edit_with, external_edit_with_suffix, render, required_frontmatter};
 use clap::{Parser, Subcommand};
 use crossterm::event::{
@@ -20,7 +20,10 @@ use ratatui::backend::CrosstermBackend;
 use time::OffsetDateTime;
 use xo::config::{CliOverrides, XoConfig, config_path, home_dir};
 use xo::session::{WorkspaceEvent, WorkspaceSession};
-use xo::steel_plugin::{PluginChoice, execute as execute_steel_plugin};
+use xo::steel_plugin::{
+    PluginChoice, PluginContext, PluginItem, PluginOperation,
+    execute_with_context as execute_steel_plugin_with_context,
+};
 use xo::url_capture::{UrlCaptureService, captured_note};
 use xo_core::behavior::ActionPlugin;
 use xo_core::domain::{Frontmatter, FrontmatterValue};
@@ -70,17 +73,6 @@ enum Command {
         #[arg(long = "type")]
         item_type: Option<String>,
     },
-    /// Install a bundled executable Steel plugin into the active workspace.
-    Plugin {
-        #[command(subcommand)]
-        command: PluginCommand,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum PluginCommand {
-    /// Install or update a bundled plugin.
-    Install { name: String },
 }
 
 #[tokio::main]
@@ -107,11 +99,12 @@ async fn main() -> Result<()> {
             item_type,
         }) => {
             let config = configured(&cli)?;
-            let session = WorkspaceSession::open_central(
+            let session = WorkspaceSession::open_central_with_plugins(
                 &config.state_dir,
                 &cli.server,
                 config.projection.clone(),
                 config.resolved_client_id()?,
+                local_plugins()?,
             )
             .await?;
             let result =
@@ -120,31 +113,6 @@ async fn main() -> Result<()> {
             let exported = result?;
             shutdown?;
             println!("exported={}", exported.exported);
-        }
-        Some(Command::Plugin {
-            command: PluginCommand::Install { name },
-        }) => {
-            let (path, source) = match name.as_str() {
-                "hardcover" => (
-                    "plugins/hardcover.scm",
-                    include_bytes!("../../../plugins/hardcover.scm").as_slice(),
-                ),
-                _ => anyhow::bail!("unknown bundled plugin {name:?}"),
-            };
-            let config = configured(&cli)?;
-            let mut session = WorkspaceSession::open_central(
-                &config.state_dir,
-                &cli.server,
-                config.projection.clone(),
-                config.resolved_client_id()?,
-            )
-            .await?;
-            // Establish the main workspace configuration before adding a module,
-            // so generated defaults never absorb and duplicate plugin actions.
-            session.behavior().await?;
-            session.install_config(path, source).await?;
-            session.shutdown().await?;
-            println!("installed {name} as {path}");
         }
         None => {
             let config = configured(&cli)?;
@@ -163,11 +131,12 @@ async fn main() -> Result<()> {
 
 async fn import_command(cli: &Cli, source: &std::path::Path, item_type: &str) -> Result<()> {
     let config = configured(cli)?;
-    let mut session = WorkspaceSession::open_central(
+    let mut session = WorkspaceSession::open_central_with_plugins(
         &config.state_dir,
         &cli.server,
         config.projection.clone(),
         config.resolved_client_id()?,
+        local_plugins()?,
     )
     .await?;
     let interactive = io::stderr().is_terminal();
@@ -211,6 +180,63 @@ async fn import_command(cli: &Cli, source: &std::path::Path, item_type: &str) ->
     Ok(())
 }
 
+fn plugin_context(app: &App) -> PluginContext {
+    let selected_item_ids = app
+        .selected_note_ids()
+        .into_iter()
+        .map(|id| id.to_string())
+        .collect();
+    let items = app
+        .notes
+        .iter()
+        .map(|note| {
+            (
+                note.id.to_string(),
+                PluginItem {
+                    frontmatter: note.frontmatter.clone(),
+                    body: note.body.clone(),
+                },
+            )
+        })
+        .collect();
+    let all_tags = app.all_note_tags();
+    PluginContext {
+        selected_item_ids,
+        items,
+        all_tags,
+    }
+}
+
+fn local_plugins() -> Result<std::collections::BTreeMap<String, String>> {
+    let directory = config_path(&home_dir()?)
+        .parent()
+        .context("xo config path has no parent")?
+        .join("plugins");
+    let mut plugins = std::collections::BTreeMap::new();
+    if !directory.exists() {
+        return Ok(plugins);
+    }
+    for entry in std::fs::read_dir(&directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !entry.file_type()?.is_file()
+            || path.extension().and_then(|value| value.to_str()) != Some("scm")
+        {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .context("plugin has no file name")?
+            .to_string_lossy();
+        let logical_path = format!("plugins/{name}");
+        if !xo_core::steel_runtime::valid_plugin_path(&logical_path) {
+            continue;
+        }
+        plugins.insert(logical_path, std::fs::read_to_string(path)?);
+    }
+    Ok(plugins)
+}
+
 fn configured(cli: &Cli) -> Result<XoConfig> {
     let home = home_dir()?;
     let config = XoConfig::load(&config_path(&home), &home)?.apply(
@@ -232,8 +258,14 @@ async fn run_tui(
     keys_path: &std::path::Path,
     client_id: xo_core::ClientId,
 ) -> Result<()> {
-    let mut session =
-        WorkspaceSession::open_central(state_dir, server, projection, client_id).await?;
+    let mut session = WorkspaceSession::open_central_with_plugins(
+        state_dir,
+        server,
+        projection,
+        client_id,
+        local_plugins()?,
+    )
+    .await?;
     let workspace_events = session.subscribe()?;
     let behavior = session.behavior().await?;
     let snapshot = session.snapshot().await?;
@@ -556,6 +588,14 @@ async fn event_loop(
                                 app.capture_url.clear();
                                 app.mode = Mode::CaptureUrl;
                             }
+                            Ok(Some(ActionPlugin::TagPicker)) => {
+                                if app.selected_note_ids().is_empty() {
+                                    app.message = "select at least one note first".into();
+                                    continue;
+                                }
+                                app.selected_tags_for_picker();
+                                app.mode = Mode::TagPicker;
+                            }
                             Ok(Some(ActionPlugin::Steel { prompt, .. })) => {
                                 app.plugin_input.clear();
                                 app.plugin_results.clear();
@@ -578,6 +618,25 @@ async fn event_loop(
                     } else {
                         app.mode = Mode::Normal;
                     }
+                }
+                _ => {}
+            },
+            Mode::TagPicker => match key.code {
+                KeyCode::Esc => app.mode = Mode::Normal,
+                KeyCode::Up => app.tag_picker_index = app.tag_picker_index.saturating_sub(1),
+                KeyCode::Down => {
+                    app.tag_picker_index = (app.tag_picker_index + 1)
+                        .min(app.tag_picker_choices().len().saturating_sub(1));
+                }
+                KeyCode::Char(' ') => app.toggle_tag_picker_tag(),
+                KeyCode::Enter => {
+                    let notes = app.apply_tag_picker();
+                    for note in notes {
+                        session.save(&note).await?;
+                    }
+                    app.clear_selected_notes();
+                    app.mode = Mode::Normal;
+                    app.message = "updated tags".into();
                 }
                 _ => {}
             },
@@ -664,19 +723,28 @@ async fn event_loop(
                     let result = match source {
                         Ok(source) => {
                             suspend_tui(terminal)?;
-                            let result =
-                                execute_steel_plugin(source, entrypoint, input, capabilities).await;
+                            let context = plugin_context(app);
+                            let result = execute_steel_plugin_with_context(
+                                source,
+                                entrypoint,
+                                input,
+                                capabilities,
+                                context,
+                            )
+                            .await;
                             resume_tui(terminal)?;
                             result
                         }
                         Err(error) => Err(error),
                     };
                     match result {
-                        Ok(result) if result.choices.is_empty() => {
-                            app.message = "Notice: Hardcover returned no matching books".into();
-                            clear_plugin_state(app);
-                        }
                         Ok(result) => {
+                            apply_plugin_operations(app, session, &result.operations).await?;
+                            if result.choices.is_empty() {
+                                app.message = "plugin completed".into();
+                                clear_plugin_state(app);
+                                continue;
+                            }
                             app.plugin_results = result.choices;
                             app.plugin_index = 0;
                             app.mode = Mode::PluginResults;
@@ -766,6 +834,7 @@ async fn dispatch_action(
         "focus_subview_previous" => {
             app.cycle_subview(false);
         }
+        "toggle_selection" => app.toggle_selected_note(),
         "toggle_tag" if app.pane == app::Pane::Tags => app.toggle_highlighted_tag(),
         "toggle_tag" => {}
         "open_search" => app.mode = Mode::Search,
@@ -864,7 +933,36 @@ async fn dispatch_action(
             resume_tui(terminal)?;
             result?;
         }
-        _ => app.message = format!("action {} is unavailable here", action.name),
+        _ => {
+            let plugin = app
+                .behavior
+                .action(app.selected_note(), &action.name)
+                .map(|descriptor| descriptor.plugin.clone());
+            match plugin {
+                Ok(Some(ActionPlugin::TagPicker)) => {
+                    app.selected_tags_for_picker();
+                    app.mode = Mode::TagPicker;
+                }
+                Ok(Some(ActionPlugin::Steel { prompt, .. })) => {
+                    app.plugin_input.clear();
+                    app.plugin_results.clear();
+                    app.plugin_index = 0;
+                    app.plugin_action = Some(action.name.clone());
+                    app.plugin_prompt = prompt;
+                    app.mode = Mode::PluginInput;
+                }
+                Ok(None) => {
+                    let note = app.run_action(&action.name)?;
+                    session.save(&note).await?;
+                    app.message = format!("applied {}", action.name);
+                }
+                Ok(Some(ActionPlugin::CaptureUrl)) => {
+                    app.capture_url.clear();
+                    app.mode = Mode::CaptureUrl;
+                }
+                Err(error) => app.message = error.to_string(),
+            }
+        }
     }
     Ok(false)
 }
@@ -876,6 +974,47 @@ fn clear_plugin_state(app: &mut App) {
     app.plugin_results.clear();
     app.plugin_index = 0;
     app.mode = Mode::Normal;
+}
+
+async fn apply_plugin_operations(
+    app: &mut App,
+    session: &mut WorkspaceSession,
+    operations: &[PluginOperation],
+) -> Result<()> {
+    for operation in operations {
+        match operation {
+            PluginOperation::UpdateItem {
+                id,
+                frontmatter,
+                body,
+            } => {
+                let note_id = NoteId::new(id.clone());
+                let Some(note) = app.notes.iter_mut().find(|note| note.id == note_id) else {
+                    bail!("plugin update targets unavailable item {id}");
+                };
+                note.frontmatter = frontmatter.clone();
+                note.body.clone_from(body);
+                note.path = xo_core::projection::canonical_note_path(&note.id, &note.frontmatter);
+                let note = note.clone();
+                session.save(&note).await?;
+            }
+            PluginOperation::CreateItem { frontmatter, body } => {
+                let now = xo_core::timestamp::now_local()?;
+                let id = NoteId::new(xo_core::id::generate(now));
+                let created = xo_core::timestamp::format(now)?;
+                let frontmatter = required_frontmatter(frontmatter.clone(), id.as_str(), &created);
+                let note = Note {
+                    path: xo_core::projection::canonical_note_path(&id, &frontmatter),
+                    id,
+                    frontmatter,
+                    body: body.clone(),
+                };
+                session.save(&note).await?;
+                app.add_note(note);
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn add_plugin_result(

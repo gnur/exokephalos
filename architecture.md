@@ -66,8 +66,10 @@ single-process owned.
 
 ## Security boundaries
 
-Steel executes in a fresh bounded VM. Plugins receive only explicitly granted
-host capabilities and secrets. `xo-syncd` trusts requests that reach it, so the
+Steel executes in a fresh bounded VM. Forge plugins are local native-client
+configuration rather than replicated workspace state. Plugins receive only
+explicitly granted host capabilities and secrets; interactive UI and persistence
+remain xo host primitives. `xo-syncd` trusts requests that reach it, so the
 reverse proxy is the browser authentication boundary. URL capture does not trust
 DNS names or redirects to remain public. Passphrase-encrypted note ciphertext is
 authenticated to the note identity and may synchronize without exposing its

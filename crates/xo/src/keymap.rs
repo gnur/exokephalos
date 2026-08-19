@@ -31,6 +31,7 @@ pub const ACTION_NAMES: &[&str] = &[
     "restore_item",
     "retry_operation",
     "reverse_sort",
+    "toggle_selection",
     "toggle_tag",
     "toggle_tags_column",
     "unlock_preview",
@@ -175,7 +176,7 @@ pub const DEFAULT_KEYS: &str = r#"; Hot-reloaded xo TUI bindings.
   (bind "right" focus_column_right)
   (bind "tab" focus_subview_next)
   (bind "backtab" focus_subview_previous)
-  (bind "space" toggle_tag)
+  (bind "space" toggle_selection)
   (bind "esc" clear_search)
   (bind "enter" edit_item)
   (bind "e" edit_item)

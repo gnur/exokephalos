@@ -417,6 +417,7 @@ for example, `:q` runs `quit`, while `:p` opens the connected-client view.
 | `restore_item` | `u` | — | Restore the most recently deleted note. |
 | `retry_operation` | — | — | Retry the first failed synchronization operation. |
 | `reverse_sort` | — | — | Reverse the current note sort order. |
+| `toggle_selection` | — | — | Add or remove the highlighted note from the native multi-selection. |
 | `toggle_tag` | — | — | Toggle the highlighted tag filter. |
 | `toggle_tags_column` | — | — | Show or hide the tag column. |
 | `unlock_preview` | — | — | Unlock the selected encrypted note preview. |
@@ -581,7 +582,7 @@ host-supplied RFC 3339 execution timestamp in local wall time with an explicit
 numeric UTC offset, without exposing an ambient clock.
 Mutating actions require an explicit `mutate-note` capability grant. Optional lexical modules below
 `modules/**/*.scm` use the same fields inside `(workspace-module ...)`.
-Executable sandboxed plugins live below `plugins/**/*.scm`; their
+Executable Forge plugins are local `~/.config/xo/plugins/*.scm` files; their
 `xo-plugin-manifest` function contributes actions and their action entrypoint
 runs in a fresh, time-bounded `Engine::new_sandboxed()` VM.
 
@@ -592,29 +593,49 @@ extracts the readable article, converts it to Markdown, and commits an ordinary
 replicated note. Both `create-note` and `network` grants are required. Steel
 itself receives no ambient network API.
 
-### Hardcover Steel plugin
+### Steel Forge plugins
 
-Install the bundled plugin into the active replicated workspace and provide its
-API token to the `xo` process:
+Executable plugins are local `xo` configuration, not replicated workspace
+state. Steel Forge installs them below:
 
-```console
-xo plugin install hardcover
-export HARDCOVER_TOKEN='your Hardcover API token'
-xo
+```text
+~/.config/xo/plugins/*.scm
 ```
 
-Run `open_item_actions` from the `:` action picker and select **Search Hardcover**. The plugin prompts for a title or
-author, performs the GraphQL request, presents up to five choices, and creates
-an ordinary `type: book` note tagged `to-read`. The plugin exposes only this
-search action; reading-state actions belong to workspace configuration.
+`xo` discovers those files when it starts. There is no `xo plugin` subcommand;
+plugins are never copied into `xo-syncd` or synchronized to other clients. The
+plugin directory must be installed separately on each client that should expose
+the action.
 
-`plugins/hardcover.scm` contains the GraphQL request, JSON traversal, metadata
-normalization, result labels, and note fields. Rust provides only generic,
-capability-checked `xo-secret` and `xo-http-post-json` host functions. Plugin
-HTTP is HTTPS-only, proxy-free, DNS-pinned to validated public addresses,
-redirect-free, time-bounded, header-restricted, and limited to 2 MiB. The
-plugin requires `create-note`, `network`, and `read-secret`; Steel receives no
-filesystem, process, socket, or dylib access.
+Plugins use capability-checked host primitives:
+
+```text
+(xo-selected-item-ids)       ; JSON array of selected note IDs
+(xo-note-content id)          ; JSON frontmatter/body object
+(xo-all-tags)                 ; JSON array of workspace tags
+(xo-http-get url headers)     ; bounded public HTTPS GET
+(xo-http-post-json url headers body)
+(xo-update-items operations)  ; queue immutable note revisions
+(xo-create-item operation)    ; queue a new note
+```
+
+The existing prompt and choice protocol is also reusable: the host supplies the
+input prompt and presents the plugin's returned `choices`; selected choices
+become ordinary notes. The host owns persistence and the TUI; Steel cannot access
+the filesystem, process, socket, or terminal directly. Rust/dylib extensions are
+an explicit future Forge integration and must use the same host primitive boundary.
+
+The bundled `plugins/manage-tags.scm` demonstrates the interactive tag-manager
+primitive. Install it with Steel Forge, select notes in the TUI using
+`toggle_selection` (or bind another key), then run `:manage-tags`. `xo` opens a
+native tag popup and applies the chosen tags to all selected notes.
+
+The Hardcover plugin follows the same model: Steel performs its GraphQL request
+and normalization, while `xo` provides the input prompt, choice picker, and note
+creation host primitives. Its required capabilities are `create-note`, `network`,
+and `read-secret`; HTTP remains HTTPS-only, proxy-free, DNS-pinned to validated
+public addresses, redirect-free, time-bounded, header-restricted, and limited
+to 2 MiB.
 
 `example-config.scm` is a complete multi-view example with nested predicates,
 subviews, sorting, explicit mutation grants, and reading actions that set
@@ -622,9 +643,10 @@ subviews, sorting, explicit mutation grants, and reading actions that set
 
 The declarative workspace/module form remains restricted. Configuration is parsed through a
 strict boundary: arbitrary filesystem, environment, process, network, clock,
-or evaluation expressions are rejected. Auxiliary modules and plugins remain
-materialized below `modules/**/*.scm` and `plugins/**/*.scm`; the main workspace
-configuration is kept in replicated state and edited with the `edit_workspace_config` action.
+or evaluation expressions are rejected. Workspace modules remain replicated
+below `modules/**/*.scm`; Forge plugins are local below
+`~/.config/xo/plugins/`. The main workspace configuration is kept in replicated
+state and edited with the `edit_workspace_config` action.
 
 ## Operations and recovery
 

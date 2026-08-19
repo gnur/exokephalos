@@ -188,6 +188,7 @@ pub struct ActionDescriptor {
 #[serde(rename_all = "kebab-case")]
 pub enum ActionPlugin {
     CaptureUrl,
+    TagPicker,
     Steel {
         path: String,
         entrypoint: String,
@@ -201,6 +202,7 @@ impl ActionPlugin {
     pub fn required_capabilities(&self) -> BTreeSet<Capability> {
         match self {
             Self::CaptureUrl => BTreeSet::from([Capability::CreateNote, Capability::Network]),
+            Self::TagPicker => BTreeSet::from([Capability::MutateNote]),
             Self::Steel { capabilities, .. } => capabilities.clone(),
         }
     }

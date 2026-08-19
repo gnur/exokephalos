@@ -107,10 +107,10 @@ fn is_projection_path(root: &Path, path: &Path) -> bool {
     let relative_string = relative.to_string_lossy().replace('\\', "/");
     let content_path = path.extension().is_some_and(|extension| extension == "md")
         || relative_string == "xo.scm"
-        || ((relative_string.starts_with("modules/") || relative_string.starts_with("plugins/"))
+        || relative_string.starts_with("modules/")
             && Path::new(&relative_string)
                 .extension()
-                .is_some_and(|value| value == "scm"));
+                .is_some_and(|value| value == "scm");
     content_path
         && relative
             .components()
@@ -163,7 +163,7 @@ mod tests {
     }
 
     #[test]
-    fn watcher_includes_only_supported_steel_configuration_paths() {
+    fn watcher_includes_only_supported_workspace_configuration_paths() {
         let directory = tempfile::tempdir().unwrap();
         let main = directory.path().join("xo.scm");
         let unsupported_main = directory.path().join("unsupported.scm");
@@ -183,7 +183,7 @@ mod tests {
                 main.clone(),
                 unsupported_main,
                 module.clone(),
-                plugin.clone(),
+                plugin,
                 unrelated,
             ],
         );
@@ -191,8 +191,7 @@ mod tests {
             events,
             vec![
                 ProjectionEvent::Upsert(module),
-                ProjectionEvent::Upsert(plugin),
-                ProjectionEvent::Upsert(main),
+                ProjectionEvent::Upsert(main)
             ]
         );
     }

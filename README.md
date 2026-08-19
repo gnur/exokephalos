@@ -154,11 +154,12 @@ dedicated worker. It provides URL-backed navigation, views and subviews,
 search/tag filtering, rendered Markdown, editing, conflict history, and an
 offline application shell.
 
-Its transport is currently the largest unfinished migration area: the checked-in
-browser runtime still contains transitional Iroh invitation, relay, membership,
-and signed-change code. It is being replaced by an IndexedDB-backed Automerge
-replica that connects automatically to same-origin `/api/sync`. Do not treat the
-legacy invitation workflow as part of the centralized architecture.
+The worker owns a Wasm Automerge replica, restores it from IndexedDB before
+networking, and connects automatically to same-origin `/api/sync` after the user
+chooses a presence client ID. Local writes persist the complete replica before
+the UI reports success and synchronize after reconnect. Browser invitations,
+membership identities, relay, Gossip, Pkarr, and signed-change state have been
+removed.
 
 Production PWA assets are embedded in `xo-syncd`; there is no separate static
 production deployment. Open the authenticated origin serving the daemon. Static
@@ -246,6 +247,13 @@ itself intentionally trusts every request that reaches it.
 - `PATCH /api/items/{id}` updates supplied fields through a new revision.
 - `DELETE /api/items/{id}` creates a deleted revision.
 - Other GET routes serve the embedded PWA with SPA fallback.
+
+The item API currently has no ETag or conditional-write contract. API mutations
+are serialized inside `xo-syncd`, while races with synchronized clients are
+resolved by the Automerge revision graph: concurrent heads are retained and HLC
+ordering selects the visible winner. Callers that require compare-and-swap must
+first coordinate outside the API; a future protocol version may add explicit
+preconditions.
 
 ### systemd
 
@@ -533,11 +541,9 @@ commands and is scheduled for removal or centralized redesign.
 
 ## Current limitations
 
-- The browser worker still uses transitional Iroh code and does not yet implement
-  the target IndexedDB Automerge `/api/sync` client.
 - `xo-syncd` has no authentication or TLS termination; use an authenticating HTTPS
   reverse proxy for browser deployments.
-- Remaining Iroh, membership, invitation, and signed-change modules in `xo-core`,
-  `xo-web`, and `xo-admin` are migration leftovers.
-- Browser/server convergence, browser offline reconnect, and browser conflict tests
-  remain incomplete.
+- Remaining Iroh, membership, invitation, and signed-change modules in `xo-core`
+  and `xo-admin` are migration leftovers.
+- Deterministic browser conflict retention and direct TUI/browser convergence tests
+  remain to be added.

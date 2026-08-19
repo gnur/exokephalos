@@ -151,15 +151,13 @@ h2 { margin: 0; color: var(--bright); font-size: clamp(1.4rem, 2.3vw, 2rem); let
   display: grid; grid-template-columns: minmax(260px, .75fr) minmax(340px, 1.25fr);
   align-items: center; gap: clamp(30px, 7vw, 90px); padding: 58px 0; border-bottom: 1px solid var(--line);
 }
-.join-section p:last-child, .ticket-panel p { color: var(--muted); font-size: .82rem; line-height: 1.6; }
-.ticket-form { display: grid; gap: 10px; }
-.ticket-form textarea { min-height: 125px; font: .68rem/1.5 'DM Mono', monospace; overflow-wrap: anywhere; }
-.ticket-form .primary { justify-self: end; }
+.client-form { display: grid; gap: 10px; }
+.client-form textarea { min-height: 125px; font: .68rem/1.5 'DM Mono', monospace; overflow-wrap: anywhere; }
+.client-form .primary { justify-self: end; }
 
 .workspace-heading { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding-bottom: 42px; border-bottom: 1px solid var(--line); }
 .workspace-heading h1 { font-size: clamp(2.6rem, 5vw, 4.8rem); }
 .workspace-id { margin: 16px 0 0; color: #70869b; font: .68rem 'DM Mono', monospace; overflow-wrap: anywhere; }
-.workspace-heading .secondary svg, .ticket-actions svg { width: 16px; }
 .warning { min-width: 0; display: flex; align-items: center; gap: 10px; margin-top: 22px; border: 1px solid rgba(245, 190, 104, .26); border-radius: 9px; padding: 12px 14px; color: #eac688; background: rgba(245, 190, 104, .06); font-size: .76rem; overflow-wrap: anywhere; }
 .warning svg { width: 17px; flex: none; }
 .sync-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 28px 0; }
@@ -188,11 +186,6 @@ h2 { margin: 0; color: var(--bright); font-size: clamp(1.4rem, 2.3vw, 2rem); let
 .write-panel label { display: grid; gap: 6px; color: #8297aa; font-size: .7rem; }
 .write-panel textarea { min-height: 160px; }
 .write-panel .primary { width: 100%; }
-.ticket-panel { display: grid; grid-template-columns: 1fr auto; gap: 20px; align-items: center; padding: 38px 0 10px; }
-.ticket-panel .eyebrow { margin-bottom: 5px; }
-.ticket-panel p { margin: 8px 0 0; }
-.ticket-actions { display: flex; gap: 8px; }
-.ticket-output { grid-column: 1 / -1; min-height: 120px; font: .65rem/1.5 'DM Mono', monospace; }
 .notes-toolbar { display: flex; justify-content: space-between; align-items: end; gap: 24px; padding-bottom: 26px; }
 .notes-toolbar h1 { font-size: clamp(2.4rem, 5vw, 4.5rem); }
 .toolbar-actions, .preview-actions { display: flex; gap: 8px; }
@@ -271,7 +264,7 @@ h2 { margin: 0; color: var(--bright); font-size: clamp(1.4rem, 2.3vw, 2rem); let
   .hero { min-height: 0; padding-bottom: 44px; gap: 34px; }
   h1 { font-size: clamp(2.5rem, 14vw, 4rem); }
   .join-section { grid-template-columns: 1fr; padding: 42px 0; }
-  .ticket-form .primary { width: 100%; }
+  .client-form .primary { width: 100%; }
   .workspace-heading, .notes-toolbar { align-items: flex-start; flex-direction: column; }
   .toolbar-actions { width: 100%; }
   .toolbar-actions button { flex: 1; }
@@ -287,10 +280,6 @@ h2 { margin: 0; color: var(--bright); font-size: clamp(1.4rem, 2.3vw, 2rem); let
   .note-editor > footer > div button { flex: 1; }
   .entry-row { align-items: flex-start; flex-direction: column; }
   .entry-meta { width: 100%; grid-auto-flow: column; justify-content: space-between; }
-  .ticket-panel { grid-template-columns: 1fr; }
-  .ticket-actions { justify-content: stretch; }
-  .ticket-actions button { flex: 1; }
-  .ticket-output { grid-column: auto; }
   .status-section { padding: 44px 0; }
   .status-grid { grid-template-columns: 1fr; }
   .static-badge { display: none; }

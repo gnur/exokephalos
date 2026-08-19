@@ -4,7 +4,7 @@ export interface RuntimeInfo {
   api_version: number;
   version: string;
   steel: boolean;
-  iroh: boolean;
+  central_sync: boolean;
   persistence: string;
 }
 
@@ -91,67 +91,35 @@ export interface NoteMutationInput {
 }
 
 export interface SyncStatus {
-  endpointId: string;
   workspaceId?: string;
   authorId: string;
-  peers: number;
+  connection: 'offline' | 'connecting' | 'connected';
+  clients: string[];
   writable: boolean;
-  restoring?: boolean;
-  pendingApproval?: boolean;
-}
-
-export interface WorkspaceOutcome {
-  workspaceId: string;
-  ticket: string;
-  syncError?: string;
-}
-
-export interface WorkspaceMember {
-  peerId: string;
-  fingerprint: string;
-  publicKey: string;
-  status: string;
-  endpoints: string[];
-}
-
-export interface PendingMember {
-  peerId: string;
-  publicKey: string;
-  endpointId: string;
-  fingerprint: string;
 }
 
 export interface RuntimeReport {
   runtime: RuntimeInfo;
-  peerId?: string;
+  clientId?: string;
   indexedDb: boolean;
   steelResult: string;
   restoredAt?: string;
   status: SyncStatus;
   entries: DocumentEntry[];
-  ticket?: string;
   syncError?: string;
   pendingWrites: number;
   workspace?: WorkspaceSnapshot;
   mutatedNoteId?: string;
-  members: WorkspaceMember[];
-  pendingMembers: PendingMember[];
 }
 
 export type WorkerMethod =
   | 'initialize'
   | 'steel-probe'
-  | 'set-peer-id'
-  | 'create-workspace'
-  | 'join-workspace'
+  | 'set-client-id'
   | 'put-entry'
   | 'query-notes'
   | 'mutate-note'
   | 'refresh-sync'
-  | 'share-ticket'
-  | 'approve-peer'
-  | 'reject-peer'
-  | 'remove-peer'
   | 'wipe-local-data';
 
 export interface PutEntryInput {

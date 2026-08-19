@@ -43,10 +43,11 @@ service worker, version metadata, and installer. Hashed assets are immutable;
 the application shell and update metadata are revalidated. Extensionless client
 routes use the SPA fallback without shadowing `/api/*` or `/healthz`.
 
-The browser is still being migrated from its transitional Iroh worker to a
-Wasm-owned IndexedDB Automerge replica using `/api/sync`. Until that phase is
-complete, browser invitation, membership, relay, and signed-change code remains
-legacy code rather than part of the target architecture.
+The browser worker owns a Wasm Automerge replica, restores its complete snapshot
+from IndexedDB before networking, and reconnects to same-origin `/api/sync` with
+bounded backoff. Browser writes persist the snapshot before returning success.
+Invitation, membership, relay, Gossip, Pkarr, and signed-change state are absent
+from the browser runtime and onboarding.
 
 ## Components
 
@@ -56,8 +57,8 @@ legacy code rather than part of the target architecture.
   projection, import/export, capture, and plugins.
 - `xo-syncd`: authoritative workspace, WebSocket synchronization, item API,
   health probe, and embedded PWA host.
-- `xo-web`: transitional Rust/Wasm browser runtime and React PWA; its transport
-  migration remains in progress.
+- `xo-web`: Rust/Wasm IndexedDB Automerge replica, centralized WebSocket worker,
+  and React offline-first PWA.
 - `xo-admin`: legacy offline import/backup tooling pending centralized cleanup.
 - `xo-lsp`: stdio editor diagnostics and completion over a native projection.
 
@@ -79,5 +80,6 @@ Commit CI runs formatting, Clippy, deterministic workspace/server tests, Wasm an
 browser builds, browser offline UI tests, release-binary matrices, and the
 `xo-syncd` container. Published binaries embed the exact PWA artifact produced by
 the browser job. Release tags additionally run explicitly identified extensive
-workspace tests. The remaining browser-central convergence and offline-reconnect
-tests are tracked in `iroh-removal-plan.md`.
+workspace tests. Browser-central convergence, offline reload, and reconnect tests run against a
+real `xo-syncd`; remaining conflict and cross-client scenarios are tracked in
+`iroh-removal-plan.md`.

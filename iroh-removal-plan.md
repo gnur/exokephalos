@@ -59,7 +59,7 @@ may transfer the complete Automerge history through normal Automerge sync messag
   mismatched frontmatter ID and preserve omitted values.
 - [x] Add `DELETE /api/items/{id}` using an immutable deleted revision.
 - [x] Use consistent JSON errors, body limits, content types, and status codes.
-- [ ] Add conditional request/concurrency documentation; Automerge remains the source
+- [x] Add conditional request/concurrency documentation; Automerge remains the source
   of truth when API and synchronized clients race.
 
 ## Phase 1: protocol and server foundation
@@ -92,17 +92,18 @@ may transfer the complete Automerge history through normal Automerge sync messag
 
 ## Phase 3: browser client
 
-- [ ] Remove the browser Iroh endpoint, relay, Gossip, Pkarr, invitation, membership,
+- [x] Remove the browser Iroh endpoint, relay, Gossip, Pkarr, invitation, membership,
   and signed-change code from Rust/Wasm.
-- [ ] Add a small Wasm-owned Automerge replica API that generates/applies sync messages.
-- [ ] Open a same-origin WebSocket from the dedicated worker.
-- [ ] Restore IndexedDB replica and cached notes before opening the socket.
-- [ ] Keep offline create/edit/delete and pending-sync indicators.
-- [ ] Replace create/join invitation onboarding with automatic connection to the
+- [x] Add a small Wasm-owned Automerge replica API that generates/applies sync messages.
+- [x] Open a same-origin WebSocket from the dedicated worker.
+- [x] Restore the IndexedDB replica and cached notes before opening the socket.
+- [x] Keep offline create/edit/delete and pending-sync indicators.
+- [x] Replace create/join invitation onboarding with automatic connection to the
   server workspace after choosing a client ID.
-- [ ] Remove membership controls and invitation storage from IndexedDB and the UI.
-- [ ] Preserve service-worker caching, immediate cached rendering, and update flow.
-- [ ] Test offline reload, offline writes, reconnect convergence, and conflict retention.
+- [x] Remove membership controls and invitation storage from IndexedDB and the UI.
+- [x] Preserve service-worker caching, immediate cached rendering, and update flow.
+- [x] Add a deterministic browser conflict-retention test.
+- [x] Test offline reload, offline writes, and reconnect convergence.
 
 ## Phase 4: embedded PWA and item API
 
@@ -139,18 +140,19 @@ may transfer the complete Automerge history through normal Automerge sync messag
 
 ## Testing gates
 
-- [ ] Unit-test protocol versioning, malformed controls, and frame size bounds.
+- [x] Unit-test protocol versioning, malformed controls, and frame size bounds.
 - [x] Deterministic local WebSocket test: server plus two native replicas converge.
 - [ ] Three-client conflict test: two offline edits converge through a restarted server.
 - [x] Server restart test proves acknowledged data survives.
-- [ ] Browser test proves cached notes render before WebSocket connection.
-- [ ] Browser test proves an offline mutation synchronizes after reconnect.
-- [ ] TUI and browser converge through the same `/api/sync` endpoint.
+- [x] Browser test proves cached notes render before WebSocket connection.
+- [x] Browser test proves an offline mutation synchronizes after reconnect.
+- [x] TUI and browser converge through the same `/api/sync` endpoint.
 - [x] API GET/PATCH/DELETE changes appear in connected clients.
 - [x] API changes appear in later-reconnected clients.
-- [ ] URL import tests cover private IPs, redirects, body limits, invalid content types,
-  and successful readable Markdown extraction.
-- [ ] Static asset tests cover service-worker offline reload in a browser.
+- [ ] URL import tests cover redirect and streamed body-limit behavior in integration.
+- [x] URL import tests cover private IPs, invalid content types, and successful readable
+  Markdown extraction.
+- [x] Static asset tests cover service-worker offline reload in a browser.
 - [x] Static route tests cover SPA fallback and cache/content-type headers.
 - [x] `/healthz` returns status 200, `text/plain`, and exactly `ok\n` while ready.
 - [ ] Workspace tests and Clippy pass without ignored central-sync tests.

@@ -38,20 +38,12 @@ export class XoRuntime {
     return this.#call<RuntimeReport>('initialize');
   }
 
-  setPeerId(peerId: string) {
-    return this.#call<RuntimeReport>('set-peer-id', peerId);
+  setClientId(clientId: string) {
+    return this.#call<RuntimeReport>('set-client-id', clientId);
   }
 
   runSteel(source: string) {
     return this.#call<string>('steel-probe', source);
-  }
-
-  createWorkspace() {
-    return this.#call<RuntimeReport>('create-workspace');
-  }
-
-  joinWorkspace(ticket: string) {
-    return this.#call<RuntimeReport>('join-workspace', ticket);
   }
 
   putEntry(input: PutEntryInput) {
@@ -68,22 +60,6 @@ export class XoRuntime {
 
   refreshSync() {
     return this.#call<RuntimeReport>('refresh-sync');
-  }
-
-  shareTicket() {
-    return this.#call<string>('share-ticket');
-  }
-
-  approvePeer(fingerprint: string) {
-    return this.#call<RuntimeReport>('approve-peer', fingerprint);
-  }
-
-  rejectPeer(fingerprint: string) {
-    return this.#call<RuntimeReport>('reject-peer', fingerprint);
-  }
-
-  removePeer(fingerprint: string) {
-    return this.#call<RuntimeReport>('remove-peer', fingerprint);
   }
 
   wipeLocalData() {

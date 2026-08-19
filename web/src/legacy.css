@@ -179,8 +179,6 @@
 .status-card div { min-width: 0; display: grid; gap: 3px; }
 .status-card small { color: #64748b; font-size: .65rem; text-transform: uppercase; }
 .status-card strong { color: #e2e8f0; font-size: .78rem; overflow-wrap: anywhere; }
-.ticket-panel p { margin: 0; color: #94a3b8; }
-.ticket-output { min-height: 130px; font: 16px/1.45 ui-monospace, monospace; overflow-wrap: anywhere; }
 
 .deleted-panel, .history-panel, .raw-panel { margin-top: 16px; border: 1px solid #263244; border-radius: 8px; background: #111827; }
 .deleted-panel summary, .history-panel summary, .raw-panel summary { cursor: pointer; padding: 13px; color: #cbd5e1; }

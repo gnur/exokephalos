@@ -1,8 +1,7 @@
 /// <reference lib="webworker" />
 
 import init, {
-  IrohDocNode,
-  invitation_workspace_id,
+  BrowserReplica,
   prepare_note_mutation,
   query_workspace,
   run_steel,
@@ -16,40 +15,33 @@ import type {
   PutEntryInput,
   RuntimeInfo,
   RuntimeReport,
-  SyncStatus,
   WorkerRequest,
   WorkerResponse,
-  WorkspaceOutcome,
   WorkspaceSnapshot,
 } from './protocol';
 
 const scope = self as DedicatedWorkerGlobalScope;
 const DATABASE = 'xo-web';
-const DATABASE_VERSION = 3;
+const DATABASE_VERSION = 4;
 const CHECKPOINT_STORE = 'runtime-checkpoints';
-const VAULT_STORE = 'vault';
-const ENTRY_STORE = 'document-entries';
-const PENDING_STORE = 'pending-writes';
+const SETTINGS_STORE = 'central-settings';
 const REPLICA_STORE = 'automerge-replicas';
-const VAULT_KEY_ID = 'browser-key';
-const VAULT_STATE_ID = 'identity';
+const ACTIVE = 'active';
+const PROTOCOL_VERSION = 1;
+const MAX_SYNC_BYTES = 8 * 1024 * 1024;
 
-interface BrowserIdentity {
-  peerId?: string;
-  endpointSecret: string;
-  authorSecret: string;
-  ticket?: string;
+interface Settings {
+  id: string;
+  clientId?: string;
+  actorId: string;
   workspaceId?: string;
-  authorId?: string;
+  dirty: boolean;
 }
 
-interface PendingWrite {
+interface ReplicaRecord {
   id: string;
-  key: string;
-  valueBase64?: string;
-  value?: string;
-  author?: string;
-  createdAt: string;
+  workspaceId: string;
+  snapshot: ArrayBuffer;
 }
 
 interface PreparedMutation {
@@ -57,18 +49,28 @@ interface PreparedMutation {
   writes: Array<{ key: string; valueBase64: string }>;
 }
 
-interface VaultStateRecord {
-  id: string;
-  iv: ArrayBuffer;
-  ciphertext: ArrayBuffer;
+interface ServerHello {
+  type: 'server_hello';
+  protocol_version: number;
+  workspace_id: string;
+  clients: string[];
+}
+
+interface Presence {
+  type: 'presence';
+  clients: string[];
 }
 
 let wasmReady: Promise<void> | undefined;
 let database: IDBDatabase | undefined;
-let node: IrohDocNode | undefined;
-let nodeReady = false;
-let nodeInitialization: Promise<void> | undefined;
-let identity: BrowserIdentity | undefined;
+let settings: Settings | undefined;
+let replica: BrowserReplica | undefined;
+let socket: WebSocket | undefined;
+let connection: 'offline' | 'connecting' | 'connected' = 'offline';
+let connectedClients: string[] = [];
+let reconnectTimer: number | undefined;
+let reconnectAttempt = 0;
+let socketQueue = Promise.resolve();
 let restoredAt: string | undefined;
 let lastSyncError: string | undefined;
 let workspaceCache: { fingerprint: string; json: string; value: WorkspaceSnapshot } | undefined;
@@ -82,10 +84,18 @@ function openDatabase() {
   return new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(DATABASE, DATABASE_VERSION);
     request.onerror = () => reject(request.error ?? new Error('IndexedDB open failed'));
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const db = request.result;
-      for (const store of [CHECKPOINT_STORE, VAULT_STORE, ENTRY_STORE, PENDING_STORE, REPLICA_STORE]) {
+      for (const obsolete of ['vault', 'document-entries', 'pending-writes']) {
+        if (db.objectStoreNames.contains(obsolete)) db.deleteObjectStore(obsolete);
+      }
+      for (const store of [CHECKPOINT_STORE, SETTINGS_STORE, REPLICA_STORE]) {
         if (!db.objectStoreNames.contains(store)) db.createObjectStore(store, { keyPath: 'id' });
+      }
+      // Version 3 stored an Iroh-specific replica envelope. The centralized
+      // transport is intentionally a fresh workspace migration.
+      if ((event as IDBVersionChangeEvent).oldVersion < 4 && db.objectStoreNames.contains(REPLICA_STORE)) {
+        request.transaction?.objectStore(REPLICA_STORE).clear();
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -118,25 +128,19 @@ async function putRecord(storeName: string, value: unknown) {
   await transactionComplete(tx);
 }
 
-async function deleteRecord(storeName: string, key: IDBValidKey) {
-  const tx = requireDatabase().transaction(storeName, 'readwrite');
-  tx.objectStore(storeName).delete(key);
-  await transactionComplete(tx);
-}
-
-async function allRecords<T>(storeName: string) {
-  const tx = requireDatabase().transaction(storeName, 'readonly');
-  return requestValue(tx.objectStore(storeName).getAll()) as Promise<T[]>;
-}
-
 function requireDatabase() {
   if (!database) throw new Error('IndexedDB is not initialized');
   return database;
 }
 
-function requireNode() {
-  if (!node) throw new Error('Iroh is not initialized');
-  return node;
+function requireSettings() {
+  if (!settings) throw new Error('Browser settings are unavailable');
+  return settings;
+}
+
+function requireReplica() {
+  if (!replica) throw new Error('Connect to xo-syncd once before editing offline');
+  return replica;
 }
 
 async function initializePersistence() {
@@ -144,372 +148,246 @@ async function initializePersistence() {
   const checkpoint = await getRecord<{ id: string; updatedAt?: string }>(CHECKPOINT_STORE, 'runtime');
   restoredAt = checkpoint?.updatedAt;
   await putRecord(CHECKPOINT_STORE, { id: 'runtime', schema: DATABASE_VERSION, updatedAt: new Date().toISOString() });
-  identity = await loadIdentity();
-}
-
-async function vaultKey() {
-  const saved = await getRecord<{ id: string; key: CryptoKey }>(VAULT_STORE, VAULT_KEY_ID);
-  if (saved?.key) return saved.key;
-  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-  await putRecord(VAULT_STORE, { id: VAULT_KEY_ID, key });
-  return key;
-}
-
-async function loadIdentity(): Promise<BrowserIdentity> {
-  const key = await vaultKey();
-  const saved = await getRecord<VaultStateRecord>(VAULT_STORE, VAULT_STATE_ID);
-  if (saved) {
-    const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: saved.iv }, key, saved.ciphertext);
-    return JSON.parse(new TextDecoder().decode(plaintext)) as BrowserIdentity;
-  }
-  const created: BrowserIdentity = {
-    endpointSecret: encodeBase64(crypto.getRandomValues(new Uint8Array(32))),
-    authorSecret: encodeBase64(crypto.getRandomValues(new Uint8Array(32))),
+  settings = await getRecord<Settings>(SETTINGS_STORE, ACTIVE) ?? {
+    id: ACTIVE,
+    actorId: `browser-${crypto.randomUUID()}`,
+    dirty: false,
   };
-  await saveIdentity(created);
-  return created;
-}
-
-async function saveIdentity(next: BrowserIdentity) {
-  const key = await vaultKey();
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const plaintext = new TextEncoder().encode(JSON.stringify(next));
-  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
-  await putRecord(VAULT_STORE, {
-    id: VAULT_STATE_ID,
-    iv: iv.buffer,
-    ciphertext,
-  } satisfies VaultStateRecord);
-  identity = next;
-}
-
-async function initializeIroh() {
-  if (!identity) throw new Error('browser identity is unavailable');
-  if (!identity.peerId) return;
-  nodeReady = false;
-  node = await IrohDocNode.spawn(
-    decodeBase64(identity.endpointSecret),
-    decodeBase64(identity.authorSecret),
-    identity.peerId,
-  );
-  const spawnedStatus = JSON.parse(await node.statusJson()) as SyncStatus;
-  if (identity.authorId !== spawnedStatus.authorId) {
-    await saveIdentity({ ...requireIdentity(), authorId: spawnedStatus.authorId });
+  await saveSettings();
+  const saved = await getRecord<ReplicaRecord>(REPLICA_STORE, ACTIVE);
+  if (saved) {
+    replica = BrowserReplica.restore(new Uint8Array(saved.snapshot), settings.actorId);
+    settings.workspaceId = replica.workspaceId();
+    await saveSettings();
   }
-  if (identity.ticket) {
-    const replica = await getRecord<{ id: string; value: string }>(REPLICA_STORE, 'active');
-    if (replica?.value) {
-      await node.restoreReplica(identity.ticket, replica.value);
-      lastSyncError = undefined;
-    } else {
-      const outcome = JSON.parse(await node.joinWorkspace(identity.ticket)) as WorkspaceOutcome;
-      lastSyncError = outcome.syncError;
-    }
-    await restoreDurableBrowserEntries();
-  }
-  nodeReady = true;
 }
 
-function startIrohInitialization() {
-  nodeInitialization ??= initializeIroh().catch((_cause: unknown) => {
-    nodeReady = false;
-    lastSyncError = 'Iroh startup did not complete; showing durable notes and retrying automatically.';
+async function saveSettings() {
+  await putRecord(SETTINGS_STORE, requireSettings());
+}
+
+async function persistReplica() {
+  const active = requireReplica();
+  const bytes = active.snapshot();
+  const copy = new Uint8Array(bytes.length);
+  copy.set(bytes);
+  await putRecord(REPLICA_STORE, {
+    id: ACTIVE,
+    workspaceId: active.workspaceId(),
+    snapshot: copy.buffer,
+  } satisfies ReplicaRecord);
+  workspaceCache = undefined;
+}
+
+async function setClientId(raw: string) {
+  const clientId = raw.trim();
+  if (!/^[A-Za-z0-9._-]{1,64}$/.test(clientId)) {
+    throw new Error("Client ID must contain 1–64 letters, digits, '.', '_', or '-' characters");
+  }
+  const current = requireSettings();
+  current.clientId = clientId;
+  await saveSettings();
+  connectNow();
+  return report();
+}
+
+function socketUrl() {
+  const url = new URL(scope.location.href);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.pathname = '/api/sync';
+  url.search = '';
+  url.hash = '';
+  return url.toString();
+}
+
+function connectNow() {
+  const clientId = settings?.clientId;
+  if (!clientId || socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return;
+  if (reconnectTimer !== undefined) scope.clearTimeout(reconnectTimer);
+  reconnectTimer = undefined;
+  connection = 'connecting';
+  const next = new WebSocket(socketUrl());
+  next.binaryType = 'arraybuffer';
+  socket = next;
+  next.addEventListener('open', () => {
+    next.send(JSON.stringify({
+      type: 'client_hello',
+      protocol_version: PROTOCOL_VERSION,
+      client_id: clientId,
+    }));
   });
-  return nodeInitialization;
+  next.addEventListener('message', (event) => {
+    socketQueue = socketQueue.then(() => receiveSocketMessage(next, event.data));
+  });
+  next.addEventListener('close', (event) => {
+    if (connection !== 'connected') {
+      lastSyncError = `xo-syncd closed the WebSocket (${event.code}${event.reason ? `: ${event.reason}` : ''})`;
+    }
+    disconnected(next);
+  });
+  next.addEventListener('error', () => {
+    lastSyncError = 'Could not connect to xo-syncd; the local replica remains available.';
+  });
 }
 
-async function awaitIrohInitialization() {
-  await startIrohInitialization();
-  if (!nodeReady) {
-    node = undefined;
-    nodeInitialization = undefined;
-    await startIrohInitialization();
-  }
-  if (!nodeReady) throw new Error(lastSyncError ?? 'Iroh runtime is unavailable');
-}
-
-async function setPeerId(value: string) {
-  const peerId = value.trim();
-  if (!/^[A-Za-z0-9._-]{1,64}$/.test(peerId)) {
-    throw new Error("Peer ID must contain 1–64 letters, digits, '.', '_', or '-' characters");
-  }
-  if (identity?.peerId && identity.peerId !== peerId) {
-    throw new Error('Wipe this browser identity before changing its peer ID');
-  }
-  await saveIdentity({ ...requireIdentity(), peerId });
-  nodeInitialization = undefined;
-  await awaitIrohInitialization();
-  return report();
-}
-
-async function createWorkspace() {
-  const outcome = JSON.parse(await requireNode().createWorkspace()) as WorkspaceOutcome;
-  await saveIdentity({ ...requireIdentity(), ticket: outcome.ticket, workspaceId: outcome.workspaceId });
-  lastSyncError = undefined;
-  await persistActiveReplica();
-  return report();
-}
-
-async function joinWorkspace(ticket: string) {
-  if (!ticket.trim()) throw new Error('A writable workspace ticket is required');
-  const previous = JSON.parse(await requireNode().statusJson()) as SyncStatus;
-  const outcome = JSON.parse(await requireNode().joinWorkspace(ticket.trim())) as WorkspaceOutcome;
-  if (previous.workspaceId && previous.workspaceId !== outcome.workspaceId) {
-    const tx = requireDatabase().transaction([ENTRY_STORE, PENDING_STORE, REPLICA_STORE], 'readwrite');
-    tx.objectStore(ENTRY_STORE).clear();
-    tx.objectStore(PENDING_STORE).clear();
-    tx.objectStore(REPLICA_STORE).clear();
-    await transactionComplete(tx);
-    workspaceCache = undefined;
-  }
-  await saveIdentity({ ...requireIdentity(), ticket: outcome.ticket, workspaceId: outcome.workspaceId });
-  lastSyncError = outcome.syncError;
-  await persistActiveReplica();
+async function receiveSocketMessage(activeSocket: WebSocket, data: string | ArrayBuffer | Blob) {
   try {
-    await syncPendingWrites();
+    if (typeof data === 'string') {
+      const control = JSON.parse(data) as ServerHello | Presence | { type: 'error'; message: string };
+      if (control.type === 'server_hello') {
+        if (control.protocol_version !== PROTOCOL_VERSION) throw new Error('Unsupported synchronization protocol');
+        await openServerWorkspace(control.workspace_id);
+        connectedClients = [...control.clients].sort();
+        connection = 'connected';
+        reconnectAttempt = 0;
+        lastSyncError = undefined;
+        pumpSync(activeSocket);
+      } else if (control.type === 'presence') {
+        connectedClients = [...control.clients].sort();
+      } else if (control.type === 'error') {
+        throw new Error(control.message);
+      }
+      return;
+    }
+    const bytes = data instanceof Blob ? new Uint8Array(await data.arrayBuffer()) : new Uint8Array(data);
+    if (!bytes.length || bytes.length > MAX_SYNC_BYTES) throw new Error('Invalid synchronization frame size');
+    const changed = requireReplica().receiveSyncMessage(bytes);
+    if (changed) await persistReplica();
+    const generated = pumpSync(activeSocket);
+    if (!generated && settings?.dirty) {
+      settings.dirty = false;
+      await saveSettings();
+    }
   } catch (cause) {
     lastSyncError = errorMessage(cause);
-  }
-  return report();
-}
-
-function requireIdentity() {
-  if (!identity) throw new Error('browser identity is unavailable');
-  return identity;
-}
-
-function workspaceIdFromTicket(ticket?: string) {
-  if (!ticket) return undefined;
-  try {
-    return invitation_workspace_id(ticket);
-  } catch {
-    return undefined;
+    activeSocket.close();
   }
 }
 
-async function enqueueWrite(input: PutEntryInput) {
-  await awaitIrohInitialization();
+async function openServerWorkspace(workspaceId: string) {
+  if (replica?.workspaceId() === workspaceId) {
+    replica.resetSync();
+    return;
+  }
+  replica = BrowserReplica.create(workspaceId, requireSettings().actorId);
+  settings!.workspaceId = workspaceId;
+  settings!.dirty = false;
+  await persistReplica();
+  await saveSettings();
+}
+
+function pumpSync(activeSocket = socket) {
+  if (!activeSocket || activeSocket.readyState !== WebSocket.OPEN || !replica) return false;
+  const message = replica.generateSyncMessage();
+  if (!message) return false;
+  activeSocket.send(new Uint8Array(message).buffer);
+  return true;
+}
+
+function disconnected(closed: WebSocket) {
+  if (socket !== closed) return;
+  socket = undefined;
+  connection = 'offline';
+  connectedClients = [];
+  scheduleReconnect();
+}
+
+function scheduleReconnect() {
+  if (!settings?.clientId || reconnectTimer !== undefined) return;
+  const delay = Math.min(30_000, 500 * (2 ** Math.min(reconnectAttempt, 6)));
+  reconnectAttempt += 1;
+  reconnectTimer = scope.setTimeout(() => {
+    reconnectTimer = undefined;
+    connectNow();
+  }, delay + Math.floor(Math.random() * Math.min(delay, 1_000)));
+}
+
+async function putWrites(writes: PreparedMutation['writes']) {
+  const active = requireReplica();
+  for (const write of writes) active.put(write.key, decodeBase64(write.valueBase64));
+  settings!.dirty = true;
+  await persistReplica();
+  await saveSettings();
+  pumpSync();
+}
+
+async function putEntry(input: PutEntryInput) {
   const key = input.key.trim();
   if (!key) throw new Error('Document key is required');
-  const status = JSON.parse(await requireNode().statusJson()) as SyncStatus;
-  const bytes = new TextEncoder().encode(input.value);
-  await enqueuePreparedWrites([{ key, valueBase64: encodeBase64(bytes) }], status.authorId);
-  try {
-    await publishPendingWrites();
-    lastSyncError = undefined;
-    await refreshEntryCache();
-  } catch (cause) {
-    lastSyncError = errorMessage(cause);
-  }
+  await putWrites([{ key, valueBase64: encodeBase64(new TextEncoder().encode(input.value)) }]);
   return report();
 }
 
 async function mutateNote(input: NoteMutationInput) {
-  const entries = await cachedEntries();
-  const authorId = identity?.authorId
-    ?? (nodeReady ? (JSON.parse(await requireNode().statusJson()) as SyncStatus).authorId : undefined);
-  if (!authorId) throw new Error('Open this workspace online once before creating offline notes');
+  const entries = currentEntries();
   const prepared = JSON.parse(prepare_note_mutation(
     JSON.stringify(entries),
-    authorId,
+    requireSettings().actorId,
     JSON.stringify(input),
     BigInt(Date.now()),
     -new Date().getTimezoneOffset() * 60,
   )) as PreparedMutation;
-  await enqueuePreparedWrites(prepared.writes, authorId);
-  // Local durability is the save boundary. Replication is best-effort and must
-  // never delay returning to the note overview, especially while offline.
-  if (nodeReady) {
-    void publishPendingWrites()
-      .then(() => refreshEntryCache())
-      .then(() => { lastSyncError = undefined; })
-      .catch((cause: unknown) => { lastSyncError = errorMessage(cause); });
-  }
+  await putWrites(prepared.writes);
   return { ...await report(), mutatedNoteId: prepared.noteId };
 }
 
-async function enqueuePreparedWrites(writes: PreparedMutation['writes'], author: string) {
-  const createdAt = new Date().toISOString();
-  for (const [index, write] of writes.entries()) {
-    const pending: PendingWrite = {
-      id: crypto.randomUUID(),
-      key: write.key,
-      valueBase64: write.valueBase64,
-      author,
-      createdAt: `${createdAt}/${String(index).padStart(4, '0')}`,
-    };
-    await putRecord(PENDING_STORE, pending);
-    await putRecord(ENTRY_STORE, optimisticEntry(pending));
-  }
-}
-
-async function publishPendingWrites() {
-  const pending = await allRecords<PendingWrite>(PENDING_STORE);
-  for (const write of pending.sort((left, right) => left.createdAt.localeCompare(right.createdAt))) {
-    const valueBase64 = write.valueBase64 ?? encodeBase64(new TextEncoder().encode(write.value ?? ''));
-    await requireNode().putBase64(write.key, valueBase64);
-  }
-  return pending;
-}
-
-async function confirmPendingWrites(published: PendingWrite[]) {
-  for (const write of published) await deleteRecord(PENDING_STORE, write.id);
-}
-
-async function syncPendingWrites() {
-  const pending = await allRecords<PendingWrite>(PENDING_STORE);
-  if (!pending.length) return;
-  const published = await publishPendingWrites();
-  await requireNode().refreshSync();
-  if (await hasRemotePeers()) await confirmPendingWrites(published);
-  await refreshEntryCache();
-}
-
-async function refreshSync() {
-  try {
-    await awaitIrohInitialization();
-    const published = await publishPendingWrites();
-    await requireNode().refreshSync();
-    if (await hasRemotePeers()) await confirmPendingWrites(published);
-    await refreshEntryCache();
-    lastSyncError = undefined;
-  } catch (cause) {
-    lastSyncError = errorMessage(cause);
-  }
-  return report();
-}
-
-async function hasRemotePeers() {
-  const status = JSON.parse(await requireNode().statusJson()) as SyncStatus;
-  return status.peers > 0;
-}
-
-async function restoreDurableBrowserEntries() {
-  const entries = (await allRecords<DocumentEntry & { id: string }>(ENTRY_STORE))
-    .map(({ id: _, ...entry }) => entry);
-  if (entries.length) await requireNode().restoreAuthorEntries(JSON.stringify(entries));
-}
-
-async function persistActiveReplica() {
-  const status = JSON.parse(await requireNode().statusJson()) as SyncStatus;
-  if (status.workspaceId && status.writable) {
-    await putRecord(REPLICA_STORE, { id: 'active', value: await requireNode().replicaBase64() });
-  }
-}
-
-async function refreshEntryCache() {
-  const entries = JSON.parse(await requireNode().entriesJson()) as DocumentEntry[];
-  const tx = requireDatabase().transaction(ENTRY_STORE, 'readwrite');
-  const store = tx.objectStore(ENTRY_STORE);
-  // xo uses immutable revision/config keys and explicit tombstones. Merging
-  // keeps the durable replica usable while remote content is still arriving,
-  // instead of erasing it whenever an in-memory Iroh node starts empty.
-  for (const entry of entries) store.put({ id: entry.keyBase64, ...entry });
-  await transactionComplete(tx);
-  await persistActiveReplica();
-}
-
-async function cachedEntries() {
-  const entries = (await allRecords<DocumentEntry & { id: string }>(ENTRY_STORE))
-    .map(({ id: _, ...entry }) => entry);
-  const byKey = new Map(entries.map((entry) => [entry.key, entry]));
-  const pendingWrites = await allRecords<PendingWrite>(PENDING_STORE);
-  pendingWrites.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
-  for (const pending of pendingWrites) {
-    const { id: _, ...entry } = optimisticEntry(pending);
-    byKey.set(entry.key, entry);
-  }
-  return [...byKey.values()].sort((left, right) => left.key.localeCompare(right.key));
+function currentEntries(): DocumentEntry[] {
+  if (!replica) return [];
+  return JSON.parse(replica.entriesJson()) as DocumentEntry[];
 }
 
 async function report(): Promise<RuntimeReport> {
-  const cachedWorkspaceId = identity?.workspaceId ?? workspaceIdFromTicket(identity?.ticket);
-  const status = nodeReady && node
-    ? JSON.parse(await node.statusJson()) as SyncStatus
-    : {
-        endpointId: '',
-        workspaceId: cachedWorkspaceId,
-        authorId: '',
-        peers: 0,
-        writable: false,
-        restoring: Boolean(cachedWorkspaceId),
-      };
-  const entries = await cachedEntries();
-  const workspace = status.workspaceId ? resolvedWorkspace(entries) : undefined;
-  const members = status.workspaceId && nodeReady
-    ? JSON.parse(await requireNode().membersJson())
-    : [];
-  const pendingMembers = status.workspaceId && nodeReady
-    ? JSON.parse(await requireNode().pendingMembersJson())
-    : [];
+  const entries = currentEntries();
+  const workspace = replica ? resolvedWorkspace(entries).value : undefined;
   return {
     runtime: JSON.parse(runtime_info()) as RuntimeInfo,
-    peerId: identity?.peerId,
+    clientId: settings?.clientId,
     indexedDb: true,
     steelResult: run_steel('(+ 20 22)'),
     restoredAt,
-    status,
+    status: {
+      workspaceId: replica?.workspaceId() ?? settings?.workspaceId,
+      authorId: settings?.actorId ?? '',
+      connection,
+      clients: connectedClients,
+      writable: Boolean(replica),
+    },
     entries,
-    ticket: identity?.ticket,
     syncError: lastSyncError,
-    pendingWrites: (await allRecords<PendingWrite>(PENDING_STORE)).length,
-    workspace: workspace?.value,
-    members,
-    pendingMembers,
+    pendingWrites: settings?.dirty ? 1 : 0,
+    workspace,
   };
-}
-
-async function queryNotes(input: NoteQueryInput) {
-  const workspace = resolvedWorkspace(await cachedEntries());
-  return JSON.parse(query_workspace(workspace.json, JSON.stringify(input)));
 }
 
 function resolvedWorkspace(entries: DocumentEntry[]) {
-  const fingerprint = entries.map((entry) =>
-    `${entry.keyBase64}:${entry.contentHash}:${entry.pending ? entry.valueBase64 : ''}`
-  ).join('|');
+  const fingerprint = entries.map((entry) => `${entry.keyBase64}:${entry.contentHash}`).join('|');
   if (workspaceCache?.fingerprint === fingerprint) return workspaceCache;
   const json = workspace_snapshot(JSON.stringify(entries));
-  workspaceCache = {
-    fingerprint,
-    json,
-    value: JSON.parse(json) as WorkspaceSnapshot,
-  };
+  workspaceCache = { fingerprint, json, value: JSON.parse(json) as WorkspaceSnapshot };
   return workspaceCache;
 }
 
-function optimisticEntry(write: PendingWrite): DocumentEntry & { id: string } {
-  const keyBytes = new TextEncoder().encode(write.key);
-  const valueBase64 = write.valueBase64 ?? encodeBase64(new TextEncoder().encode(write.value ?? ''));
-  const valueBytes = decodeBase64(valueBase64);
-  const keyBase64 = encodeBase64(keyBytes);
-  let value: string | undefined;
-  try {
-    value = new TextDecoder('utf-8', { fatal: true }).decode(valueBytes);
-  } catch {
-    value = undefined;
-  }
-  return {
-    id: keyBase64,
-    key: write.key,
-    keyBase64,
-    value,
-    valueBase64,
-    author: write.author ?? 'pending',
-    contentHash: 'pending',
-    contentLen: valueBytes.length,
-    pending: true,
-  };
+async function queryNotes(input: NoteQueryInput) {
+  const workspace = resolvedWorkspace(currentEntries());
+  return JSON.parse(query_workspace(workspace.json, JSON.stringify(input)));
+}
+
+async function refreshSync() {
+  connectNow();
+  pumpSync();
+  return report();
 }
 
 async function wipeLocalData() {
+  if (reconnectTimer !== undefined) scope.clearTimeout(reconnectTimer);
+  reconnectTimer = undefined;
+  socket?.close();
+  socket = undefined;
+  replica = undefined;
+  settings = undefined;
+  workspaceCache = undefined;
   database?.close();
   database = undefined;
-  node = undefined;
-  nodeReady = false;
-  nodeInitialization = undefined;
-  identity = undefined;
-  workspaceCache = undefined;
   await new Promise<void>((resolve, reject) => {
     const request = indexedDB.deleteDatabase(DATABASE);
     request.onsuccess = () => resolve();
@@ -522,7 +400,7 @@ async function handle(request: WorkerRequest): Promise<unknown> {
   if (request.method === 'initialize') {
     await initializeWasm();
     await initializePersistence();
-    void startIrohInitialization();
+    connectNow();
     return report();
   }
   await initializeWasm();
@@ -530,17 +408,12 @@ async function handle(request: WorkerRequest): Promise<unknown> {
     case 'steel-probe':
       if (typeof request.payload !== 'string') throw new Error('Steel source must be a string');
       return run_steel(request.payload);
-    case 'set-peer-id':
-      if (typeof request.payload !== 'string') throw new Error('Peer ID must be a string');
-      return setPeerId(request.payload);
-    case 'create-workspace':
-      return createWorkspace();
-    case 'join-workspace':
-      if (typeof request.payload !== 'string') throw new Error('Workspace ticket must be a string');
-      return joinWorkspace(request.payload);
+    case 'set-client-id':
+      if (typeof request.payload !== 'string') throw new Error('Client ID must be a string');
+      return setClientId(request.payload);
     case 'put-entry':
       if (!isPutEntry(request.payload)) throw new Error('Invalid document entry');
-      return enqueueWrite(request.payload);
+      return putEntry(request.payload);
     case 'query-notes':
       if (!isNoteQuery(request.payload)) throw new Error('Invalid note query');
       return queryNotes(request.payload);
@@ -549,30 +422,6 @@ async function handle(request: WorkerRequest): Promise<unknown> {
       return mutateNote(request.payload);
     case 'refresh-sync':
       return refreshSync();
-    case 'share-ticket': {
-      await awaitIrohInitialization();
-      const ticket = await requireNode().shareTicket();
-      await saveIdentity({ ...requireIdentity(), ticket });
-      return ticket;
-    }
-    case 'approve-peer':
-      await awaitIrohInitialization();
-      await requireNode().approvePeer(request.payload as string);
-      await persistActiveReplica();
-      return report();
-    case 'reject-peer':
-      await awaitIrohInitialization();
-      await requireNode().rejectPeer(request.payload as string);
-      await persistActiveReplica();
-      return report();
-    case 'remove-peer': {
-      await awaitIrohInitialization();
-      await requireNode().removePeer(request.payload as string);
-      const ticket = await requireNode().shareTicket();
-      await saveIdentity({ ...requireIdentity(), ticket });
-      await persistActiveReplica();
-      return report();
-    }
     case 'wipe-local-data':
       await wipeLocalData();
       return undefined;
@@ -611,20 +460,10 @@ function errorMessage(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-// wasm-bindgen holds a mutable borrow of async Rust objects until each Promise
-// settles. Worker message handlers can otherwise overlap (for example the
-// periodic sync refresh and an editor save), which traps as recursive use of
-// the same object. Keep all runtime operations in arrival order.
 let requestQueue = Promise.resolve();
 scope.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
-  // Queries only read the durable IndexedDB cache and invoke a pure Wasm
-  // function; they do not borrow IrohDocNode. Let them bypass slow network
-  // refreshes so navigation remains immediate.
-  if (event.data.method === 'query-notes') {
-    void respond(event.data);
-  } else {
-    requestQueue = requestQueue.then(() => respond(event.data));
-  }
+  if (event.data.method === 'query-notes') void respond(event.data);
+  else requestQueue = requestQueue.then(() => respond(event.data));
 });
 
 async function respond(request: WorkerRequest) {

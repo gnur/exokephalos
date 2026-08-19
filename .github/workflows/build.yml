@@ -182,13 +182,64 @@ jobs:
         working-directory: web
         run: npx playwright install --with-deps chromium firefox webkit
 
-      - name: Test browser layouts and offline local writes
-        working-directory: web
+      - name: Test browser central synchronization and offline recovery
+        shell: bash
         run: |
-          npx playwright test --project=chromium \
-            --grep 'creates a local item|prevents mobile'
+          set -euo pipefail
+          XO_PWA_DIR="${PWD}/web/dist" cargo build --locked -p xo-syncd -p xo
+          state=$(mktemp -d)
+          target/debug/xo-syncd --state-dir "${state}" --bind 127.0.0.1:4173 \
+            > /tmp/xo-syncd-browser.log 2>&1 &
+          server_pid=$!
+          trap 'kill -INT ${server_pid} 2>/dev/null || true' EXIT
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:4173/healthz > /dev/null; then
+              break
+            fi
+            sleep 0.25
+          done
+          fixture=$(mktemp -d)
+          mkdir -p "${fixture}/home/.config/xo" "${fixture}/source"
+          HOME="${fixture}/home" target/debug/xo config-init \
+            > "${fixture}/home/.config/xo/config.scm"
+          cat > "${fixture}/source/native.md" <<'EOF'
+          ---
+          id: natvbrw
+          type: note
+          title: Native browser fixture
+          tags: []
+          created: 2026-01-01T00:00:00Z
+          ---
+          synchronized from the native client through xo-syncd
+          EOF
+          HOME="${fixture}/home" target/debug/xo \
+            --state-dir "${fixture}/native-state" \
+            --projection "${fixture}/projection" \
+            --peer-id native-fixture \
+            --server http://127.0.0.1:4173 \
+            import "${fixture}/source"
+          python3 web/tests/tui-driver.py \
+            --port 19465 \
+            --log "${fixture}/tui.log" \
+            --ready-text "Native browser fixture" \
+            -- env HOME="${fixture}/home" target/debug/xo \
+              --state-dir "${fixture}/native-state" \
+              --projection "${fixture}/projection" \
+              --peer-id native-fixture \
+              --server http://127.0.0.1:4173 &
+          tui_pid=$!
+          trap 'kill ${tui_pid} 2>/dev/null || true; kill -INT ${server_pid} 2>/dev/null || true' EXIT
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:19465/healthz > /dev/null; then
+              break
+            fi
+            sleep 0.25
+          done
+          curl --fail --silent http://127.0.0.1:19465/healthz > /dev/null
+          cd web
+          XO_NATIVE_FIXTURE=1 npx playwright test --project=chromium
           npx playwright test --project=firefox --project=mobile-webkit \
-            --grep 'creates a local item|prevents mobile'
+            --grep 'restores the durable|prevents mobile'
 
       - name: Package static PWA
         run: tar -C web/dist -czf xo-web.tar.gz .

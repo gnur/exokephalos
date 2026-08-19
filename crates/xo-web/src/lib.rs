@@ -1,10 +1,9 @@
 //! Browser-facing WebAssembly facade for xo.
 //!
-//! This first slice proves that the sandboxed Steel runtime and a typed Wasm
-//! boundary can be shipped as static PWA assets. Workspace and Iroh APIs will
-//! be added behind the same worker-owned boundary.
+//! The dedicated browser worker owns this facade, its durable Automerge replica,
+//! synchronization state, record resolution, and sandboxed Steel runtime.
 
-mod iroh_sync;
+mod browser_replica;
 mod workspace;
 
 use steel::rvals::SteelVal;
@@ -26,20 +25,10 @@ pub fn runtime_info() -> String {
         "api_version": 1,
         "version": env!("XO_BUILD_VERSION"),
         "steel": true,
-        "iroh": true,
-        "persistence": "indexeddb-durable-replica",
+        "central_sync": true,
+        "persistence": "indexeddb-automerge-replica",
     })
     .to_string()
-}
-
-/// Read the workspace identifier without opening an Iroh endpoint.
-#[wasm_bindgen]
-pub fn invitation_workspace_id(ticket: &str) -> Result<String, JsValue> {
-    invitation_workspace_id_inner(ticket).map_err(|error| JsValue::from_str(&format!("{error:#}")))
-}
-
-fn invitation_workspace_id_inner(ticket: &str) -> anyhow::Result<String> {
-    Ok(xo_core::peer_protocol::WorkspaceInvitation::decode(ticket)?.workspace_id)
 }
 
 /// Execute Steel in a fresh sandboxed VM owned by the calling Web Worker.
@@ -117,12 +106,7 @@ mod tests {
         assert_eq!(info["api_version"], 1);
         assert_eq!(info["version"], env!("XO_BUILD_VERSION"));
         assert_eq!(info["steel"], true);
-        assert_eq!(info["iroh"], true);
-    }
-
-    #[test]
-    fn invalid_invitation_cannot_supply_a_cached_workspace_id() {
-        assert!(invitation_workspace_id_inner("not-an-invitation").is_err());
+        assert_eq!(info["central_sync"], true);
     }
 
     #[test]

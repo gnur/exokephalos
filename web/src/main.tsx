@@ -51,7 +51,6 @@ const updateServiceWorker = registerSW({
     serviceWorkerRegistration = registration;
   },
 });
-let scannedWorkspaceTicket = workspaceTicketFromLocation();
 
 function announceUpdate() {
   updateIsAvailable = true;
@@ -100,19 +99,10 @@ function workspaceRouteState() {
   };
 }
 
-function workspaceTicketFromLocation() {
-  const parameters = new URLSearchParams(window.location.hash.replace(/^#/, ''));
-  return parameters.get('ticket')?.trim() || undefined;
-}
-
-function clearWorkspaceTicket() {
-  window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
-}
-
 const PEER_ADJECTIVES = ['smart', 'clever', 'funny', 'incredible', 'blue', 'green'] as const;
 const PEER_SUBJECTS = ['xo', 'exokephalos', 'zettelkasten', 'sandbox', 'browser', 'client'] as const;
 
-function randomPeerId() {
+function randomClientId() {
   const random = new Uint32Array(2);
   crypto.getRandomValues(random);
   return `${PEER_ADJECTIVES[random[0] % PEER_ADJECTIVES.length]}-${PEER_SUBJECTS[random[1] % PEER_SUBJECTS.length]}`;
@@ -123,11 +113,9 @@ function reportRevision(report?: RuntimeReport) {
   return JSON.stringify({
     entries: report.entries.map((entry) => [entry.keyBase64, entry.contentHash, entry.pending]),
     pendingWrites: report.pendingWrites,
-    pendingApproval: report.status.pendingApproval,
-    peers: report.status.peers,
+    connection: report.status.connection,
+    clients: report.status.clients,
     syncError: report.syncError,
-    members: report.members,
-    pendingMembers: report.pendingMembers,
   });
 }
 
@@ -141,8 +129,7 @@ function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [online, setOnline] = useState(navigator.onLine);
   const [installPrompt, setInstallPrompt] = useState<InstallPrompt>();
-  const [ticketInput, setTicketInput] = useState('');
-  const [peerIdInput, setPeerIdInput] = useState(randomPeerId);
+  const [clientIdInput, setClientIdInput] = useState(randomClientId);
   const [updateAvailable, setUpdateAvailable] = useState(updateIsAvailable);
   const [activeView, setActiveView] = useState(initialRoute.current.view);
   const [activeSubview, setActiveSubview] = useState<string | undefined>(initialRoute.current.subview);
@@ -152,20 +139,11 @@ function App() {
     const runtime = new XoRuntime();
     runtimeRef.current = runtime;
     let active = true;
-    void (async () => {
-      const setupTicket = scannedWorkspaceTicket;
-      let next = await runtime.initialize();
-      if (setupTicket && next.peerId) {
-        next = await runtime.joinWorkspace(setupTicket);
-        scannedWorkspaceTicket = undefined;
-        clearWorkspaceTicket();
-      } else if (setupTicket) {
-        setTicketInput(setupTicket);
-      }
+    void runtime.initialize().then((next) => {
       if (!active) return;
       setReport(next);
       setState('ready');
-    })().catch((cause: unknown) => {
+    }).catch((cause: unknown) => {
       if (!active) return;
       setError(errorMessage(cause));
       setState('error');
@@ -178,26 +156,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const joinFromLocation = () => {
-      const ticket = workspaceTicketFromLocation();
-      const runtime = runtimeRef.current;
-      if (!ticket || !runtime || !report?.peerId) return;
-      setBusy(true);
-      void runtime.joinWorkspace(ticket).then((next) => {
-        clearWorkspaceTicket();
-        setReport(next);
-        setState('ready');
-        setError(next.syncError ?? '');
-      }).catch((cause: unknown) => {
-        setError(errorMessage(cause));
-      }).finally(() => setBusy(false));
-    };
-    window.addEventListener('hashchange', joinFromLocation);
-    return () => window.removeEventListener('hashchange', joinFromLocation);
-  }, [report?.peerId]);
-
-  useEffect(() => {
-    if (state !== 'ready' || (!report?.status.workspaceId && !report?.status.pendingApproval)) return;
+    if (state !== 'ready' || !report?.clientId) return;
     let active = true;
     let running = false;
     const refresh = async () => {
@@ -215,15 +174,12 @@ function App() {
         running = false;
       }
     };
-    // Admission is polled promptly; routine synchronization is deliberately
-    // less frequent so it does not monopolize the serialized Wasm worker.
-    const interval = report.status.pendingApproval ? 2_000 : 15_000;
-    const timer = window.setInterval(() => void refresh(), interval);
+    const timer = window.setInterval(() => void refresh(), 5_000);
     return () => {
       active = false;
       window.clearInterval(timer);
     };
-  }, [state, report?.status.workspaceId, report?.status.pendingApproval]);
+  }, [state, report?.clientId]);
 
   useEffect(() => {
     const onUpdate = () => setUpdateAvailable(true);
@@ -280,7 +236,7 @@ function App() {
 
   async function wipeBrowserData() {
     const confirmed = window.confirm(
-      'Permanently remove this browser identity, workspace capability, cached notes, pending writes, and offline app files? You will need a new invitation to reconnect.',
+      'Permanently remove this client label, durable Automerge replica, pending synchronization state, and offline app files?',
     );
     if (!confirmed) return;
     const runtime = runtimeRef.current;
@@ -349,9 +305,6 @@ function App() {
         onMutate={(input) => runWorkspace((runtime) => runtime.mutateNote(input))}
         onRefresh={() => void runWorkspace((runtime) => runtime.refreshSync())}
         onUpdate={() => void applyUpdate()}
-        onApprovePeer={(fingerprint) => void runWorkspace((runtime) => runtime.approvePeer(fingerprint))}
-        onRejectPeer={(fingerprint) => void runWorkspace((runtime) => runtime.rejectPeer(fingerprint))}
-        onRemovePeer={(fingerprint) => void runWorkspace((runtime) => runtime.removePeer(fingerprint))}
         onWipe={() => void wipeBrowserData()}
       />
     );
@@ -399,7 +352,7 @@ function App() {
           <NavItem icon={<Boxes />} label="Steel plugins" />
           <NavItem icon={<Settings />} label="Settings" />
         </nav>
-        <div className="privacy-note"><LockKeyhole /><span>Endpoint and membership identities plus the invitation are encrypted locally in IndexedDB.</span></div>
+        <div className="privacy-note"><LockKeyhole /><span>The durable Automerge replica is stored locally in IndexedDB.</span></div>
       </aside>
       {menuOpen ? <button className="scrim" onClick={() => setMenuOpen(false)} aria-label="Close navigation" /> : null}
 
@@ -409,7 +362,7 @@ function App() {
           <div className="search"><Search />{hasWorkspace ? <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search notes" aria-label="Search notes" /> : <span>Connect a workspace to begin</span>}<kbd>xo</kbd></div>
           <div className={online ? 'connection online' : 'connection offline'}>
             {online ? <Cloud /> : <CloudOff />}
-            <span>{online ? (hasWorkspace ? (report?.status.peers ? 'relay sync active' : 'local workspace') : 'browser online') : 'offline'}</span>
+            <span>{online ? (report?.status.connection === 'connected' ? 'server synchronized' : report?.status.connection ?? 'browser online') : 'offline'}</span>
           </div>
         </header>
 
@@ -426,19 +379,9 @@ function App() {
             report={report}
             error={error}
             busy={busy}
-            peerId={peerIdInput}
-            onPeerId={setPeerIdInput}
-            ticket={ticketInput}
-            onTicket={setTicketInput}
-            onCreate={() => void runWorkspace(async (runtime) => {
-              await runtime.setPeerId(report?.peerId ?? peerIdInput);
-              return runtime.createWorkspace();
-            })}
-            onJoin={() => void runWorkspace(async (runtime) => {
-              await runtime.setPeerId(report?.peerId ?? peerIdInput);
-              return runtime.joinWorkspace(ticketInput);
-            })}
-            onRetryApproval={() => void runWorkspace((runtime) => runtime.refreshSync())}
+            clientId={clientIdInput}
+            onClientId={setClientIdInput}
+            onConnect={() => void runWorkspace((runtime) => runtime.setClientId(report?.clientId ?? clientIdInput))}
             installPrompt={installPrompt}
             onInstall={() => void install()}
             onCheckForUpdates={() => void checkForUpdates()}
@@ -450,18 +393,14 @@ function App() {
   );
 }
 
-function Onboarding({ state, report, error, busy, peerId, onPeerId, ticket, onTicket, onCreate, onJoin, onRetryApproval, installPrompt, onInstall, onCheckForUpdates }: {
+function Onboarding({ state, report, error, busy, clientId, onClientId, onConnect, installPrompt, onInstall, onCheckForUpdates }: {
   state: RuntimeState;
   report?: RuntimeReport;
   error: string;
   busy: boolean;
-  peerId: string;
-  onPeerId: (peerId: string) => void;
-  ticket: string;
-  onTicket: (ticket: string) => void;
-  onCreate: () => void;
-  onJoin: () => void;
-  onRetryApproval: () => void;
+  clientId: string;
+  onClientId: (clientId: string) => void;
+  onConnect: () => void;
   installPrompt?: InstallPrompt;
   onInstall: () => void;
   onCheckForUpdates: () => void;
@@ -472,7 +411,7 @@ function Onboarding({ state, report, error, busy, peerId, onPeerId, ticket, onTi
         <div>
           <p className="eyebrow"><LoaderCircle className="spin" /> restoring local state</p>
           <h1>Opening your<br /><em>browser workspace.</em></h1>
-          <p className="lede">Restoring the encrypted identity and Automerge replica from IndexedDB before connecting to peers.</p>
+          <p className="lede">Restoring the durable Automerge replica from IndexedDB before connecting to xo-syncd.</p>
         </div>
         <RuntimeCard state={state} report={report} error={error} />
       </section>
@@ -482,35 +421,26 @@ function Onboarding({ state, report, error, busy, peerId, onPeerId, ticket, onTi
     <>
       <section className="hero">
         <div>
-          <p className="eyebrow"><Sparkles /> direct browser Iroh</p>
-          <h1>Your knowledge,<br /><em>entirely client-side.</em></h1>
-          <p className="lede">Create or join an authenticated Automerge workspace. Iroh QUIC, Gossip, Steel, and recovery run in this browser worker.</p>
-          {!report?.peerId ? <label className="ticket-form"><span>Peer ID (required)</span><small>A random client name has been generated for this browser. You can change it before creating or joining a workspace.</small><input value={peerId} onChange={(event) => onPeerId(event.target.value)} placeholder="smart-browser" aria-label="Peer ID" required /></label> : <p>Peer ID: <strong>{report.peerId}</strong></p>}
-          {report?.syncError?.includes('pending approval') ? <p className="error-message">This peer is waiting for its signed automatic admission.</p> : null}
+          <p className="eyebrow"><Sparkles /> centralized, offline-first</p>
+          <h1>Your knowledge,<br /><em>available offline.</em></h1>
+          <p className="lede">Choose a presence label for this browser. It will automatically open the workspace hosted by this xo-syncd origin and retain a durable local replica.</p>
+          {!report?.clientId ? <label className="client-form"><span>Client ID (required)</span><small>This is a visible presence label, not a security identity.</small><input value={clientId} onChange={(event) => onClientId(event.target.value)} placeholder="smart-browser" aria-label="Client ID" required /></label> : <p>Client ID: <strong>{report.clientId}</strong></p>}
+          {error || report?.syncError ? <p className="error-message">{error || report?.syncError}</p> : null}
           <div className="hero-actions">
-            {report?.syncError?.includes('pending approval') ? <button className="primary" disabled={busy} onClick={onRetryApproval}><RefreshCw className={busy ? 'spin' : ''} /> Check admission</button> : null}
-            <button className="primary" disabled={busy || state !== 'ready' || (!report?.peerId && !peerId.trim())} onClick={onCreate}>{busy ? <LoaderCircle className="spin" /> : <Plus />} Create workspace</button>
+            <button className="primary" disabled={busy || state !== 'ready' || (!report?.clientId && !clientId.trim())} onClick={onConnect}>{busy ? <LoaderCircle className="spin" /> : <Cloud />} Connect to workspace</button>
             {installPrompt ? <button className="secondary" onClick={onInstall}><Download /> Install xo</button> : <button className="secondary" onClick={onCheckForUpdates}>Check for updates</button>}
           </div>
         </div>
         <RuntimeCard state={state} report={report} error={error} />
       </section>
 
-      <section className="join-section">
-        <div><p className="eyebrow"><KeyRound /> Existing workspace</p><h2>Join with an invitation</h2><p><strong>A Peer ID is required before joining.</strong> Enter a unique name for this browser in the Peer ID field above, then paste the invitation. Invitations stay encrypted in this browser.</p></div>
-        <div className="ticket-form">
-          <textarea value={ticket} onChange={(event) => onTicket(event.target.value)} placeholder="Paste the Automerge workspace invitation from xo or xo-syncd" aria-label="Workspace invitation" />
-          <button className="primary" disabled={busy || !ticket.trim() || state !== 'ready' || (!report?.peerId && !peerId.trim())} onClick={onJoin}>{busy ? <LoaderCircle className="spin" /> : <Radio />} Join and synchronize</button>
-        </div>
-      </section>
-
       <section className="status-section" aria-labelledby="foundation-title">
-        <div className="section-heading"><div><p className="eyebrow">Browser runtime</p><h2 id="foundation-title">No application server</h2></div><span className="static-badge">static assets only</span></div>
+        <div className="section-heading"><div><p className="eyebrow">Browser runtime</p><h2 id="foundation-title">Local replica, central synchronization</h2></div><span className="static-badge">same-origin /api/sync</span></div>
         <div className="status-grid">
-          <StatusCard icon={<Code2 />} title="Rust + WebAssembly" description="The xo-web facade runs only inside the dedicated worker." ready={state === 'ready'} />
-          <StatusCard icon={<Database />} title="Encrypted recovery" description="Identity, capability, records, and pending writes survive in IndexedDB." ready={Boolean(report?.indexedDb)} />
+          <StatusCard icon={<Code2 />} title="Rust + WebAssembly" description="The Automerge facade and record resolver run inside the dedicated worker." ready={state === 'ready'} />
+          <StatusCard icon={<Database />} title="Durable recovery" description="The complete Automerge replica survives reloads in IndexedDB." ready={Boolean(report?.indexedDb)} />
           <StatusCard icon={<Sparkles />} title="Sandboxed Steel" description={`A fresh Steel VM executes in Wasm${report ? ` and returned ${report.steelResult}` : ''}.`} ready={Boolean(report?.runtime.steel)} />
-          <StatusCard icon={<WifiOff />} title="Automerge + Iroh" description="Signed Automerge changes synchronize over authenticated, end-to-end encrypted Iroh QUIC." ready={Boolean(report?.runtime.iroh)} />
+          <StatusCard icon={<WifiOff />} title="Offline-first sync" description="Local mutations are durable before acknowledgment and synchronize through xo-syncd after reconnect." ready={Boolean(report?.runtime.central_sync)} />
         </div>
       </section>
     </>
@@ -522,7 +452,8 @@ function NavItem({ icon, label, active = false, nested = false, onClick }: { ico
 }
 
 function RuntimeCard({ state, report, error }: { state: RuntimeState; report?: RuntimeReport; error: string }) {
-  return <article className={`runtime-card ${state}`}><div className="runtime-header"><span className="window-dots"><i /><i /><i /></span><code>xo-runtime.worker</code></div><div className="runtime-body">{state === 'starting' ? <LoaderCircle className="spin" /> : state === 'ready' ? <Check /> : <CircleAlert />}<div><strong>{state === 'starting' ? 'Starting Iroh runtime…' : state === 'ready' ? 'Runtime ready' : 'Runtime unavailable'}</strong><p>{state === 'ready' ? `xo-web ${report?.runtime.version} · ${short(report?.status.endpointId)}` : state === 'error' ? error : 'Restoring encrypted identity and opening the relay'}</p></div></div><dl><div><dt>application server</dt><dd>none</dd></div><div><dt>persistence</dt><dd>{report?.indexedDb ? 'IndexedDB ready' : 'checking'}</dd></div><div><dt>Iroh transport</dt><dd>{report?.runtime.iroh ? 'relay-only E2EE' : 'starting'}</dd></div><div><dt>previous checkpoint</dt><dd>{report?.restoredAt ? 'restored' : 'new browser'}</dd></div></dl></article>;
+  const connection = report?.status.connection ?? 'offline';
+  return <article className={`runtime-card ${state}`}><div className="runtime-header"><span className="window-dots"><i /><i /><i /></span><code>xo-runtime.worker</code></div><div className="runtime-body">{state === 'starting' ? <LoaderCircle className="spin" /> : state === 'ready' ? <Check /> : <CircleAlert />}<div><strong>{state === 'starting' ? 'Restoring Automerge replica…' : state === 'ready' ? 'Runtime ready' : 'Runtime unavailable'}</strong><p>{state === 'ready' ? `xo-web ${report?.runtime.version} · ${connection}` : state === 'error' ? error : 'Opening IndexedDB before network synchronization'}</p></div></div><dl><div><dt>sync server</dt><dd>same origin</dd></div><div><dt>persistence</dt><dd>{report?.indexedDb ? 'IndexedDB ready' : 'checking'}</dd></div><div><dt>transport</dt><dd>{report?.runtime.central_sync ? '/api/sync WebSocket' : 'starting'}</dd></div><div><dt>previous checkpoint</dt><dd>{report?.restoredAt ? 'restored' : 'new browser'}</dd></div></dl></article>;
 }
 
 function StatusCard({ icon, title, description, ready }: { icon: React.ReactNode; title: string; description: string; ready: boolean }) {

@@ -188,16 +188,17 @@ jobs:
           set -euo pipefail
           XO_PWA_DIR="${PWD}/web/dist" cargo build --locked -p xo-syncd -p xo
           state=$(mktemp -d)
-          target/debug/xo-syncd --state-dir "${state}" --bind 127.0.0.1:4173 \
+          target/debug/xo-syncd --state-dir "${state}" --bind 127.0.0.1:19464 \
             > /tmp/xo-syncd-browser.log 2>&1 &
           server_pid=$!
           trap 'kill -INT ${server_pid} 2>/dev/null || true' EXIT
           for attempt in {1..60}; do
-            if curl --fail --silent http://127.0.0.1:4173/healthz > /dev/null; then
+            if curl --fail --silent http://127.0.0.1:19464/healthz > /dev/null; then
               break
             fi
             sleep 0.25
           done
+          curl --fail --silent http://127.0.0.1:19464/healthz > /dev/null
           fixture=$(mktemp -d)
           mkdir -p "${fixture}/home/.config/xo" "${fixture}/source"
           HOME="${fixture}/home" target/debug/xo config-init \
@@ -216,7 +217,7 @@ jobs:
             --state-dir "${fixture}/native-state" \
             --projection "${fixture}/projection" \
             --peer-id native-fixture \
-            --server http://127.0.0.1:4173 \
+            --server http://127.0.0.1:19464 \
             import "${fixture}/source"
           python3 web/tests/tui-driver.py \
             --port 19465 \
@@ -226,7 +227,7 @@ jobs:
               --state-dir "${fixture}/native-state" \
               --projection "${fixture}/projection" \
               --peer-id native-fixture \
-              --server http://127.0.0.1:4173 &
+              --server http://127.0.0.1:19464 &
           tui_pid=$!
           trap 'kill ${tui_pid} 2>/dev/null || true; kill -INT ${server_pid} 2>/dev/null || true' EXIT
           for attempt in {1..60}; do
@@ -237,8 +238,8 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:19465/healthz > /dev/null
           cd web
-          XO_NATIVE_FIXTURE=1 npx playwright test --project=chromium
-          npx playwright test --project=firefox --project=mobile-webkit \
+          XO_WEB_BASE_URL=http://127.0.0.1:19464 XO_NATIVE_FIXTURE=1 npx playwright test --project=chromium
+          XO_WEB_BASE_URL=http://127.0.0.1:19464 npx playwright test --project=firefox --project=mobile-webkit \
             --grep 'restores the durable|prevents mobile'
 
       - name: Package static PWA

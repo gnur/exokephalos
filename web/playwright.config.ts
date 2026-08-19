@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const baseURL = process.env.XO_WEB_BASE_URL || 'http://127.0.0.1:4173';
+
 export default defineConfig({
   testDir: './tests',
   timeout: 90_000,
@@ -8,7 +10,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? 'github' : 'list',
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL,
     trace: 'retain-on-failure',
     ...devices['Desktop Chrome'],
   },
@@ -19,7 +21,7 @@ export default defineConfig({
   ],
   webServer: {
     command: 'npm run preview -- --port 4173',
-    url: 'http://127.0.0.1:4173/healthz',
+    url: `${baseURL}/healthz`,
     reuseExistingServer: true,
     timeout: 30_000,
   },

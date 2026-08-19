@@ -96,7 +96,7 @@ jobs:
   web:
     name: xo-web static PWA
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -180,7 +180,9 @@ jobs:
 
       - name: Install Chromium, Firefox, and WebKit
         working-directory: web
-        run: npx playwright install --with-deps chromium firefox webkit
+        # GitHub's Ubuntu image already contains browser runtime libraries. Avoid
+        # a large apt transaction whose external mirror can stall the whole job.
+        run: npx playwright install chromium firefox webkit
 
       - name: Test browser central synchronization and offline recovery
         shell: bash

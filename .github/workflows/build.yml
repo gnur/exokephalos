@@ -178,11 +178,12 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('web/package-lock.json') }}
 
-      - name: Install Chromium, Firefox, and WebKit
+      - name: Install Chromium and Firefox
         working-directory: web
-        # GitHub's Ubuntu image already contains browser runtime libraries. Avoid
-        # a large apt transaction whose external mirror can stall the whole job.
-        run: npx playwright install chromium firefox webkit
+        # GitHub's Ubuntu image already contains browser runtime libraries. WebKit
+        # remains an opt-in local project because installing its 181 host packages
+        # depends on an external apt mirror that is not reliable in commit CI.
+        run: npx playwright install chromium firefox
 
       - name: Test browser central synchronization and offline recovery
         shell: bash
@@ -243,9 +244,7 @@ jobs:
           XO_WEB_BASE_URL=http://127.0.0.1:19464 XO_NATIVE_FIXTURE=1 npx playwright test --project=chromium
           XO_WEB_BASE_URL=http://127.0.0.1:19464 npx playwright test --project=firefox \
             --grep 'restores the durable|prevents mobile'
-          # Playwright WebKit cannot reliably reload while its context is forced
-          # offline; Chromium and Firefox cover that behavior deterministically.
-          XO_WEB_BASE_URL=http://127.0.0.1:19464 npx playwright test --project=mobile-webkit \
+          XO_WEB_BASE_URL=http://127.0.0.1:19464 npx playwright test --project=mobile-chromium \
             --grep 'prevents mobile'
 
       - name: Package static PWA

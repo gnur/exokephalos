@@ -1249,15 +1249,23 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             selected_row = Some(note_items.len());
         }
         let marked = app.selected_notes.contains(&note.id);
+        let selection_marker = if app.selected_notes.is_empty() {
+            String::new()
+        } else if marked {
+            "[x] ".to_owned()
+        } else {
+            "[ ] ".to_owned()
+        };
         note_items.push(
             ListItem::new(format!(
-                "{}{} {title}",
+                "{}{}{}",
                 if Some(index) == selected_index {
-                    "▶"
+                    "▶ "
                 } else {
-                    " "
+                    "  "
                 },
-                if marked { "[x]" } else { "[ ]" },
+                selection_marker,
+                title,
             ))
             .style(if Some(index) == selected_index || marked {
                 selected
@@ -1561,6 +1569,31 @@ mod tests {
         );
         assert!(!screen.contains("Offline"));
         assert!(!screen.contains("↑↓/jk"));
+    }
+
+    #[test]
+    fn selection_boxes_are_hidden_without_selection() {
+        let mut app = fixture();
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(!screen.contains("[ ]"));
+        app.toggle_selected_note();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(screen.contains("[x]"));
     }
 
     #[test]

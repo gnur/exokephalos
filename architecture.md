@@ -80,6 +80,5 @@ plaintext.
 Commit CI runs formatting, Clippy, deterministic workspace/server tests, Wasm and
 browser builds, browser offline UI tests, release-binary matrices, and the
 `xo-syncd` container. Published binaries embed the exact PWA artifact produced by
-the browser job. Release tags additionally run explicitly identified extensive
-workspace tests. Browser-central convergence, offline reload, conflict retention,
+the browser job. Browser-central convergence, offline reload, conflict retention,
 reconnect, and three-client restarted-server tests run against a real `xo-syncd`.

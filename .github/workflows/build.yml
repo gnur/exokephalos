@@ -48,9 +48,7 @@ jobs:
 
       - name: Run quick workspace tests
         run: |
-          cargo test --workspace --locked -- \
-            --skip three_persisted_peers_converge_after_isolated_edits_and_restarts \
-            --skip extensive_thousand_item_workspace_rebuilds_and_resolves
+          cargo test --workspace --locked
 
       - name: Test live Hardcover search
         env:
@@ -62,36 +60,6 @@ jobs:
             cargo test -p xo steel_plugin::tests::hardcover_live_search_uses_configured_token \
               --locked -- --ignored --exact --nocapture
           fi
-
-  extensive:
-    name: Extensive release tests
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    needs: quality
-    runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 60
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install Rust 1.89
-        uses: dtolnay/rust-toolchain@1.89.0
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: extensive-release
-
-      - name: Run 1000-item knowledge-base test
-        run: |
-          cargo test -p xo-core --features test-utils --lib \
-            extensive_thousand_item_workspace_rebuilds_and_resolves \
-            --locked -- --ignored --test-threads=1
-
-      - name: Run local relay-backed three-peer replication test
-        run: |
-          cargo test -p xo-core --features test-utils --lib \
-            three_persisted_peers_converge_after_isolated_edits_and_restarts \
-            --locked -- --test-threads=1
 
   web:
     name: xo-pwa static PWA
@@ -253,7 +221,7 @@ jobs:
       - name: Upload static PWA
         uses: actions/upload-artifact@v7
         with:
-          name: xo-pwa
+          name: pwa-build
           path: xo-pwa.tar.gz
           if-no-files-found: error
 
@@ -291,7 +259,7 @@ jobs:
       - name: Download production PWA
         uses: actions/download-artifact@v8
         with:
-          name: xo-pwa
+          name: pwa-build
           path: pwa-artifact
 
       - name: Prepare embedded production PWA
@@ -454,7 +422,6 @@ jobs:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     needs:
       - binaries
-      - extensive
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

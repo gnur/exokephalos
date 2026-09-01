@@ -4824,6 +4824,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "xo-pwa"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "automerge",
+ "base64",
+ "blake3",
+ "ciborium",
+ "console_error_panic_hook",
+ "getrandom 0.3.4",
+ "js-sys",
+ "serde",
+ "serde_json",
+ "steel-core",
+ "time",
+ "wasm-bindgen",
+ "xo-core",
+]
+
+[[package]]
 name = "xo-syncd"
 version = "0.1.0"
 dependencies = [
@@ -4845,26 +4865,6 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "xo",
- "xo-core",
-]
-
-[[package]]
-name = "xo-web"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "automerge",
- "base64",
- "blake3",
- "ciborium",
- "console_error_panic_hook",
- "getrandom 0.3.4",
- "js-sys",
- "serde",
- "serde_json",
- "steel-core",
- "time",
- "wasm-bindgen",
  "xo-core",
 ]
 

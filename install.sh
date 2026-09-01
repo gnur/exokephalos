@@ -7,7 +7,6 @@ INSTALL_DIR="${XO_INSTALL_DIR:-${HOME}/.local/bin}"
 CONFIG_DIR="${HOME}/.config/xo"
 CLIENT_STATE_DIR="${HOME}/.local/share/xo"
 SYNC_STATE_DIR="${XO_SYNCD_STATE_DIR:-${HOME}/.local/share/xo-syncd}"
-SYNCD_BIND="${XO_SYNCD_BIND:-127.0.0.1:9464}"
 SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
 
 log() {
@@ -180,7 +179,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${INSTALL_DIR}/xo-syncd --state-dir ${SYNC_STATE_DIR} --bind ${SYNCD_BIND}
+ExecStart=${INSTALL_DIR}/xo-syncd --state-dir ${SYNC_STATE_DIR}
 Restart=on-failure
 RestartSec=5s
 Environment=RUST_BACKTRACE=1

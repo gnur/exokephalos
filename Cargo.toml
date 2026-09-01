@@ -5,7 +5,7 @@ members = [
     "crates/xo",
     "crates/xo-lsp",
     "crates/xo-syncd",
-    "crates/xo-web",
+    "crates/xo-pwa",
 ]
 
 [workspace.package]

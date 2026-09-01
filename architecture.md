@@ -57,7 +57,7 @@ from the browser runtime and onboarding.
   projection, import/export, capture, and plugins.
 - `xo-syncd`: authoritative workspace, WebSocket synchronization, item API,
   health probe, and embedded PWA host.
-- `xo-web`: Rust/Wasm IndexedDB Automerge replica, centralized WebSocket worker,
+- `xo-pwa`: Rust/Wasm IndexedDB Automerge replica, centralized WebSocket worker,
   and React offline-first PWA.
 - `xo-lsp`: stdio editor diagnostics and completion over a native projection.
 

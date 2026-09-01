@@ -1,11 +1,11 @@
 {
-  "name": "xo-web",
+  "name": "xo-pwa",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "npm run typecheck && vite build",
-    "build:wasm": "cd ../crates/xo-web && wasm-pack build . --target web --release --out-dir ../../web/src/generated/xo-web",
+    "build:wasm": "cd ../crates/xo-pwa && wasm-pack build . --target web --release --out-dir ../../web/src/generated/xo-pwa",
     "dev": "npm run build:wasm && vite --host 0.0.0.0",
     "preview": "vite preview --host 0.0.0.0",
     "test:e2e": "playwright test --project=chromium",

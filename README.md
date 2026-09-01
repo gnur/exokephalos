@@ -10,7 +10,7 @@ The project has three clients:
 - **`xo`** is the terminal workspace and Markdown projection. Connect it with
   `xo --server https://notes.example.test` (the default is
   `http://127.0.0.1:9464`).
-- **`xo-web`** is an installable offline-first PWA. Its worker owns a durable
+- **`xo-pwa`** is an installable offline-first PWA. Its worker owns a durable
   Automerge replica and synchronizes with the same-origin `/api/sync` endpoint.
 - **`xo-syncd`** is the authoritative durable synchronization server. It hosts one
   workspace and will also serve the embedded PWA and item HTTP API.
@@ -47,9 +47,8 @@ reverse-proxy-protected origin:
 JSON request bodies are limited to 1 MiB. URL capture independently limits
 responses, validates every redirect, and rejects private or special addresses.
 
-The centralized transport migration is intentionally breaking. Existing legacy
-workspaces move through Markdown export/import rather than in-place state migration.
-See [`iroh-removal-plan.md`](iroh-removal-plan.md) for the completed migration.
+Existing legacy workspaces move through Markdown export/import rather than
+in-place transport-state migration.
 
 ## Example workflows
 
@@ -153,9 +152,9 @@ pairing step is required. Point native clients at that daemon with `xo --server`
 For browser access, expose the same daemon through an authenticating HTTPS
 reverse proxy.
 
-## Run the xo-web PWA
+## Run the xo-pwa PWA
 
-`xo-web` is a mobile-first React application with a Rust/Wasm runtime in a
+`xo-pwa` is a mobile-first React application with a Rust/Wasm runtime in a
 dedicated worker. It provides URL-backed navigation, views and subviews,
 search/tag filtering, rendered Markdown, editing, conflict history, and an
 offline application shell.
@@ -182,7 +181,7 @@ npm run build:wasm
 npm run build
 ```
 
-### Embed xo-web in xo-syncd
+### Embed xo-pwa in xo-syncd
 
 Release builds package `web/dist` directly into `xo-syncd`. The daemon serves
 the application shell, service worker, manifest, installer, icons, Wasm, and
@@ -368,7 +367,7 @@ Description=xo synchronization server
 After=network-online.target
 
 [Service]
-ExecStart=%h/.local/bin/xo-syncd --state-dir %h/.local/share/xo-syncd --bind 127.0.0.1:9464
+ExecStart=%h/.local/bin/xo-syncd --state-dir %h/.local/share/xo-syncd
 Restart=on-failure
 
 [Install]

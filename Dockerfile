@@ -11,8 +11,8 @@ RUN apt-get update && \
     cargo install wasm-pack --version 0.13.1 --locked
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
-    wasm-pack build crates/xo-web --target web --release \
-      --out-dir /src/generated/xo-web
+    wasm-pack build crates/xo-pwa --target web --release \
+      --out-dir /src/generated/xo-pwa
 
 FROM node:22-bookworm-slim AS web-builder
 WORKDIR /src/web
@@ -22,7 +22,7 @@ ENV XO_VERSION=${XO_VERSION}
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web ./
-COPY --from=wasm-builder /src/generated/xo-web ./src/generated/xo-web
+COPY --from=wasm-builder /src/generated/xo-pwa ./src/generated/xo-pwa
 RUN npm run build
 
 FROM rust:1.89.0-bookworm AS builder

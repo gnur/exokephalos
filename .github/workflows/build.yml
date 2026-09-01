@@ -94,7 +94,7 @@ jobs:
             --locked -- --test-threads=1
 
   web:
-    name: xo-web static PWA
+    name: xo-pwa static PWA
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     steps:
@@ -116,7 +116,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: xo-web-wasm
+          key: xo-pwa-wasm
 
       - name: Verify Wasm C compiler
         run: clang --version
@@ -159,7 +159,7 @@ jobs:
         working-directory: web
         shell: bash
         run: |
-          npm run preview -- --port 4173 > /tmp/xo-web-preview.log 2>&1 &
+          npm run preview -- --port 4173 > /tmp/xo-pwa-preview.log 2>&1 &
           preview_pid=$!
           trap 'kill ${preview_pid}' EXIT
           for attempt in {1..20}; do
@@ -248,13 +248,13 @@ jobs:
             --grep 'prevents mobile'
 
       - name: Package static PWA
-        run: tar -C web/dist -czf xo-web.tar.gz .
+        run: tar -C web/dist -czf xo-pwa.tar.gz .
 
       - name: Upload static PWA
         uses: actions/upload-artifact@v7
         with:
-          name: xo-web
-          path: xo-web.tar.gz
+          name: xo-pwa
+          path: xo-pwa.tar.gz
           if-no-files-found: error
 
   binaries:
@@ -291,14 +291,14 @@ jobs:
       - name: Download production PWA
         uses: actions/download-artifact@v8
         with:
-          name: xo-web
+          name: xo-pwa
           path: pwa-artifact
 
       - name: Prepare embedded production PWA
         shell: bash
         run: |
           mkdir -p crates/xo-syncd/pwa-dist
-          tar -C crates/xo-syncd/pwa-dist -xzf pwa-artifact/xo-web.tar.gz
+          tar -C crates/xo-syncd/pwa-dist -xzf pwa-artifact/xo-pwa.tar.gz
           test -f crates/xo-syncd/pwa-dist/index.html
           test -f crates/xo-syncd/pwa-dist/sw.js
           test -f crates/xo-syncd/pwa-dist/manifest.webmanifest

@@ -1,5 +1,5 @@
 [package]
-name = "xo-web"
+name = "xo-pwa"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

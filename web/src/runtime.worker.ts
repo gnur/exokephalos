@@ -7,7 +7,7 @@ import init, {
   run_steel,
   runtime_info,
   workspace_snapshot,
-} from './generated/xo-web/xo_web.js';
+} from './generated/xo-pwa/xo_pwa.js';
 import type {
   DocumentEntry,
   NoteMutationInput,
@@ -21,7 +21,7 @@ import type {
 } from './protocol';
 
 const scope = self as DedicatedWorkerGlobalScope;
-const DATABASE = 'xo-web';
+const DATABASE = 'xo-pwa';
 const DATABASE_VERSION = 4;
 const CHECKPOINT_STORE = 'runtime-checkpoints';
 const SETTINGS_STORE = 'central-settings';
@@ -93,7 +93,7 @@ function openDatabase() {
         if (!db.objectStoreNames.contains(store)) db.createObjectStore(store, { keyPath: 'id' });
       }
       // Version 3 stored the obsolete transport-specific replica envelope. The centralized
-      // transport is intentionally a fresh workspace migration.
+      // transport is intentionally a fresh workspace replica.
       if ((event as IDBVersionChangeEvent).oldVersion < 4 && db.objectStoreNames.contains(REPLICA_STORE)) {
         request.transaction?.objectStore(REPLICA_STORE).clear();
       }

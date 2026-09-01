@@ -103,9 +103,9 @@ jobs:
 
       - name: Validate streamed installer entry point
         run: |
-          bash -n web/public/install.sh
-          bash -c 'source web/public/install.sh'
-          output="$(sed 's/^  main "$@"$/  echo streamed-main-ran/' web/public/install.sh | bash)"
+          bash -n install.sh
+          bash -c 'source install.sh'
+          output="$(sed 's/^  main "$@"$/  echo streamed-main-ran/' install.sh | bash)"
           test "${output}" = streamed-main-ran
 
       - name: Install Rust 1.89 with Wasm target

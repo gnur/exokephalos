@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
@@ -7,6 +8,16 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       react(),
+      {
+        name: 'xo-installer',
+        generateBundle() {
+          this.emitFile({
+            type: 'asset',
+            fileName: 'install.sh',
+            source: readFileSync('../install.sh', 'utf8'),
+          });
+        },
+      },
       {
         name: 'xo-version-manifest',
         generateBundle() {

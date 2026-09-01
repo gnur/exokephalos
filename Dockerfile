@@ -17,6 +17,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 FROM node:22-bookworm-slim AS web-builder
 WORKDIR /src/web
 ARG XO_VERSION=dev
+COPY install.sh /src/install.sh
 ENV XO_VERSION=${XO_VERSION}
 COPY web/package.json web/package-lock.json ./
 RUN npm ci

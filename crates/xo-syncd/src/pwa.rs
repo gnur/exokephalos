@@ -75,6 +75,7 @@ fn content_type(path: &str) -> &'static str {
         "svg" => "image/svg+xml",
         "wasm" => "application/wasm",
         "webmanifest" => "application/manifest+json",
+        "sh" => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
     }
 }
@@ -106,6 +107,7 @@ mod tests {
         );
         assert_eq!(serve("/sw.js").headers()["cache-control"], "no-cache");
         assert_eq!(content_type("runtime.wasm"), "application/wasm");
+        assert_eq!(content_type("install.sh"), "text/plain; charset=utf-8");
         assert_eq!(
             content_type("manifest.webmanifest"),
             "application/manifest+json"

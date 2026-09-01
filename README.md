@@ -134,15 +134,16 @@ changes exist. Pushing the tag starts the GitHub Release workflow.
 
 ## Quick Install (`xo` or `xo-syncd`)
 
-You can install the native `xo` TUI, `xo-syncd` background daemon, and `xo-lsp` directly from the release installer:
+You can install the native `xo` TUI, `xo-syncd` background daemon, and `xo-lsp`
+from the repository-root installer:
 
 ```console
-curl -fsSL https://raw.githubusercontent.com/gnur/exokephalos/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/gnur/exokephalos/main/install.sh -o install.sh
+bash install.sh
 ```
 
-The same script is also served by a production `xo-syncd` instance at
-`https://your-notes-host.example/install.sh`, so a server administrator can
-install the daemon from the host's authenticated origin when appropriate.
+After you self-host `xo-syncd`, the same script is also available from that
+server's `/install.sh` route. No separate public static deployment is required.
 
 The installer detects your OS and CPU architecture (Linux x86-64/ARM64 or macOS Apple Silicon), fetches the latest release archive from GitHub, extracts the binaries to `~/.local/bin`, generates `~/.config/xo/config.scm` with `xo config-init`, and prompts you to configure `xo` and/or `xo-syncd`. The TUI uses `~/.local/share/xo`; the systemd user daemon uses the separate `~/.local/share/xo-syncd` state directory.
 

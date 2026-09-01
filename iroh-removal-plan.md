@@ -110,11 +110,11 @@ may transfer the complete Automerge history through normal Automerge sync messag
 
 - [x] Make the PWA build reproducible before `xo-syncd` embedding.
 - [x] Embed hashed assets, `index.html`, manifest, icons, service worker, and installer.
-- [x] Remove the standalone Cloudflare Pages deployment and its workflow after
-  `xo-syncd` serves the embedded PWA; production web traffic now terminates at the
-  proxy in front of `xo-syncd`, not at a separately deployed static origin.
-- [x] Remove Cloudflare-specific deployment secrets, health checks, documentation,
-  and release dependencies.
+- [x] Remove the separate static-site deployment and its workflow after `xo-syncd`
+  began serving the embedded PWA; production web traffic terminates at the proxy
+  in front of `xo-syncd`.
+- [x] Remove static-site deployment secrets, health checks, documentation, and
+  release dependencies.
 - [x] Serve SPA fallbacks without shadowing `/api/*` or `/healthz`.
 - [x] Set immutable caching for hashed assets and no-cache headers for HTML, manifest,
   service worker, and version metadata.

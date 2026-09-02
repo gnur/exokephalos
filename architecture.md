@@ -8,7 +8,9 @@ selected as the visible winner.
 
 ## Central synchronization
 
-Each `xo-syncd` process owns one durable server workspace. Native and browser
+Each `xo-syncd` process owns one durable server workspace. Server state, bind,
+and Pocket ID settings are read from `~/.config/xo-syncd/config.scm` by default;
+command-line values override the declarative file. Native and browser
 clients keep independent local Automerge replicas and synchronize through the
 same `/api/sync` WebSocket endpoint. JSON is used only for the bounded versioned
 hello and presence controls; binary frames contain opaque Automerge sync

@@ -5,6 +5,7 @@ set -euo pipefail
 REPO="${XO_REPO:-gnur/exokephalos}"
 INSTALL_DIR="${XO_INSTALL_DIR:-${HOME}/.local/bin}"
 CONFIG_DIR="${HOME}/.config/xo"
+SYNCD_CONFIG_DIR="${HOME}/.config/xo-syncd"
 CLIENT_STATE_DIR="${HOME}/.local/share/xo"
 SYNC_STATE_DIR="${XO_SYNCD_STATE_DIR:-${HOME}/.local/share/xo-syncd}"
 SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
@@ -167,17 +168,31 @@ setup_systemd_unit() {
   fi
 
   log "Setting up systemd user unit for xo-syncd..."
-  mkdir -p "${SYSTEMD_USER_DIR}" "${SYNC_STATE_DIR}"
+  mkdir -p "${SYSTEMD_USER_DIR}" "${SYNC_STATE_DIR}" "${SYNCD_CONFIG_DIR}"
 
   local oidc_issuer oidc_audience oidc_client_id
   oidc_issuer="$(prompt_choice "Pocket ID issuer URL" "")"
   oidc_audience="$(prompt_choice "Pocket ID xo API resource" "")"
   oidc_client_id="$(prompt_choice "Pocket ID public OIDC client ID" "")"
   for value in "${oidc_issuer}" "${oidc_audience}" "${oidc_client_id}"; do
-    if [[ -z "${value}" || "${value}" =~ [[:space:]] ]]; then
-      fatal "OIDC settings must be non-empty and cannot contain whitespace"
+    if [[ -z "${value}" || "${value}" =~ [[:space:]\"\\] ]]; then
+      fatal "OIDC settings must be non-empty and cannot contain whitespace, quotes, or backslashes"
     fi
   done
+
+  local syncd_config_file="${SYNCD_CONFIG_DIR}/config.scm"
+  cat > "${syncd_config_file}" <<EOF
+; xo-syncd server configuration; command-line flags override these values.
+(xo-syncd-config
+  (schema 1)
+  (state-dir "${SYNC_STATE_DIR}")
+  (bind "127.0.0.1:9464")
+  (oidc-issuer "${oidc_issuer}")
+  (oidc-audience "${oidc_audience}")
+  (oidc-client-id "${oidc_client_id}"))
+EOF
+  chmod 0600 "${syncd_config_file}"
+  log "xo-syncd configuration written to ${syncd_config_file}"
 
   local unit_file="${SYSTEMD_USER_DIR}/xo-syncd.service"
   cat > "${unit_file}" <<EOF
@@ -189,7 +204,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${INSTALL_DIR}/xo-syncd --state-dir ${SYNC_STATE_DIR} --oidc-issuer ${oidc_issuer} --oidc-audience ${oidc_audience} --oidc-client-id ${oidc_client_id}
+ExecStart=${INSTALL_DIR}/xo-syncd --config ${syncd_config_file}
 Restart=on-failure
 RestartSec=5s
 Environment=RUST_BACKTRACE=1

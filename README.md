@@ -40,6 +40,22 @@ xo-syncd --state-dir /var/lib/xo-syncd --bind 127.0.0.1:9464 \
 xo --server https://notes.example.com
 ```
 
+Server settings can instead live in `~/.config/xo-syncd/config.scm`:
+
+```scheme
+(xo-syncd-config
+  (schema 1)
+  (state-dir "~/.local/share/xo-syncd")
+  (bind "127.0.0.1:9464")
+  (oidc-issuer "https://id.example.com")
+  (oidc-audience "https://notes.example.com")
+  (oidc-client-id "YOUR_PUBLIC_CLIENT_ID"))
+```
+
+Generate a template with `xo-syncd config-init`. `xo-syncd` reads this path by
+default; use `--config PATH` for another file. Command-line options override file
+values.
+
 The Markdown directory remains a projection rather than the synchronization
 transport or a complete backup. Keep the local state directory and server state
 in normal backup procedures.
@@ -170,8 +186,9 @@ server's `/install.sh` route. No separate public static deployment is required.
 
 The installer detects your OS and CPU architecture (Linux x86-64/ARM64 or macOS Apple Silicon), fetches the latest release archive from GitHub, extracts the binaries to `~/.local/bin`, generates `~/.config/xo/config.scm` with `xo config-init`, and prompts you to configure `xo` and/or `xo-syncd`. The TUI uses `~/.local/share/xo`; the systemd user daemon uses the separate `~/.local/share/xo-syncd` state directory.
 
-When systemd setup is selected, the installer creates a user service for the
-single centralized workspace. No ticket, invitation, membership approval, or
+When systemd setup is selected, the installer writes Pocket ID and server
+settings to `~/.config/xo-syncd/config.scm` with mode `0600` and creates a user
+service for the single centralized workspace. No ticket, invitation, membership approval, or
 pairing step is required. Point native clients at that daemon with `xo --server`.
 For browser access, expose the same daemon through an HTTPS reverse proxy. Pocket
 ID authentication is enforced by `xo-syncd`; the proxy must preserve
@@ -265,11 +282,10 @@ Create a directory that will be backed up separately from the Markdown
 projection, then start one server workspace:
 
 ```console
-mkdir -p ~/.local/share/xo-syncd
-xo-syncd --state-dir ~/.local/share/xo-syncd --bind 127.0.0.1:9464 \
-  --oidc-issuer https://id.example.com \
-  --oidc-audience https://notes.example.com \
-  --oidc-client-id YOUR_PUBLIC_CLIENT_ID
+mkdir -p ~/.config/xo-syncd ~/.local/share/xo-syncd
+xo-syncd config-init > ~/.config/xo-syncd/config.scm
+# Edit the three oidc-* values in config.scm, then start:
+xo-syncd
 ```
 
 Keep this process running, or use the systemd user service created by the
@@ -395,7 +411,7 @@ Description=xo synchronization server
 After=network-online.target
 
 [Service]
-ExecStart=%h/.local/bin/xo-syncd --state-dir %h/.local/share/xo-syncd --oidc-issuer https://id.example.com --oidc-audience https://notes.example.com --oidc-client-id YOUR_PUBLIC_CLIENT_ID
+ExecStart=%h/.local/bin/xo-syncd --config %h/.config/xo-syncd/config.scm
 Restart=on-failure
 
 [Install]

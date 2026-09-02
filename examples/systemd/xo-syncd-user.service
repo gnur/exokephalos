@@ -7,7 +7,7 @@ After=network-online.target
 [Service]
 Type=simple
 ExecStartPre=/usr/bin/mkdir -p %h/.local/share/xo-syncd
-ExecStart=%h/.local/bin/xo-syncd --state-dir %h/.local/share/xo-syncd --bind 127.0.0.1:9464 --oidc-issuer https://id.example.com --oidc-audience https://notes.example.com --oidc-client-id YOUR_PUBLIC_CLIENT_ID
+ExecStart=%h/.local/bin/xo-syncd --config %h/.config/xo-syncd/config.scm
 Restart=on-failure
 RestartSec=5s
 KillSignal=SIGINT

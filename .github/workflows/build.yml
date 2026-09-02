@@ -159,7 +159,7 @@ jobs:
           set -euo pipefail
           XO_PWA_DIR="${PWD}/web/dist" cargo build --locked -p xo-syncd -p xo
           state=$(mktemp -d)
-          target/debug/xo-syncd --state-dir "${state}" --bind 127.0.0.1:19464 \
+          target/debug/xo-syncd --state-dir "${state}" --bind 127.0.0.1:19464 --unsafe-disable-auth \
             > /tmp/xo-syncd-browser.log 2>&1 &
           server_pid=$!
           trap 'kill -INT ${server_pid} 2>/dev/null || true' EXIT
@@ -301,7 +301,7 @@ jobs:
         run: |
           state=$(mktemp -d)
           binary="target/${{ matrix.target }}/release/xo-syncd"
-          "${binary}" --state-dir "${state}" --bind 127.0.0.1:19466 > /tmp/xo-syncd-embedded.log 2>&1 &
+          "${binary}" --state-dir "${state}" --bind 127.0.0.1:19466 --unsafe-disable-auth > /tmp/xo-syncd-embedded.log 2>&1 &
           pid=$!
           trap 'kill ${pid} 2>/dev/null || true' EXIT
           for attempt in {1..40}; do

@@ -77,6 +77,7 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let cli = Cli::parse();
     match &cli.command {
         Some(Command::ConfigInit) => print!("{}", XoConfig::default().document()?),
@@ -99,11 +100,13 @@ async fn main() -> Result<()> {
             item_type,
         }) => {
             let config = configured(&cli)?;
+            let access_token = xo::oauth::access_token(&cli.server, &home_dir()?).await?;
             let session = WorkspaceSession::open_central_with_plugins(
                 &config.state_dir,
                 &cli.server,
                 config.projection.clone(),
                 config.resolved_client_id()?,
+                access_token,
                 local_plugins()?,
             )
             .await?;
@@ -131,11 +134,13 @@ async fn main() -> Result<()> {
 
 async fn import_command(cli: &Cli, source: &std::path::Path, item_type: &str) -> Result<()> {
     let config = configured(cli)?;
+    let access_token = xo::oauth::access_token(&cli.server, &home_dir()?).await?;
     let mut session = WorkspaceSession::open_central_with_plugins(
         &config.state_dir,
         &cli.server,
         config.projection.clone(),
         config.resolved_client_id()?,
+        access_token,
         local_plugins()?,
     )
     .await?;
@@ -258,11 +263,13 @@ async fn run_tui(
     keys_path: &std::path::Path,
     client_id: xo_core::ClientId,
 ) -> Result<()> {
+    let access_token = xo::oauth::access_token(server, &home_dir()?).await?;
     let mut session = WorkspaceSession::open_central_with_plugins(
         state_dir,
         server,
         projection,
         client_id,
+        access_token,
         local_plugins()?,
     )
     .await?;

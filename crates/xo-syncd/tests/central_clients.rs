@@ -22,6 +22,7 @@ impl Server {
                 "--bind",
             ])
             .arg(address.to_string())
+            .arg("--unsafe-disable-auth")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -71,11 +72,13 @@ async fn two_native_replicas_converge_through_the_central_server() -> Result<()>
         &format!("http://{address}"),
         "first".to_owned(),
         Arc::clone(&first),
+        None,
     )?;
     let second_client = CentralClient::start(
         &format!("http://{address}"),
         "second".to_owned(),
         Arc::clone(&second),
+        None,
     )?;
     wait_connected(&first_client).await?;
     wait_connected(&second_client).await?;
@@ -274,6 +277,7 @@ async fn acknowledged_server_data_survives_restart() -> Result<()> {
         &format!("http://{address}"),
         "writer".to_owned(),
         Arc::clone(&writer),
+        None,
     )?;
     wait_connected(&writer_client).await?;
     writer
@@ -285,6 +289,7 @@ async fn acknowledged_server_data_survives_restart() -> Result<()> {
         &format!("http://{address}"),
         "observer".to_owned(),
         Arc::clone(&observer),
+        None,
     )?;
     wait_for_record(&observer, "test/restart", b"persisted").await?;
     writer_client.shutdown().await?;
@@ -297,6 +302,7 @@ async fn acknowledged_server_data_survives_restart() -> Result<()> {
         &format!("http://{address}"),
         "recovered".to_owned(),
         Arc::clone(&recovered),
+        None,
     )?;
     wait_connected(&recovered_client).await?;
     wait_for_record(&recovered, "test/restart", b"persisted").await?;

@@ -7,6 +7,8 @@ use futures_util::{SinkExt as _, StreamExt as _};
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
 use url::Url;
 use xo_core::central_replica::{CentralReplica, ReplicaEvent};
 use xo_core::central_sync::ControlMessage;
@@ -26,9 +28,14 @@ pub struct CentralClient {
 }
 
 impl CentralClient {
-    pub async fn discover_workspace(server: &str, client_id: &str) -> Result<String> {
+    pub async fn discover_workspace(
+        server: &str,
+        client_id: &str,
+        access_token: Option<&str>,
+    ) -> Result<String> {
         let endpoint = sync_endpoint(server)?;
-        let (mut socket, _) = tokio_tungstenite::connect_async(endpoint.as_str())
+        let request = authenticated_request(endpoint.as_str(), access_token)?;
+        let (mut socket, _) = tokio_tungstenite::connect_async(request)
             .await
             .with_context(|| format!("connect to {endpoint}"))?;
         socket
@@ -51,12 +58,24 @@ impl CentralClient {
         Ok(workspace_id)
     }
 
-    pub fn start(server: &str, client_id: String, replica: Arc<CentralReplica>) -> Result<Self> {
+    pub fn start(
+        server: &str,
+        client_id: String,
+        replica: Arc<CentralReplica>,
+        access_token: Option<String>,
+    ) -> Result<Self> {
         let endpoint = sync_endpoint(server)?;
         ControlMessage::client_hello(&client_id).validate()?;
         let (shutdown, shutdown_rx) = watch::channel(false);
         let (status_tx, status) = watch::channel(CentralClientStatus::Connecting);
-        let task = tokio::spawn(run(endpoint, client_id, replica, shutdown_rx, status_tx));
+        let task = tokio::spawn(run(
+            endpoint,
+            client_id,
+            replica,
+            access_token,
+            shutdown_rx,
+            status_tx,
+        ));
         Ok(Self {
             shutdown,
             status,
@@ -85,6 +104,7 @@ async fn run(
     endpoint: Url,
     client_id: String,
     replica: Arc<CentralReplica>,
+    access_token: Option<String>,
     mut shutdown: watch::Receiver<bool>,
     status: watch::Sender<CentralClientStatus>,
 ) {
@@ -99,6 +119,7 @@ async fn run(
             endpoint.as_str(),
             &client_id,
             Arc::clone(&replica),
+            access_token.as_deref(),
             &mut shutdown,
             &status,
         )
@@ -135,10 +156,12 @@ async fn synchronize_once(
     endpoint: &str,
     client_id: &str,
     replica: Arc<CentralReplica>,
+    access_token: Option<&str>,
     shutdown: &mut watch::Receiver<bool>,
     status: &watch::Sender<CentralClientStatus>,
 ) -> Result<()> {
-    let (socket, _) = tokio_tungstenite::connect_async(endpoint)
+    let request = authenticated_request(endpoint, access_token)?;
+    let (socket, _) = tokio_tungstenite::connect_async(request)
         .await
         .with_context(|| format!("connect to {endpoint}"))?;
     let (mut sender, mut receiver) = socket.split();
@@ -220,6 +243,21 @@ async fn synchronize_once(
             }
         }
     }
+}
+
+fn authenticated_request(
+    endpoint: &str,
+    access_token: Option<&str>,
+) -> Result<tokio_tungstenite::tungstenite::http::Request<()>> {
+    let mut request = endpoint.into_client_request()?;
+    if let Some(token) = access_token {
+        request.headers_mut().insert(
+            "authorization",
+            HeaderValue::from_str(&format!("Bearer {token}"))
+                .context("access token is not a valid HTTP header value")?,
+        );
+    }
+    Ok(request)
 }
 
 fn sync_endpoint(server: &str) -> Result<Url> {

@@ -38,6 +38,10 @@ export class XoRuntime {
     return this.#call<RuntimeReport>('initialize');
   }
 
+  setAccessToken(accessToken?: string) {
+    return this.#call<void>('set-access-token', accessToken ?? '');
+  }
+
   setClientId(clientId: string) {
     return this.#call<RuntimeReport>('set-client-id', clientId);
   }

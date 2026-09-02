@@ -18,9 +18,9 @@ The server fsyncs accepted Automerge changes before they can be observed by
 another client. Native clients also persist local changes before reporting local
 success. Clients remain usable while disconnected and reconnect with bounded
 backoff. Human-readable client IDs are presence labels, not security identities.
-`xo-syncd` performs no authentication; browser deployments require an
-authenticating HTTPS reverse proxy, while directly connected TUI clients are
-trusted.
+`xo-syncd` validates Pocket ID OAuth access-token signatures, issuer, audience,
+expiry, and permissions. Browser clients use authorization code + PKCE; native
+clients use device authorization and locally persisted refresh credentials.
 
 ## Records, HTTP API, and conflicts
 
@@ -30,8 +30,11 @@ conflicts. Deletion and restoration are revisions. Workspace Steel configuration
 is replicated state rather than a projection file.
 
 `xo-syncd` exposes `GET`, `PATCH`, and `DELETE /api/items/{id}` plus URL capture
-through `POST /api/items`. API writes use the same typed record repository,
-revision graph, heads, HLC, and Automerge document as synchronized clients. URL
+through `POST /api/items`. Reads require `xo:read`, writes require `xo:write`, and
+sync requires all three permissions. The public `POST /api/webhook/{source}` exception creates
+a webhook note containing YAML-rendered headers and JSON. API writes use the same
+typed record repository, revision graph, heads, HLC, and Automerge document as
+synchronized clients. URL
 capture resolves and pins public addresses, revalidates redirects, rejects
 private or special networks, and bounds response sizes.
 
@@ -45,7 +48,10 @@ routes use the SPA fallback without shadowing `/api/*` or `/healthz`.
 
 The browser worker owns a Wasm Automerge replica, restores its complete snapshot
 from IndexedDB before networking, and reconnects to same-origin `/api/sync` with
-bounded backoff. Browser writes persist the snapshot before returning success.
+bounded backoff and a Pocket ID bearer token carried in the WebSocket handshake.
+A previously authenticated cached application remains usable offline. Logout
+wipes OAuth credentials, IndexedDB, application caches, and service workers.
+Browser writes persist the snapshot before returning success.
 Invitation, membership, relay, Gossip, Pkarr, and signed-change state are absent
 from the browser runtime and onboarding.
 
@@ -69,8 +75,10 @@ single-process owned.
 Steel executes in a fresh bounded VM. Forge plugins are local native-client
 configuration rather than replicated workspace state. Plugins receive only
 explicitly granted host capabilities and secrets; interactive UI and persistence
-remain xo host primitives. `xo-syncd` trusts requests that reach it, so the
-reverse proxy is the browser authentication boundary. URL capture does not trust
+remain xo host primitives. `xo-syncd` is the application authentication boundary;
+the reverse proxy terminates TLS and must preserve bearer and WebSocket protocol
+headers. Health, browser OIDC configuration, and the explicitly public webhook
+route are exceptions. URL capture does not trust
 DNS names or redirects to remain public. Passphrase-encrypted note ciphertext is
 authenticated to the note identity and may synchronize without exposing its
 plaintext.

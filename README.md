@@ -20,23 +20,31 @@ clients retain cached notes and pending Automerge changes. Reconnection preserve
 immutable revision history and concurrent conflicts rather than overwriting one
 client with another.
 
-`xo-syncd` deliberately has no application authentication. Deploy it behind an
-authenticating reverse proxy for browser access. A TUI may connect directly on a
-trusted network. Client IDs are presence labels, not security identities.
+`xo-syncd` authenticates browser, native sync, and item API requests with Pocket
+ID OAuth access tokens. It validates token signatures, issuer, audience, expiry,
+and endpoint permissions. The PWA uses authorization code + PKCE; a new TUI uses
+Pocket ID's device authorization flow and stores refresh credentials in
+`~/.config/xo/auth.json` with mode `0600`. Client IDs remain presence labels, not
+security identities.
 
-Start a server and TUI with:
+Create a Pocket ID API resource for the public xo origin, add `xo:read`,
+`xo:write`, and `xo:sync` permissions, and grant all three to a public OIDC client
+that permits authorization code + PKCE, refresh tokens, and device authorization.
+Then start the server and TUI with:
 
 ```console
-xo-syncd --state-dir /var/lib/xo-syncd --bind 127.0.0.1:9464
-xo --server http://127.0.0.1:9464
+xo-syncd --state-dir /var/lib/xo-syncd --bind 127.0.0.1:9464 \
+  --oidc-issuer https://id.example.com \
+  --oidc-audience https://notes.example.com \
+  --oidc-client-id YOUR_PUBLIC_CLIENT_ID
+xo --server https://notes.example.com
 ```
 
 The Markdown directory remains a projection rather than the synchronization
 transport or a complete backup. Keep the local state directory and server state
 in normal backup procedures.
 
-`xo-syncd` also exposes an unauthenticated item API on the same trusted or
-reverse-proxy-protected origin:
+`xo-syncd` exposes an OAuth-protected item API:
 
 - `GET /api/items/{id}` returns `frontmatter` and `body`.
 - `POST /api/items` accepts `{ "url": "https://…" }` and safely captures a public
@@ -44,8 +52,24 @@ reverse-proxy-protected origin:
 - `PATCH /api/items/{id}` accepts optional `frontmatter` and `body` fields.
 - `DELETE /api/items/{id}` creates an immutable deleted revision.
 
-JSON request bodies are limited to 1 MiB. URL capture independently limits
-responses, validates every redirect, and rejects private or special addresses.
+Send Pocket ID access tokens as `Authorization: Bearer …`. Reads require
+`xo:read`, writes require `xo:write`, and `/api/sync` requires all three permissions. JSON
+request bodies are limited to 1 MiB. URL capture independently limits responses,
+validates every redirect, and rejects private or special addresses.
+
+`POST /api/webhook/{source}` is the intentional public exception. It creates a
+`type: webhook` item tagged `source:<source>`. The Markdown body contains a YAML
+fence with request headers followed by either a YAML fence for a JSON request
+body or an unlabelled fence containing the body unchanged. Because this endpoint
+is unauthenticated, apply reverse-proxy rate and body limits if it is reachable
+from the Internet. For example:
+
+```console
+curl -X POST https://notes.example.com/api/webhook/github \
+  -H 'Content-Type: application/json' \
+  -H 'X-GitHub-Event: issues' \
+  --data '{"action":"opened","number":42}'
+```
 
 Existing legacy workspaces move through Markdown export/import rather than
 in-place transport-state migration.
@@ -68,7 +92,7 @@ creating and editing while offline. It reconnects to the same-origin
 ### 3. Always-on home or server
 
 Run `xo-syncd` on a workstation, NAS, VPS, or small home server and put an
-authenticating HTTPS reverse proxy in front of it. TUI clients use `--server`;
+HTTPS reverse proxy in front of it. TUI clients use `--server`;
 browsers use the same origin. No invitation or membership setup is required.
 
 ### 4. Multi-device offline collaboration
@@ -149,8 +173,9 @@ The installer detects your OS and CPU architecture (Linux x86-64/ARM64 or macOS 
 When systemd setup is selected, the installer creates a user service for the
 single centralized workspace. No ticket, invitation, membership approval, or
 pairing step is required. Point native clients at that daemon with `xo --server`.
-For browser access, expose the same daemon through an authenticating HTTPS
-reverse proxy.
+For browser access, expose the same daemon through an HTTPS reverse proxy. Pocket
+ID authentication is enforced by `xo-syncd`; the proxy must preserve
+`Authorization` and WebSocket subprotocol headers.
 
 ## Run the xo-pwa PWA
 
@@ -167,7 +192,7 @@ membership identities, relay, Gossip, Pkarr, and signed-change state have been
 removed.
 
 Production PWA assets are embedded in `xo-syncd`; there is no separate static
-production deployment. Open the authenticated origin serving the daemon. Static
+production deployment. Pocket ID login gates workspace access. Static
 assets and cached UI remain client-side, while synchronization and the item API
 share that origin. The development fallback page is not the production PWA.
 
@@ -198,8 +223,7 @@ XO_PWA_DIR="$PWD/web/dist" cargo build --release -p xo-syncd
 
 Without `XO_PWA_DIR`, development builds contain a small diagnostic fallback
 page. Published binaries and the `xo-syncd` container always use the tested PWA
-artifact. Put the daemon behind an authenticating HTTPS reverse proxy for
-browser access.
+artifact. Put the daemon behind an HTTPS reverse proxy for TLS termination.
 
 ## How synchronization works
 
@@ -242,7 +266,10 @@ projection, then start one server workspace:
 
 ```console
 mkdir -p ~/.local/share/xo-syncd
-xo-syncd --state-dir ~/.local/share/xo-syncd --bind 127.0.0.1:9464
+xo-syncd --state-dir ~/.local/share/xo-syncd --bind 127.0.0.1:9464 \
+  --oidc-issuer https://id.example.com \
+  --oidc-audience https://notes.example.com \
+  --oidc-client-id YOUR_PUBLIC_CLIENT_ID
 ```
 
 Keep this process running, or use the systemd user service created by the
@@ -296,9 +323,9 @@ the server directory and should also be backed up.
 
 ### 4. Publish the server for mobile access
 
-Do not expose unauthenticated `xo-syncd` directly to the Internet. Put an
-HTTPS reverse proxy with authentication in front of it, preserve WebSocket
-upgrades, and proxy the same origin to `127.0.0.1:9464`. For example, the
+Put an HTTPS reverse proxy in front of `xo-syncd`, preserve `Authorization` and
+`Sec-WebSocket-Protocol`, enable WebSocket upgrades, and proxy the same origin to
+`127.0.0.1:9464`. For example, the
 proxy must route:
 
 ```text
@@ -307,19 +334,16 @@ https://notes.example.com/api/sync  -> WebSocket http://127.0.0.1:9464/api/sync
 https://notes.example.com/api/...   -> http://127.0.0.1:9464/api/...
 ```
 
-Configure DNS and HTTPS certificates for `notes.example.com`, and require the
-same authentication policy for the PWA, item API, and WebSocket endpoint. A
-reverse proxy is also the TLS termination point; `xo-syncd` intentionally does
-not implement authentication or TLS.
-
-For a LAN-only setup, a trusted HTTP reverse proxy or direct LAN binding can be
-used instead, but it provides no application authentication and should not be
-Internet-facing.
+Configure DNS and HTTPS certificates for `notes.example.com`. The reverse proxy
+is the TLS termination point; `xo-syncd` performs Pocket ID token validation but
+does not implement TLS. Register `https://notes.example.com/` as the public
+client's redirect URI in Pocket ID. Plain HTTP should be used only on localhost
+because authorization code + PKCE and bearer tokens otherwise require HTTPS.
 
 ### 5. Open the PWA on the phone
 
-On the phone, open `https://notes.example.com/`, complete the proxy
-authentication, choose a human-readable client ID such as `phone`, and connect.
+On the phone, open `https://notes.example.com/`, complete Pocket ID login, choose
+a human-readable client ID such as `phone`, and connect.
 The PWA restores its IndexedDB replica before connecting, so it remains usable
 offline after its first successful load. Install it to the home screen if
 desired. The phone and laptop then synchronize through the same `/api/sync`
@@ -342,13 +366,17 @@ these are presence labels and do not grant or revoke access.
 
 ### Server routes
 
-- `GET /healthz` returns exactly `ok\n`.
-- `GET /api/sync` upgrades to centralized Automerge synchronization.
+- `GET /healthz` returns exactly `ok\n` without authentication.
+- `GET /.well-known/xo-configuration` exposes non-secret Pocket ID client configuration.
+- `GET /api/sync` requires `xo:read`, `xo:write`, and `xo:sync` and upgrades to Automerge synchronization.
 - `GET /api/items/{id}` returns an item.
 - `POST /api/items` safely captures a public URL.
 - `PATCH /api/items/{id}` updates supplied fields through a new revision.
 - `DELETE /api/items/{id}` creates a deleted revision.
-- Other GET routes serve the embedded PWA with SPA fallback.
+- `POST /api/webhook/{source}` publicly creates a webhook item.
+- Other GET routes serve the embedded PWA with SPA fallback; the application
+  gates workspace access on Pocket ID login and remains available from its cache
+  while offline.
 
 The item API currently has no ETag or conditional-write contract. API mutations
 are serialized inside `xo-syncd`, while races with synchronized clients are
@@ -367,7 +395,7 @@ Description=xo synchronization server
 After=network-online.target
 
 [Service]
-ExecStart=%h/.local/bin/xo-syncd --state-dir %h/.local/share/xo-syncd
+ExecStart=%h/.local/bin/xo-syncd --state-dir %h/.local/share/xo-syncd --oidc-issuer https://id.example.com --oidc-audience https://notes.example.com --oidc-client-id YOUR_PUBLIC_CLIENT_ID
 Restart=on-failure
 
 [Install]
@@ -380,7 +408,11 @@ The supported image is the combined daemon, API, and embedded PWA:
 
 ```console
 docker run --rm -p 9464:9464 -v xo-data:/data \
-  ghcr.io/gnur/xo-syncd:latest
+  ghcr.io/gnur/xo-syncd:latest \
+  --state-dir /data --bind 0.0.0.0:9464 \
+  --oidc-issuer https://id.example.com \
+  --oidc-audience https://notes.example.com \
+  --oidc-client-id YOUR_PUBLIC_CLIENT_ID
 ```
 
 The image health check uses `/healthz`. Published multi-platform images reuse
@@ -665,5 +697,7 @@ stopped-process filesystem backups; Markdown import/export is provided by `xo`.
 
 ## Current limitations
 
-- `xo-syncd` has no authentication or TLS termination; use an authenticating HTTPS
-  reverse proxy for browser deployments.
+- `xo-syncd` validates Pocket ID access tokens but has no TLS termination; use an
+  HTTPS reverse proxy.
+- The deliberately public webhook endpoint has no sender authentication; enforce
+  network policy, rate limits, and request limits at the reverse proxy when needed.

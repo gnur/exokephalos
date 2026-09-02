@@ -26,5 +26,5 @@ Losing heads that are not ancestors of the winner are conflicts and remain
 available.
 
 Client IDs are presence labels only. Authorization is outside the record model:
-`xo-syncd` trusts direct clients and relies on an authenticating HTTPS reverse
-proxy for browser deployments.
+`xo-syncd` validates Pocket ID OAuth access tokens and permissions before item
+API or synchronization access. The HTTPS reverse proxy terminates TLS.

@@ -114,6 +114,7 @@ export interface RuntimeReport {
 
 export type WorkerMethod =
   | 'initialize'
+  | 'set-access-token'
   | 'steel-probe'
   | 'set-client-id'
   | 'put-entry'

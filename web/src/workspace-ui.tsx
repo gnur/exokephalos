@@ -447,7 +447,7 @@ function SettingsPane({ report, busy, onRefresh, onRestore, onWipe }: {
     {report.workspace?.deleted.length ? <details className="deleted-panel"><summary>Deleted notes ({report.workspace.deleted.length})</summary>{report.workspace.deleted.map((note) => <div key={note.id}><span><strong>{noteTitle(note)}</strong><small>{note.id}</small></span><button className="button" onClick={() => onRestore(note.id)}>Restore</button></div>)}</details> : null}
     {report.workspace?.diagnostics.map((diagnostic) => <p className="error-message" key={diagnostic}>{diagnostic}</p>)}
     <details className="raw-panel"><summary>Raw Automerge records ({report.entries.length})</summary><div className="entry-list">{report.entries.map((entry) => <EntryRow key={entry.keyBase64} entry={entry} />)}</div></details>
-    <div className="settings-section danger-zone"><p className="legacy-eyebrow">Local browser data</p><h2>Reset this client</h2><p>Remove the client label, durable Automerge replica, pending synchronization state, and offline application files from this browser.</p><button className="button danger-button" disabled={busy} onClick={onWipe}><Trash2 /> Wipe all browser data</button></div>
+    <div className="settings-section danger-zone"><p className="legacy-eyebrow">Authentication and local data</p><h2>Sign out</h2><p>Sign out and remove the client label, OAuth credentials, durable Automerge replica, pending synchronization state, and offline application files from this browser.</p><button className="button danger-button" disabled={busy} onClick={onWipe}><Trash2 /> Sign out and wipe this browser</button></div>
   </section>;
 }
 

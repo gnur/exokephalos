@@ -169,6 +169,16 @@ setup_systemd_unit() {
   log "Setting up systemd user unit for xo-syncd..."
   mkdir -p "${SYSTEMD_USER_DIR}" "${SYNC_STATE_DIR}"
 
+  local oidc_issuer oidc_audience oidc_client_id
+  oidc_issuer="$(prompt_choice "Pocket ID issuer URL" "")"
+  oidc_audience="$(prompt_choice "Pocket ID xo API resource" "")"
+  oidc_client_id="$(prompt_choice "Pocket ID public OIDC client ID" "")"
+  for value in "${oidc_issuer}" "${oidc_audience}" "${oidc_client_id}"; do
+    if [[ -z "${value}" || "${value}" =~ [[:space:]] ]]; then
+      fatal "OIDC settings must be non-empty and cannot contain whitespace"
+    fi
+  done
+
   local unit_file="${SYSTEMD_USER_DIR}/xo-syncd.service"
   cat > "${unit_file}" <<EOF
 [Unit]
@@ -179,7 +189,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${INSTALL_DIR}/xo-syncd --state-dir ${SYNC_STATE_DIR}
+ExecStart=${INSTALL_DIR}/xo-syncd --state-dir ${SYNC_STATE_DIR} --oidc-issuer ${oidc_issuer} --oidc-audience ${oidc_audience} --oidc-client-id ${oidc_client_id}
 Restart=on-failure
 RestartSec=5s
 Environment=RUST_BACKTRACE=1

@@ -34,10 +34,11 @@ http-body-util = "0.1.4"
 hyper = { version = "1.11.0", features = ["http1", "server"] }
 hyper-util = { version = "0.1.20", features = ["tokio"] }
 hostname = "0.4.2"
+jsonwebtoken = "9.3.1"
 notify = "=8.2.0"
 quick_html2md = { version = "0.2.1", features = ["url"] }
 rand = "0.9.2"
-reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls-no-provider"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "form", "rustls-no-provider"] }
 rustls = { version = "0.23.42", default-features = false, features = ["ring"] }
 ratatui = "0.30.2"
 rpassword = "7.4.0"

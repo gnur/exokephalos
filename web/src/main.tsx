@@ -28,6 +28,7 @@ import {
 import { registerSW } from 'virtual:pwa-register';
 import type { NoteQueryInput, RuntimeReport, RuntimeState } from './protocol';
 import { XoRuntime } from './runtime';
+import { authenticate } from './auth';
 import { WorkspaceExperience } from './workspace-ui';
 import './styles.css';
 
@@ -119,7 +120,7 @@ function reportRevision(report?: RuntimeReport) {
   });
 }
 
-function App() {
+function App({ accessToken }: { accessToken: string }) {
   const runtimeRef = useRef<XoRuntime | undefined>(undefined);
   const initialRoute = useRef(workspaceRouteState());
   const [state, setState] = useState<RuntimeState>('starting');
@@ -139,7 +140,7 @@ function App() {
     const runtime = new XoRuntime();
     runtimeRef.current = runtime;
     let active = true;
-    void runtime.initialize().then((next) => {
+    void runtime.setAccessToken(accessToken).then(() => runtime.initialize()).then((next) => {
       if (!active) return;
       setReport(next);
       setState('ready');
@@ -153,7 +154,7 @@ function App() {
       if (runtimeRef.current === runtime) runtimeRef.current = undefined;
       runtime.terminate();
     };
-  }, []);
+  }, [accessToken]);
 
   useEffect(() => {
     if (state !== 'ready' || !report?.clientId) return;
@@ -180,6 +181,20 @@ function App() {
       window.clearInterval(timer);
     };
   }, [state, report?.clientId]);
+
+  useEffect(() => {
+    const refreshAuthentication = async () => {
+      if (!navigator.onLine) return;
+      try {
+        const session = await authenticate();
+        if (session.accessToken) await runtimeRef.current?.setAccessToken(session.accessToken);
+      } catch (cause) {
+        setError(errorMessage(cause));
+      }
+    };
+    const timer = window.setInterval(() => void refreshAuthentication(), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     const onUpdate = () => setUpdateAvailable(true);
@@ -469,4 +484,16 @@ function errorMessage(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>);
+const root = createRoot(document.getElementById('root')!);
+root.render(<p className="auth-loading">Checking sign-in…</p>);
+void authenticate()
+  .then((session) => {
+    root.render(
+      <React.StrictMode>
+        <App accessToken={session.accessToken ?? (session.disabled ? 'unsafe-disabled' : '')} />
+      </React.StrictMode>,
+    );
+  })
+  .catch((error: unknown) => {
+    root.render(<p className="error-message">{errorMessage(error)}</p>);
+  });

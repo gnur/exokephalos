@@ -82,6 +82,7 @@ impl WorkspaceSession {
             projection,
             client_id,
             None,
+            None,
             BTreeMap::new(),
         )
     }
@@ -92,8 +93,15 @@ impl WorkspaceSession {
         projection: PathBuf,
         client_id: xo_core::ClientId,
     ) -> Result<Self> {
-        Self::open_central_with_plugins(state_dir, server, projection, client_id, BTreeMap::new())
-            .await
+        Self::open_central_with_plugins(
+            state_dir,
+            server,
+            projection,
+            client_id,
+            None,
+            BTreeMap::new(),
+        )
+        .await
     }
 
     pub async fn open_central_with_plugins(
@@ -101,15 +109,18 @@ impl WorkspaceSession {
         server: &str,
         projection: PathBuf,
         client_id: xo_core::ClientId,
+        access_token: Option<String>,
         plugin_sources: BTreeMap<String, String>,
     ) -> Result<Self> {
         let workspace_id = match read_active_workspace(state_dir)? {
             Some(value) => value,
-            None => {
-                crate::central_client::CentralClient::discover_workspace(server, client_id.as_str())
-                    .await
-                    .context("discover server workspace")?
-            }
+            None => crate::central_client::CentralClient::discover_workspace(
+                server,
+                client_id.as_str(),
+                access_token.as_deref(),
+            )
+            .await
+            .context("discover server workspace")?,
         };
         Self::build(
             state_dir,
@@ -117,6 +128,7 @@ impl WorkspaceSession {
             projection,
             client_id,
             Some(server),
+            access_token.as_deref(),
             plugin_sources,
         )
     }
@@ -127,6 +139,7 @@ impl WorkspaceSession {
         projection: PathBuf,
         client_id: xo_core::ClientId,
         server: Option<&str>,
+        access_token: Option<&str>,
         plugin_sources: BTreeMap<String, String>,
     ) -> Result<Self> {
         std::fs::create_dir_all(state_dir)
@@ -147,6 +160,7 @@ impl WorkspaceSession {
                     server,
                     client_id.to_string(),
                     std::sync::Arc::clone(&replica),
+                    access_token.map(str::to_owned),
                 )
             })
             .transpose()?;

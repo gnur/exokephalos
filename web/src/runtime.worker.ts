@@ -67,6 +67,7 @@ let settings: Settings | undefined;
 let replica: BrowserReplica | undefined;
 let socket: WebSocket | undefined;
 let connection: 'offline' | 'connecting' | 'connected' = 'offline';
+let accessToken: string | undefined;
 let connectedClients: string[] = [];
 let reconnectTimer: number | undefined;
 let reconnectAttempt = 0;
@@ -206,7 +207,12 @@ function connectNow() {
   if (reconnectTimer !== undefined) scope.clearTimeout(reconnectTimer);
   reconnectTimer = undefined;
   connection = 'connecting';
-  const next = new WebSocket(socketUrl());
+  if (!accessToken) {
+    lastSyncError = 'Sign in is required before synchronization.';
+    connection = 'offline';
+    return;
+  }
+  const next = new WebSocket(socketUrl(), ['xo-sync', `xo-bearer.${accessToken}`]);
   next.binaryType = 'arraybuffer';
   socket = next;
   next.addEventListener('open', () => {
@@ -405,6 +411,11 @@ async function handle(request: WorkerRequest): Promise<unknown> {
   }
   await initializeWasm();
   switch (request.method) {
+    case 'set-access-token':
+      if (typeof request.payload !== 'string') throw new Error('Access token must be a string');
+      accessToken = request.payload || undefined;
+      connectNow();
+      return undefined;
     case 'steel-probe':
       if (typeof request.payload !== 'string') throw new Error('Steel source must be a string');
       return run_steel(request.payload);

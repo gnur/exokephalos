@@ -138,7 +138,7 @@ test('wipes the browser replica and returns to client onboarding', async ({ page
   await page.getByRole('button', { name: 'Open navigation' }).click();
   await page.getByRole('button', { name: 'Settings' }).click();
   page.once('dialog', (dialog) => dialog.accept());
-  await page.getByRole('button', { name: 'Wipe all browser data' }).click();
+  await page.getByRole('button', { name: 'Sign out and wipe this browser' }).click();
   await expect(page.getByLabel('Client ID')).toBeVisible();
 });
 

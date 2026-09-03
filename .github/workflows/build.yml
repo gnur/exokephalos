@@ -3,6 +3,12 @@ name: Build
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      live_hardcover:
+        description: Run the opt-in live Hardcover integration test
+        required: false
+        type: boolean
+        default: false
   push:
     branches:
       - main
@@ -50,12 +56,16 @@ jobs:
         run: |
           cargo test --workspace --locked
 
-      - name: Test live Hardcover search
+      - name: Test live Hardcover search when explicitly requested
         env:
           HARDCOVER_TOKEN: ${{ secrets.HARDCOVER_TOKEN }}
+          RUN_LIVE_HARDCOVER: ${{ github.event_name == 'workflow_dispatch' && inputs.live_hardcover }}
         run: |
-          if [[ -z "${HARDCOVER_TOKEN}" ]]; then
-            echo 'HARDCOVER_TOKEN is unavailable; live Hardcover integration test is intentionally skipped.'
+          if [[ "${RUN_LIVE_HARDCOVER}" != "true" ]]; then
+            echo 'Live Hardcover integration is opt-in and intentionally skipped.'
+          elif [[ -z "${HARDCOVER_TOKEN}" ]]; then
+            echo 'HARDCOVER_TOKEN is unavailable; requested live test cannot run.' >&2
+            exit 1
           else
             cargo test -p xo steel_plugin::tests::hardcover_live_search_uses_configured_token \
               --locked -- --ignored --exact --nocapture

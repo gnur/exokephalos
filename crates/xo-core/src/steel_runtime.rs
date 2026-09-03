@@ -250,14 +250,20 @@ fn sandbox(now: &str) -> Engine {
         .register_fn("schema", |value: isize| value.to_string())
         .register_fn("state-dir", |value: String| value)
         .register_fn("client-id", optional_config_value)
+        .register_fn("server", |value: String| value)
         .register_fn("projection", |value: String| value)
         .register_fn(
             "xo-config",
-            |schema: String, state_dir: String, client_id: String, projection: String| {
+            |schema: String,
+             state_dir: String,
+             client_id: String,
+             server: String,
+             projection: String| {
                 serde_json::json!({
                     "schema": schema.parse::<u16>().unwrap_or_default(),
                     "state_dir": state_dir,
                     "client_id": (!client_id.is_empty()).then_some(client_id),
+                    "server": server,
                     "projection": projection,
                 })
                 .to_string()
@@ -866,6 +872,7 @@ struct NativeXoFields {
     schema: u16,
     state_dir: String,
     client_id: Option<String>,
+    server: String,
     projection: String,
 }
 
@@ -876,10 +883,11 @@ impl NativeXoFields {
         };
         let optional = |value: Option<&str>| value.map_or_else(|| "#f".to_owned(), string);
         format!(
-            "(xo-config (schema {}) (state-dir {}) (client-id {}) (projection {}))",
+            "(xo-config (schema {}) (state-dir {}) (client-id {}) (server {}) (projection {}))",
             self.schema,
             string(&self.state_dir),
             optional(self.client_id.as_deref()),
+            string(&self.server),
             string(&self.projection),
         )
     }
@@ -904,6 +912,7 @@ impl<'a> NativeXoParser<'a> {
         let mut schema = None;
         let mut state_dir = None;
         let mut client_id = None;
+        let mut server = None;
         let mut projection = None;
         loop {
             self.skip_ignored();
@@ -924,6 +933,9 @@ impl<'a> NativeXoParser<'a> {
                     "client-id",
                     self.position,
                 )?,
+                "server" => {
+                    set_once(&mut server, self.string()?, "server", self.position)?;
+                }
                 "projection" => {
                     set_once(&mut projection, self.string()?, "projection", self.position)?;
                 }
@@ -939,6 +951,7 @@ impl<'a> NativeXoParser<'a> {
             schema: required(schema, "schema", self.position)?,
             state_dir: required(state_dir, "state-dir", self.position)?,
             client_id: client_id.unwrap_or(None),
+            server: server.unwrap_or_else(|| "http://127.0.0.1:9464".to_owned()),
             projection: required(projection, "projection", self.position)?,
         })
     }

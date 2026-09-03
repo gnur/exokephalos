@@ -307,8 +307,22 @@ Initialize the native client configuration and choose a projection directory:
 ```console
 mkdir -p ~/.config/xo
 xo config-init > ~/.config/xo/config.scm
-# Edit config.scm if you want a projection other than ~/notes.
+# Edit config.scm to set the sync server and, optionally, another projection.
 ```
+
+The native client configuration includes the server URL:
+
+```scheme
+(xo-config
+  (schema 5)
+  (state-dir "~/.local/share/xo")
+  (client-id #f)
+  (server "https://notes.example.com")
+  (projection "~/notes"))
+```
+
+`--server` overrides this value for one invocation. Schema 4 files without a
+`server` field remain accepted and use `http://127.0.0.1:9464`.
 
 The Markdown tree is a projection, not the authoritative store. For an existing
 folder, make a copy outside the configured projection and import the copy into

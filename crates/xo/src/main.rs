@@ -43,9 +43,9 @@ struct Cli {
     /// Override the human-readable presence client ID (defaults to the host name).
     #[arg(long)]
     client_id: Option<String>,
-    /// Central xo-syncd HTTP(S) base URL.
-    #[arg(long, default_value = "http://127.0.0.1:9464")]
-    server: String,
+    /// Override the central xo-syncd HTTP(S) base URL from config.scm.
+    #[arg(long)]
+    server: Option<String>,
     /// Override the local Markdown projection directory from config.scm.
     #[arg(long)]
     projection: Option<PathBuf>,
@@ -100,10 +100,10 @@ async fn main() -> Result<()> {
             item_type,
         }) => {
             let config = configured(&cli)?;
-            let access_token = xo::oauth::access_token(&cli.server, &home_dir()?).await?;
+            let access_token = xo::oauth::access_token(&config.server, &home_dir()?).await?;
             let session = WorkspaceSession::open_central_with_plugins(
                 &config.state_dir,
-                &cli.server,
+                &config.server,
                 config.projection.clone(),
                 config.resolved_client_id()?,
                 access_token,
@@ -121,7 +121,7 @@ async fn main() -> Result<()> {
             let config = configured(&cli)?;
             run_tui(
                 &config.state_dir,
-                &cli.server,
+                &config.server,
                 config.projection.clone(),
                 &config_path(&home_dir()?).with_file_name("keys.scm"),
                 config.resolved_client_id()?,
@@ -134,10 +134,10 @@ async fn main() -> Result<()> {
 
 async fn import_command(cli: &Cli, source: &std::path::Path, item_type: &str) -> Result<()> {
     let config = configured(cli)?;
-    let access_token = xo::oauth::access_token(&cli.server, &home_dir()?).await?;
+    let access_token = xo::oauth::access_token(&config.server, &home_dir()?).await?;
     let mut session = WorkspaceSession::open_central_with_plugins(
         &config.state_dir,
-        &cli.server,
+        &config.server,
         config.projection.clone(),
         config.resolved_client_id()?,
         access_token,
@@ -248,6 +248,7 @@ fn configured(cli: &Cli) -> Result<XoConfig> {
         CliOverrides {
             state_dir: cli.state_dir.clone(),
             client_id: cli.client_id.clone(),
+            server: cli.server.clone(),
             projection: cli.projection.clone(),
         },
         &home,
@@ -1322,7 +1323,7 @@ mod cli_tests {
             cli.state_dir.as_deref(),
             Some(std::path::Path::new("/state"))
         );
-        assert_eq!(cli.server, "https://xo.example.test");
+        assert_eq!(cli.server.as_deref(), Some("https://xo.example.test"));
         assert_eq!(
             cli.projection.as_deref(),
             Some(std::path::Path::new("/notes"))

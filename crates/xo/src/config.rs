@@ -13,11 +13,12 @@ pub struct XoConfig {
     pub state_dir: PathBuf,
     #[serde(default)]
     pub client_id: Option<String>,
+    pub server: String,
     pub projection: PathBuf,
 }
 
 const fn schema() -> u16 {
-    4
+    5
 }
 
 impl Default for XoConfig {
@@ -26,6 +27,7 @@ impl Default for XoConfig {
             schema: schema(),
             state_dir: PathBuf::from("~/.local/share/xo"),
             client_id: None,
+            server: "http://127.0.0.1:9464".to_owned(),
             projection: PathBuf::from("~/notes"),
         }
     }
@@ -35,6 +37,7 @@ impl Default for XoConfig {
 pub struct CliOverrides {
     pub state_dir: Option<PathBuf>,
     pub client_id: Option<String>,
+    pub server: Option<String>,
     pub projection: Option<PathBuf>,
 }
 
@@ -52,9 +55,10 @@ impl XoConfig {
         };
         let json = xo_core::steel_runtime::evaluate_xo_config(&source)?;
         let mut config: Self = serde_json::from_str(&json).context("decode xo configuration")?;
-        if config.schema != schema() {
+        if !matches!(config.schema, 4 | 5) {
             bail!("unsupported xo configuration schema {}", config.schema);
         }
+        config.schema = schema();
         if let Some(client_id) = &config.client_id {
             xo_core::ClientId::parse(client_id.clone()).context("validate client-id")?;
         }
@@ -70,6 +74,9 @@ impl XoConfig {
         }
         if let Some(value) = overrides.client_id {
             self.client_id = Some(value);
+        }
+        if let Some(value) = overrides.server {
+            self.server = value;
         }
         if let Some(value) = overrides.projection {
             self.projection = expand_home(&value, home);
@@ -101,10 +108,12 @@ impl XoConfig {
              \x20 (schema {})\n\
              \x20 (state-dir {})\n\
              \x20 (client-id {})\n\
+             \x20 (server {})\n\
              \x20 (projection {}))\n",
             self.schema,
             string(&self.state_dir.to_string_lossy())?,
             optional(self.client_id.as_deref())?,
+            string(&self.server)?,
             string(&self.projection.to_string_lossy())?,
         ))
     }
@@ -155,13 +164,30 @@ mod tests {
             CliOverrides {
                 state_dir: Some("~/state".into()),
                 client_id: Some("alice-laptop".into()),
+                server: Some("https://notes.example.test".into()),
                 projection: Some("~/knowledge".into()),
             },
             Path::new("/users/alice"),
         );
         assert_eq!(config.state_dir, Path::new("/users/alice/state"));
         assert_eq!(config.client_id.as_deref(), Some("alice-laptop"));
+        assert_eq!(config.server, "https://notes.example.test");
         assert_eq!(config.projection, Path::new("/users/alice/knowledge"));
+    }
+
+    #[test]
+    fn schema_four_without_server_uses_local_default() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("config.scm");
+        let legacy = XoConfig::default()
+            .document()?
+            .replace("(schema 5)", "(schema 4)")
+            .replace("  (server \"http://127.0.0.1:9464\")\n", "");
+        std::fs::write(&path, legacy)?;
+        let loaded = XoConfig::load(&path, Path::new("/home/tester"))?;
+        assert_eq!(loaded.schema, 5);
+        assert_eq!(loaded.server, "http://127.0.0.1:9464");
+        Ok(())
     }
 
     #[test]
@@ -172,7 +198,7 @@ mod tests {
             &path,
             XoConfig::default()
                 .document()?
-                .replace("(schema 4)", "(schema 3)"),
+                .replace("(schema 5)", "(schema 3)"),
         )?;
         let error = XoConfig::load(&path, Path::new("/home/tester"))
             .unwrap_err()

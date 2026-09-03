@@ -38,6 +38,7 @@ async fn config_init_output_starts_a_fresh_xo_workspace() -> Result<()> {
     let config_path = directory.path().join("config.scm");
     std::fs::write(&config_path, output.stdout)?;
     let config = XoConfig::load(&config_path, directory.path())?;
+    ensure!(config.server == "http://127.0.0.1:9464");
 
     let mut session = WorkspaceSession::open(&config.state_dir, None, config.projection)?;
     let behavior = session.behavior().await?;

@@ -12,6 +12,7 @@ use sha2::Digest as _;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 const AUTH_FILE: &str = ".config/xo/auth.json";
+const DEFAULT_NATIVE_REDIRECT_URI: &str = "http://127.0.0.1:9465/callback";
 
 #[derive(Debug, Deserialize)]
 struct ServerConfig {
@@ -69,6 +70,7 @@ pub async fn access_token(server: &str, home: &Path) -> Result<Option<String>> {
     if config.disabled {
         return Ok(None);
     }
+    let redirect_uri = native_redirect_uri(&config).to_owned();
     let issuer = config.issuer.context("server omitted OIDC issuer")?;
     let client_id = config.client_id.context("server omitted OIDC client ID")?;
     let resource = config.resource.context("server omitted OIDC resource")?;
@@ -107,9 +109,6 @@ pub async fn access_token(server: &str, home: &Path) -> Result<Option<String>> {
     if !std::io::stderr().is_terminal() {
         bail!("authentication is required; run xo interactively once to authorize this endpoint");
     }
-    let redirect_uri = config
-        .native_redirect_uri
-        .context("server omitted native OIDC redirect URI")?;
     let token = authorize_code(
         &client,
         &discovery,
@@ -325,6 +324,13 @@ fn saved_token(token: TokenResponse, previous_refresh: Option<String>) -> Result
     })
 }
 
+fn native_redirect_uri(config: &ServerConfig) -> &str {
+    config
+        .native_redirect_uri
+        .as_deref()
+        .unwrap_or(DEFAULT_NATIVE_REDIRECT_URI)
+}
+
 fn requested_scope(permissions: &[String]) -> String {
     std::iter::once("openid")
         .chain(std::iter::once("offline_access"))
@@ -402,6 +408,15 @@ mod tests {
             callback.await.unwrap(),
             ("auth-code".to_owned(), "expected".to_owned())
         );
+    }
+
+    #[test]
+    fn older_server_config_uses_the_standard_loopback_callback() {
+        let config: ServerConfig = serde_json::from_str(
+            r#"{"issuer":"https://id.example.test","client_id":"xo","resource":"https://notes.example.test","scopes":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(native_redirect_uri(&config), DEFAULT_NATIVE_REDIRECT_URI);
     }
 
     #[test]

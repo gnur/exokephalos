@@ -669,6 +669,7 @@ mod tests {
         .await;
         assert!(config.starts_with("HTTP/1.1 200 OK\r\n"));
         assert!(config.contains("https://id.example.test"));
+        assert!(config.contains("http://127.0.0.1:9465/callback"));
         let health = request(
             address,
             "GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",

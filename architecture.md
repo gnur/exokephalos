@@ -22,8 +22,9 @@ another client. Native clients also persist local changes before reporting local
 success. Clients remain usable while disconnected and reconnect with bounded
 backoff. Human-readable client IDs are presence labels, not security identities.
 `xo-syncd` validates Pocket ID OAuth access-token signatures, issuer, audience,
-expiry, and permissions. Browser clients use authorization code + PKCE; native
-clients use device authorization and locally persisted refresh credentials.
+expiry, and permissions. Browser and native clients use authorization code +
+PKCE. Native clients receive the callback through a fixed loopback listener and
+persist refresh credentials locally.
 
 ## Records, HTTP API, and conflicts
 

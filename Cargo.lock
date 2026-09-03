@@ -4809,6 +4809,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "automerge",
+ "base64",
  "blake3",
  "clap",
  "crossterm",
@@ -4823,6 +4824,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "sha2",
  "steel-core",
  "tempfile",
  "time",

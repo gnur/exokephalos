@@ -36,7 +36,7 @@ struct Cli {
     /// Pocket ID API resource expected in access-token audiences.
     #[arg(long)]
     oidc_audience: Option<String>,
-    /// Public Pocket ID OIDC client ID used by the PWA and TUI device flow.
+    /// Public Pocket ID OIDC client ID used by PWA and native PKCE flows.
     #[arg(long)]
     oidc_client_id: Option<String>,
     /// Disable authentication explicitly. Intended only for local development and tests.

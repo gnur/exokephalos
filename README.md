@@ -22,14 +22,17 @@ client with another.
 
 `xo-syncd` authenticates browser, native sync, and item API requests with Pocket
 ID OAuth access tokens. It validates token signatures, issuer, audience, expiry,
-and endpoint permissions. The PWA uses authorization code + PKCE; a new TUI uses
-Pocket ID's device authorization flow and stores refresh credentials in
+and endpoint permissions. The PWA and a new TUI use authorization code + PKCE;
+the TUI opens Pocket ID in the local browser and receives the callback on
+`http://127.0.0.1:9465/callback`. It stores refresh credentials in
 `~/.config/xo/auth.json` with mode `0600`. Client IDs remain presence labels, not
 security identities.
 
 Create a Pocket ID API resource for the public xo origin, add `xo:read`,
 `xo:write`, and `xo:sync` permissions, and grant all three to a public OIDC client
-that permits authorization code + PKCE, refresh tokens, and device authorization.
+that permits authorization code + PKCE and refresh tokens. Register both
+`https://notes.example.com/` and `http://127.0.0.1:9465/callback` as exact
+callback URLs. The loopback port must be free while a new TUI login completes.
 Then start the server and TUI with:
 
 ```console

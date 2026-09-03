@@ -10,6 +10,7 @@ use tokio::sync::RwLock;
 pub const READ_PERMISSION: &str = "xo:read";
 pub const WRITE_PERMISSION: &str = "xo:write";
 pub const SYNC_PERMISSION: &str = "xo:sync";
+pub const NATIVE_REDIRECT_URI: &str = "http://127.0.0.1:9465/callback";
 
 #[derive(Clone, Debug, Deserialize)]
 struct Discovery {
@@ -33,6 +34,7 @@ pub struct BrowserAuthConfig {
     pub client_id: String,
     pub resource: String,
     pub scopes: Vec<&'static str>,
+    pub native_redirect_uri: &'static str,
 }
 
 #[derive(Debug)]
@@ -78,6 +80,7 @@ impl Authenticator {
                 client_id: client_id.to_owned(),
                 resource: audience.trim_end_matches('/').to_owned(),
                 scopes: vec![READ_PERMISSION, WRITE_PERMISSION, SYNC_PERMISSION],
+                native_redirect_uri: NATIVE_REDIRECT_URI,
             },
         })
     }
@@ -102,6 +105,7 @@ impl Authenticator {
                 client_id: "xo".into(),
                 resource: "https://notes.example.test".into(),
                 scopes: vec![READ_PERMISSION, WRITE_PERMISSION, SYNC_PERMISSION],
+                native_redirect_uri: NATIVE_REDIRECT_URI,
             },
         }
     }

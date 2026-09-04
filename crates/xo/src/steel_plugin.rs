@@ -265,10 +265,11 @@ fn execute_blocking(
                 .map_err(|error| format!("{error:#}"))
         },
     );
+    let post_capabilities = network_capabilities.clone();
     engine.register_fn(
         "xo-http-post-json",
         move |url: String, headers: String, body: String| -> Result<String, String> {
-            if !network_capabilities.contains(&Capability::Network) {
+            if !post_capabilities.contains(&Capability::Network) {
                 return Err("network capability denied".into());
             }
             host.post_json(&url, &headers, &body)
@@ -290,6 +291,9 @@ fn execute_blocking(
     }
     let mut result: PluginResult =
         serde_json::from_str(&output).context("decode Steel plugin result")?;
+    if !result.choices.is_empty() && !network_capabilities.contains(&Capability::CreateNote) {
+        bail!("create-note capability denied for plugin choices");
+    }
     let queued_operations = operations
         .lock()
         .map_err(|_| anyhow::anyhow!("plugin operation lock poisoned"))?
@@ -501,7 +505,7 @@ mod tests {
             source.into(),
             "xo-plugin-run".into(),
             "ignored".into(),
-            BTreeSet::new(),
+            BTreeSet::from([Capability::CreateNote]),
             context,
         )
         .await;
@@ -522,12 +526,22 @@ mod tests {
             source.into(),
             "xo-plugin-run".into(),
             "hello".into(),
-            BTreeSet::new(),
+            BTreeSet::from([Capability::CreateNote]),
         )
         .await
         .unwrap();
         assert_eq!(result.choices[0].label, "hello");
         assert_eq!(result.choices[0].note.body, "from Steel");
+
+        let error = execute(
+            source.into(),
+            "xo-plugin-run".into(),
+            "hello".into(),
+            BTreeSet::new(),
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("create-note capability denied"));
 
         let error = execute(
             "(define (xo-plugin-run input) (xo-secret input))".into(),
@@ -540,137 +554,52 @@ mod tests {
         assert!(format!("{error:#}").contains("read-secret capability denied"));
     }
 
-    struct HardcoverFixture;
+    struct GenericHostFixture;
 
-    impl SteelHostServices for HardcoverFixture {
+    impl SteelHostServices for GenericHostFixture {
         fn read_secret(&self, name: &str) -> Result<String> {
-            assert_eq!(name, "HARDCOVER_TOKEN");
+            assert_eq!(name, "API_TOKEN");
             Ok("fixture-token".into())
         }
 
         fn post_json(&self, url: &str, headers: &str, body: &str) -> Result<String> {
-            assert_eq!(url, "https://api.hardcover.app/v1/graphql");
-            let headers: serde_json::Value = serde_json::from_str(headers)?;
-            assert_eq!(headers["Authorization"], "fixture-token");
-            let body: serde_json::Value = serde_json::from_str(body)?;
-            assert_eq!(body["variables"]["query"], "Genesis");
-            Ok(serde_json::json!({
-                "data": { "search": { "results": [{
-                    "title": "Genesis",
-                    "author_names": ["Ken Lozito"],
-                    "description": "Humanity's first colony.",
-                    "pages": 328,
-                    "image": "https://example.com/cover.jpg",
-                    "external_ids": { "goodreads": "36284236-genesis" },
-                    "isbn_13": "9781234567897",
-                    "release_year": 2017,
-                    "featured_series": {
-                        "position": 1,
-                        "series": { "name": "First Colony" }
-                    }
-                }] } }
-            })
-            .to_string())
-        }
-    }
-
-    struct FailingHardcoverFixture;
-
-    impl SteelHostServices for FailingHardcoverFixture {
-        fn read_secret(&self, _name: &str) -> Result<String> {
-            Ok("fixture-token".into())
-        }
-
-        fn post_json(&self, _url: &str, _headers: &str, _body: &str) -> Result<String> {
-            bail!("fixture Hardcover outage")
+            assert_eq!(url, "https://api.example.com/search");
+            assert_eq!(headers, r#"{"Authorization":"fixture-token"}"#);
+            assert_eq!(body, r#"{"query":"example"}"#);
+            Ok(r#"{"title":"Example result"}"#.into())
         }
     }
 
     #[tokio::test]
-    async fn hardcover_errors_are_returned_to_the_tui() {
-        let error = execute_with_host(
-            include_str!("../../../plugins/hardcover.scm").into(),
-            "xo-plugin-run".into(),
-            "Genesis".into(),
-            BTreeSet::from([
-                Capability::CreateNote,
-                Capability::Network,
-                Capability::ReadSecret,
-            ]),
-            Arc::new(FailingHardcoverFixture),
-        )
-        .await
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("fixture Hardcover outage"));
-    }
-
-    #[tokio::test]
-    async fn hardcover_search_and_normalization_execute_in_steel() {
+    async fn capability_checked_host_services_are_available_to_plugins() {
+        let source = r#"
+            (define (xo-plugin-run input)
+              (let* ([token (xo-secret "API_TOKEN")]
+                     [headers (value->jsexpr-string (hash "Authorization" token))]
+                     [body (value->jsexpr-string (hash "query" input))]
+                     [response (string->jsexpr (xo-http-post-json
+                                 "https://api.example.com/search" headers body))])
+                (value->jsexpr-string
+                  (hash "choices"
+                    (list (hash "label" (hash-ref response 'title)
+                                "note" (hash "frontmatter" (hash "type" "result")
+                                             "body" "created by plugin")))))))
+        "#;
         let result = execute_with_host(
-            include_str!("../../../plugins/hardcover.scm").into(),
+            source.into(),
             "xo-plugin-run".into(),
-            "Genesis".into(),
+            "example".into(),
             BTreeSet::from([
                 Capability::CreateNote,
                 Capability::Network,
                 Capability::ReadSecret,
             ]),
-            Arc::new(HardcoverFixture),
+            Arc::new(GenericHostFixture),
         )
         .await
         .unwrap();
-        assert_eq!(result.choices.len(), 1, "{result:#?}");
-        assert_eq!(
-            result.choices[0].label,
-            "Genesis (First Colony, #1) — Ken Lozito"
-        );
-        assert_eq!(
-            result.choices[0].note.frontmatter.get("tags"),
-            Some(&xo_core::domain::FrontmatterValue::Sequence(vec![
-                xo_core::domain::FrontmatterValue::String("to-read".into())
-            ]))
-        );
-        assert_eq!(
-            result.choices[0].note.frontmatter.get("pages"),
-            Some(&xo_core::domain::FrontmatterValue::Integer(328))
-        );
-        assert_eq!(
-            result.choices[0].note.frontmatter.get("url"),
-            Some(&xo_core::domain::FrontmatterValue::String(
-                "https://www.goodreads.com/book/show/36284236-genesis".into()
-            ))
-        );
-        assert_eq!(result.choices[0].note.body, "Humanity's first colony.");
-    }
-
-    #[test]
-    #[ignore = "requires HARDCOVER_TOKEN and the live Hardcover API"]
-    fn hardcover_live_search_uses_configured_token() {
-        assert!(
-            std::env::var("HARDCOVER_TOKEN").is_ok_and(|token| !token.trim().is_empty()),
-            "HARDCOVER_TOKEN must be set for the live integration test"
-        );
-        let result = execute_blocking(
-            include_str!("../../../plugins/hardcover.scm").into(),
-            "xo-plugin-run",
-            "The Hobbit Tolkien".into(),
-            BTreeSet::from([
-                Capability::CreateNote,
-                Capability::Network,
-                Capability::ReadSecret,
-            ]),
-            PluginContext::default(),
-            Arc::new(NativeSteelHostServices),
-        )
-        .unwrap();
-        assert!(
-            !result.choices.is_empty(),
-            "live Hardcover search was empty"
-        );
-        assert!(result.choices.iter().all(|choice| {
-            choice.note.frontmatter.get("type")
-                == Some(&xo_core::domain::FrontmatterValue::String("book".into()))
-        }));
+        assert_eq!(result.choices[0].label, "Example result");
+        assert_eq!(result.choices[0].note.body, "created by plugin");
     }
 
     #[test]

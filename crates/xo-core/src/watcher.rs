@@ -168,7 +168,7 @@ mod tests {
         let main = directory.path().join("xo.scm");
         let unsupported_main = directory.path().join("unsupported.scm");
         let module = directory.path().join("modules/views/books.scm");
-        let plugin = directory.path().join("plugins/hardcover.scm");
+        let plugin = directory.path().join("plugins/example.scm");
         let unrelated = directory.path().join("script.scm");
         std::fs::create_dir_all(module.parent().unwrap()).unwrap();
         std::fs::create_dir_all(plugin.parent().unwrap()).unwrap();

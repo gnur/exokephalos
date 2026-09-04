@@ -73,6 +73,23 @@ enum Command {
         #[arg(long = "type")]
         item_type: Option<String>,
     },
+    /// Manage local executable Steel plugins.
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum PluginCommand {
+    /// List installed plugins.
+    List,
+    /// Install a plugin from a local file or standard input (`-`).
+    Install { name: String, source: PathBuf },
+    /// Replace an installed plugin from a local file or standard input (`-`).
+    Update { name: String, source: PathBuf },
+    /// Remove an installed plugin.
+    Remove { name: String },
 }
 
 #[tokio::main]
@@ -117,6 +134,7 @@ async fn main() -> Result<()> {
             shutdown?;
             println!("exported={}", exported.exported);
         }
+        Some(Command::Plugin { command }) => plugin_command(command)?,
         None => {
             let config = configured(&cli)?;
             run_tui(
@@ -212,34 +230,36 @@ fn plugin_context(app: &App) -> PluginContext {
     }
 }
 
+fn local_plugin_directory() -> Result<PathBuf> {
+    xo::plugin::directory(&config_path(&home_dir()?))
+}
+
 fn local_plugins() -> Result<std::collections::BTreeMap<String, String>> {
-    let directory = config_path(&home_dir()?)
-        .parent()
-        .context("xo config path has no parent")?
-        .join("plugins");
-    let mut plugins = std::collections::BTreeMap::new();
-    if !directory.exists() {
-        return Ok(plugins);
-    }
-    for entry in std::fs::read_dir(&directory)? {
-        let entry = entry?;
-        let path = entry.path();
-        if !entry.file_type()?.is_file()
-            || path.extension().and_then(|value| value.to_str()) != Some("scm")
-        {
-            continue;
+    xo::plugin::discover(&local_plugin_directory()?)
+}
+
+fn plugin_command(command: &PluginCommand) -> Result<()> {
+    let directory = local_plugin_directory()?;
+    match command {
+        PluginCommand::List => {
+            for name in xo::plugin::names(&directory)? {
+                println!("{name}");
+            }
         }
-        let name = path
-            .file_name()
-            .context("plugin has no file name")?
-            .to_string_lossy();
-        let logical_path = format!("plugins/{name}");
-        if !xo_core::steel_runtime::valid_plugin_path(&logical_path) {
-            continue;
+        PluginCommand::Install { name, source } => {
+            let path = xo::plugin::install(&directory, name, source, false)?;
+            println!("installed {name} at {}", path.display());
         }
-        plugins.insert(logical_path, std::fs::read_to_string(path)?);
+        PluginCommand::Update { name, source } => {
+            let path = xo::plugin::install(&directory, name, source, true)?;
+            println!("updated {name} at {}", path.display());
+        }
+        PluginCommand::Remove { name } => {
+            let path = xo::plugin::remove(&directory, name)?;
+            println!("removed {name} from {}", path.display());
+        }
     }
-    Ok(plugins)
+    Ok(())
 }
 
 fn configured(cli: &Cli) -> Result<XoConfig> {
@@ -757,7 +777,7 @@ async fn event_loop(
                             app.mode = Mode::PluginResults;
                         }
                         Err(error) => {
-                            app.message = format!("Notice: Hardcover search failed: {error:#}");
+                            app.message = format!("Notice: plugin action failed: {error:#}");
                             clear_plugin_state(app);
                         }
                     }
@@ -1377,6 +1397,17 @@ mod cli_tests {
             cli.projection.as_deref(),
             Some(std::path::Path::new("/notes"))
         );
+    }
+
+    #[test]
+    fn plugin_management_commands_parse() {
+        let cli = Cli::try_parse_from(["xo", "plugin", "install", "example", "-"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Plugin {
+                command: PluginCommand::Install { name, source }
+            }) if name == "example" && source == std::path::Path::new("-")
+        ));
     }
 
     #[test]

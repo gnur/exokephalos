@@ -130,6 +130,16 @@ fn plugin_entrypoint() -> String {
     "xo-plugin-run".to_owned()
 }
 
+pub fn validate_plugin(path: &str, source: &str) -> Result<(), SteelConfigError> {
+    if !valid_plugin_path(path) {
+        return Err(SteelConfigError::InvalidPath(path.to_owned()));
+    }
+    let mut behavior = WorkspaceBehavior::default();
+    merge_plugin(&mut behavior, path, source)?;
+    behavior.validate()?;
+    Ok(())
+}
+
 fn merge_plugin(
     behavior: &mut WorkspaceBehavior,
     path: &str,
@@ -144,10 +154,18 @@ fn merge_plugin(
     // the action runner installs real, grant-checked implementations.
     engine
         .register_fn("xo-secret", |_name: String| String::new())
+        .register_fn("xo-selected-item-ids", || "[]".to_owned())
+        .register_fn("xo-note-content", |_id: String| "{}".to_owned())
+        .register_fn("xo-all-tags", || "[]".to_owned())
+        .register_fn("xo-http-get", |_url: String, _headers: String| {
+            String::new()
+        })
         .register_fn(
             "xo-http-post-json",
             |_url: String, _headers: String, _body: String| String::new(),
-        );
+        )
+        .register_fn("xo-update-items", |_operations: String| "queued".to_owned())
+        .register_fn("xo-create-item", |_operation: String| "queued".to_owned());
     let result = evaluate_plugin_manifest(&mut engine, source);
     let json = match result {
         Ok(SteelVal::StringV(value)) => value.to_string(),
@@ -1514,35 +1532,32 @@ mod tests {
     }
 
     #[test]
-    fn executable_plugin_manifest_adds_only_hardcover_search() {
+    fn executable_plugin_manifest_adds_a_generic_action() {
+        let source = r#"
+            (define (xo-plugin-manifest)
+              "{\"schema\":1,\"actions\":[{\"id\":\"remote-search\",\"description\":\"Search a service\",\"capabilities\":[\"network\"]}]}")
+            (define (xo-plugin-run input)
+              (xo-http-get "https://api.example.com" "{}"))
+        "#;
         let behavior = SteelWorkspace::load_with_plugins(
             &encode_config(&WorkspaceBehavior::default(), false),
             &BTreeMap::new(),
-            &BTreeMap::from([(
-                "plugins/hardcover.scm".into(),
-                include_str!("../../../plugins/hardcover.scm").into(),
-            )]),
+            &BTreeMap::from([("plugins/search.scm".into(), source.into())]),
             "fixed",
         )
         .unwrap();
         let search = behavior
             .actions
             .iter()
-            .find(|action| action.id == "hardcover-search")
+            .find(|action| action.id == "remote-search")
             .unwrap();
         assert!(matches!(
             search.plugin,
-            Some(ActionPlugin::Steel { ref path, .. }) if path == "plugins/hardcover.scm"
+            Some(ActionPlugin::Steel { ref path, .. }) if path == "plugins/search.scm"
         ));
         assert_eq!(search.predicate, Predicate::Always);
-        assert!(behavior.action(None, "hardcover-search").is_ok());
+        assert!(behavior.action(None, "remote-search").is_ok());
         assert_eq!(behavior.actions.len(), 1);
-        assert!(
-            behavior
-                .actions
-                .iter()
-                .all(|action| { action.id != "start-book" && action.id != "finish-book" })
-        );
     }
 
     #[test]

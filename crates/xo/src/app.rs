@@ -1616,7 +1616,7 @@ mod tests {
     #[test]
     fn plugin_failure_notice_remains_visible_after_returning_to_the_workspace() {
         let mut app = fixture();
-        app.message = "Notice: Hardcover search failed: token unavailable".into();
+        app.message = "Notice: plugin action failed: token unavailable".into();
         let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
         terminal.draw(|frame| render(frame, &app)).unwrap();
         let screen = terminal
@@ -1626,21 +1626,21 @@ mod tests {
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
-        assert!(screen.contains("Notice: Hardcover search failed"));
+        assert!(screen.contains("Notice: plugin action failed"));
     }
 
     #[test]
     fn global_steel_plugin_action_is_available_with_or_without_a_selected_note() {
         let mut app = fixture();
         app.behavior.actions.push(ActionDescriptor {
-            id: "hardcover-search".into(),
-            description: "Search Hardcover".into(),
+            id: "catalog-search".into(),
+            description: "Search a catalog".into(),
             predicate: Predicate::Always,
             effects: vec![],
             plugin: Some(ActionPlugin::Steel {
-                path: "plugins/hardcover.scm".into(),
+                path: "plugins/catalog.scm".into(),
                 entrypoint: "xo-plugin-run".into(),
-                prompt: "Book title or author".into(),
+                prompt: "Search terms".into(),
                 capabilities: BTreeSet::from([
                     Capability::CreateNote,
                     Capability::Network,
@@ -1648,12 +1648,12 @@ mod tests {
                 ]),
             }),
         });
-        app.action_query = "hardcover".into();
-        assert_eq!(app.matching_actions()[0].id, "hardcover-search");
+        app.action_query = "catalog".into();
+        assert_eq!(app.matching_actions()[0].id, "catalog-search");
 
         app.search = "no selected note".into();
         assert!(app.selected_note().is_none());
-        assert_eq!(app.matching_actions()[0].id, "hardcover-search");
+        assert_eq!(app.matching_actions()[0].id, "catalog-search");
     }
 
     #[test]

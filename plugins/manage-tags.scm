@@ -1,5 +1,5 @@
 ;; Host-provided interactive tag manager.
-;; Install this plugin through Steel Forge into ~/.config/xo/plugins/.
+;; Install with: xo plugin install manage-tags plugins/manage-tags.scm
 ;; xo supplies the native multi-selection and tag-picker UI; the plugin does not
 ;; receive filesystem or terminal access.
 

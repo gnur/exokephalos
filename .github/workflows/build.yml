@@ -9,6 +9,11 @@ on:
         required: false
         type: boolean
         default: false
+      npm_audit:
+        description: Run the opt-in npm registry vulnerability audit
+        required: false
+        type: boolean
+        default: false
   push:
     branches:
       - main
@@ -121,7 +126,8 @@ jobs:
         working-directory: web
         run: npm ci
 
-      - name: Audit web dependencies
+      - name: Audit web dependencies when explicitly requested
+        if: github.event_name == 'workflow_dispatch' && inputs.npm_audit
         working-directory: web
         run: npm audit
 

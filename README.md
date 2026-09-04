@@ -187,7 +187,7 @@ bash install.sh
 After you self-host `xo-syncd`, the same script is also available from that
 server's `/install.sh` route. No separate public static deployment is required.
 
-The installer detects your OS and CPU architecture (Linux x86-64/ARM64 or macOS Apple Silicon), fetches the latest release archive from GitHub, extracts the binaries to `~/.local/bin`, generates `~/.config/xo/config.scm` with `xo config-init`, and prompts you to configure `xo` and/or `xo-syncd`. The TUI uses `~/.local/share/xo`; the systemd user daemon uses the separate `~/.local/share/xo-syncd` state directory.
+The installer detects your OS and CPU architecture (Linux x86-64/ARM64 or macOS Apple Silicon), fetches the latest release archive from GitHub, extracts the binaries to `~/.local/bin`, generates `~/.config/xo/config.scm` with `xo config-init`, and prompts you to configure `xo` and/or `xo-syncd`. Before replacing the binaries it stops a running `xo-syncd.service`, then restores it after a successful install (and also attempts restoration if installation fails). When `~/.config/xo-syncd/config.scm` already exists, the installer offers an in-place upgrade that preserves the configuration and workspace state, or a fresh setup that first moves both to timestamped backups. The TUI uses `~/.local/share/xo`; the systemd user daemon uses the separate `~/.local/share/xo-syncd` state directory.
 
 When systemd setup is selected, the installer writes Pocket ID and server
 settings to `~/.config/xo-syncd/config.scm` with mode `0600` and creates a user

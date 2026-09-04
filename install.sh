@@ -9,6 +9,8 @@ SYNCD_CONFIG_DIR="${HOME}/.config/xo-syncd"
 CLIENT_STATE_DIR="${HOME}/.local/share/xo"
 SYNC_STATE_DIR="${XO_SYNCD_STATE_DIR:-${HOME}/.local/share/xo-syncd}"
 SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
+SYNCD_WAS_RUNNING=false
+SYNCD_SERVICE_RESTORED=false
 
 log() {
   echo "==> $*"
@@ -50,7 +52,7 @@ detect_target() {
 
 check_dependencies() {
   local missing=()
-  for cmd in curl tar; do
+  for cmd in curl tar install; do
     if ! command -v "${cmd}" >/dev/null 2>&1; then
       missing+=("${cmd}")
     fi
@@ -86,6 +88,33 @@ resolve_release() {
   echo "${tag}|${archive_url}|${asset_name}"
 }
 
+syncd_service_is_running() {
+  command -v systemctl >/dev/null 2>&1 \
+    && systemctl --user is-active --quiet xo-syncd.service
+}
+
+restore_running_syncd() {
+  if [[ "${SYNCD_WAS_RUNNING}" == true && "${SYNCD_SERVICE_RESTORED}" != true ]]; then
+    log "Restarting the previously running xo-syncd.service..."
+    systemctl --user daemon-reload || warn "systemctl --user daemon-reload failed"
+    if systemctl --user start xo-syncd.service; then
+      SYNCD_SERVICE_RESTORED=true
+    else
+      warn "Could not restart xo-syncd.service"
+    fi
+  fi
+}
+
+stop_running_syncd() {
+  if syncd_service_is_running; then
+    SYNCD_WAS_RUNNING=true
+    log "Stopping the running xo-syncd.service before replacing its binary..."
+    systemctl --user stop xo-syncd.service \
+      || fatal "Could not stop the running xo-syncd.service"
+    trap restore_running_syncd EXIT
+  fi
+}
+
 download_and_extract() {
   local archive_url="$1" asset_name="$2"
   local tmp_dir archive_file
@@ -108,8 +137,8 @@ download_and_extract() {
   mkdir -p "${INSTALL_DIR}"
   for binary in xo xo-lsp xo-syncd; do
     if [[ -f "${tmp_dir}/${binary}" ]]; then
-      cp "${tmp_dir}/${binary}" "${INSTALL_DIR}/${binary}"
-      chmod 0755 "${INSTALL_DIR}/${binary}"
+      install -m 0755 "${tmp_dir}/${binary}" "${INSTALL_DIR}/.${binary}.new"
+      mv -f "${INSTALL_DIR}/.${binary}.new" "${INSTALL_DIR}/${binary}"
     fi
   done
 
@@ -161,27 +190,92 @@ ensure_config() {
   fi
 }
 
+ask_syncd_configuration_mode() {
+  local config_file="${SYNCD_CONFIG_DIR}/config.scm"
+  if [[ ! -f "${config_file}" ]]; then
+    echo "fresh"
+    return
+  fi
+
+  echo "" >&2
+  echo "Existing xo-syncd configuration found at ${config_file}." >&2
+  echo "  1) Upgrade in place (keep the current configuration and workspace state)" >&2
+  echo "  2) Start from scratch (back up and replace the configuration and state)" >&2
+  echo "  3) Choose which xo components to configure" >&2
+  echo "" >&2
+
+  local choice
+  choice="$(prompt_choice "Select option (1-3)" "1")"
+  case "${choice}" in
+    2) echo "fresh" ;;
+    3) echo "choose" ;;
+    *) echo "upgrade" ;;
+  esac
+}
+
+backup_syncd_installation() {
+  local timestamp config_file configured_state_dir old_state_dir state_backup
+  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  config_file="${SYNCD_CONFIG_DIR}/config.scm"
+  old_state_dir="${SYNC_STATE_DIR}"
+
+  # Prefer the state directory declared by the existing generated-style config.
+  # Fall back to XO_SYNCD_STATE_DIR/the default if a hand-written expression
+  # cannot be parsed safely by this shell installer.
+  configured_state_dir="$(sed -n 's/^[[:space:]]*(state-dir[[:space:]]*"\([^"]*\)")[[:space:]]*$/\1/p' "${config_file}")"
+  case "${configured_state_dir}" in
+    "~") old_state_dir="${HOME}" ;;
+    "~/"*) old_state_dir="${HOME}/${configured_state_dir#\~/}" ;;
+    "") ;;
+    /*) old_state_dir="${configured_state_dir}" ;;
+    *)
+      warn "Leaving relative configured state path untouched: ${configured_state_dir}"
+      old_state_dir=""
+      ;;
+  esac
+  case "${old_state_dir}" in
+    "/" | "${HOME}" | "${CONFIG_DIR}" | "${SYNCD_CONFIG_DIR}")
+      warn "Refusing to move unsafe workspace state path: ${old_state_dir}"
+      old_state_dir=""
+      ;;
+  esac
+
+  if [[ -f "${config_file}" ]]; then
+    mv "${config_file}" "${config_file}.backup-${timestamp}"
+    log "Backed up the previous configuration to ${config_file}.backup-${timestamp}"
+  fi
+  if [[ -n "${old_state_dir}" && -e "${old_state_dir}" ]]; then
+    state_backup="${old_state_dir}.backup-${timestamp}"
+    mv "${old_state_dir}" "${state_backup}"
+    log "Backed up the previous workspace state to ${state_backup}"
+  fi
+}
+
 setup_systemd_unit() {
+  local configuration_mode="$1"
+
   if ! command -v systemctl >/dev/null 2>&1; then
     warn "systemctl is not available on this system; skipping systemd unit installation."
     return 0
   fi
 
   log "Setting up systemd user unit for xo-syncd..."
-  mkdir -p "${SYSTEMD_USER_DIR}" "${SYNC_STATE_DIR}" "${SYNCD_CONFIG_DIR}"
-
-  local oidc_issuer oidc_audience oidc_client_id
-  oidc_issuer="$(prompt_choice "Pocket ID issuer URL" "")"
-  oidc_audience="$(prompt_choice "Pocket ID xo API resource" "")"
-  oidc_client_id="$(prompt_choice "Pocket ID public OIDC client ID" "")"
-  for value in "${oidc_issuer}" "${oidc_audience}" "${oidc_client_id}"; do
-    if [[ -z "${value}" || "${value}" =~ [[:space:]\"\\] ]]; then
-      fatal "OIDC settings must be non-empty and cannot contain whitespace, quotes, or backslashes"
-    fi
-  done
+  mkdir -p "${SYSTEMD_USER_DIR}" "${SYNCD_CONFIG_DIR}"
 
   local syncd_config_file="${SYNCD_CONFIG_DIR}/config.scm"
-  cat > "${syncd_config_file}" <<EOF
+  if [[ "${configuration_mode}" == "fresh" ]]; then
+    local oidc_issuer oidc_audience oidc_client_id
+    oidc_issuer="$(prompt_choice "Pocket ID issuer URL" "")"
+    oidc_audience="$(prompt_choice "Pocket ID xo API resource" "")"
+    oidc_client_id="$(prompt_choice "Pocket ID public OIDC client ID" "")"
+    for value in "${oidc_issuer}" "${oidc_audience}" "${oidc_client_id}"; do
+      if [[ -z "${value}" || "${value}" =~ [[:space:]\"\\] ]]; then
+        fatal "OIDC settings must be non-empty and cannot contain whitespace, quotes, or backslashes"
+      fi
+    done
+
+    local new_config_file="${syncd_config_file}.new"
+    cat > "${new_config_file}" <<EOF
 ; xo-syncd server configuration; command-line flags override these values.
 (xo-syncd-config
   (schema 1)
@@ -191,8 +285,16 @@ setup_systemd_unit() {
   (oidc-audience "${oidc_audience}")
   (oidc-client-id "${oidc_client_id}"))
 EOF
-  chmod 0600 "${syncd_config_file}"
-  log "xo-syncd configuration written to ${syncd_config_file}"
+    chmod 0600 "${new_config_file}"
+    if [[ -f "${syncd_config_file}" ]]; then
+      backup_syncd_installation
+    fi
+    mkdir -p "${SYNC_STATE_DIR}"
+    mv "${new_config_file}" "${syncd_config_file}"
+    log "xo-syncd configuration written to ${syncd_config_file}"
+  else
+    log "Keeping existing xo-syncd configuration at ${syncd_config_file}"
+  fi
 
   local unit_file="${SYSTEMD_USER_DIR}/xo-syncd.service"
   cat > "${unit_file}" <<EOF
@@ -214,26 +316,11 @@ WantedBy=default.target
 EOF
 
   log "Systemd user unit written to ${unit_file}"
-
-  if [[ -t 0 ]]; then
-    local enable_now
-    enable_now="$(prompt_choice "Enable and start xo-syncd.service now? (y/n)" "y")"
-    case "${enable_now}" in
-      y | Y | yes | Yes)
-        systemctl --user daemon-reload || warn "systemctl --user daemon-reload failed"
-        systemctl --user enable --now xo-syncd.service || warn "Could not enable/start xo-syncd.service"
-        log "xo-syncd.service enabled and started."
-        ;;
-      *)
-        systemctl --user daemon-reload || true
-        log "xo-syncd.service registered. Enable later with: systemctl --user enable --now xo-syncd"
-        ;;
-    esac
-  fi
 }
 
 main() {
   check_dependencies
+  stop_running_syncd
 
   local target_triple release_info tag archive_url asset_name
   target_triple="$(detect_target)"
@@ -247,15 +334,52 @@ main() {
 
   ensure_config
 
-  local mode
-  mode="$(ask_installation_mode)"
+  local mode syncd_configuration_mode=""
+  if [[ -f "${SYNCD_CONFIG_DIR}/config.scm" ]] \
+    && command -v systemctl >/dev/null 2>&1; then
+    syncd_configuration_mode="$(ask_syncd_configuration_mode)"
+    if [[ "${syncd_configuration_mode}" == "choose" ]]; then
+      syncd_configuration_mode=""
+      mode="$(ask_installation_mode)"
+    else
+      mode="syncd"
+    fi
+  else
+    mode="$(ask_installation_mode)"
+  fi
 
   case "${mode}" in
     syncd | both)
-      systemctl --user stop xo-syncd.service 2>/dev/null || true
-      setup_systemd_unit
+      if command -v systemctl >/dev/null 2>&1; then
+        if [[ -z "${syncd_configuration_mode}" ]]; then
+          syncd_configuration_mode="$(ask_syncd_configuration_mode)"
+        fi
+        setup_systemd_unit "${syncd_configuration_mode}"
+        systemctl --user daemon-reload || warn "systemctl --user daemon-reload failed"
+        if [[ "${SYNCD_WAS_RUNNING}" == true ]]; then
+          restore_running_syncd
+        else
+          local enable_now
+          enable_now="$(prompt_choice "Enable and start xo-syncd.service now? (y/n)" "y")"
+          case "${enable_now}" in
+            y | Y | yes | Yes)
+              systemctl --user enable --now xo-syncd.service \
+                || warn "Could not enable/start xo-syncd.service"
+              log "xo-syncd.service enabled and started."
+              ;;
+            *)
+              log "xo-syncd.service registered. Enable later with: systemctl --user enable --now xo-syncd"
+              ;;
+          esac
+        fi
+      else
+        warn "systemctl is not available on this system; skipping systemd unit installation."
+      fi
       ;;
   esac
+
+  restore_running_syncd
+  trap - EXIT
 
   echo ""
   log "Installation complete!"

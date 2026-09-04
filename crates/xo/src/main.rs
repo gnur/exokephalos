@@ -550,13 +550,12 @@ async fn event_loop(
                     }
                 }
                 KeyCode::Enter => {
-                    let command = if app.action_query.trim().is_empty() {
-                        app.matching_tui_actions().get(app.action_index).cloned()
-                    } else {
-                        Some(app.action_query.clone())
-                    };
+                    let command = app.selected_tui_action();
                     app.mode = Mode::Normal;
                     if let Some(command) = command {
+                        if execute_behavior_action(app, session, &command).await? {
+                            continue;
+                        }
                         match xo::keymap::ActionCall::parse(&command) {
                             Ok(action)
                                 if dispatch_action(terminal, app, session, &action).await? =>
@@ -806,6 +805,56 @@ async fn event_loop(
         }
     }
     Ok(())
+}
+
+async fn execute_behavior_action(
+    app: &mut App,
+    session: &mut WorkspaceSession,
+    id: &str,
+) -> Result<bool> {
+    if !app.behavior.actions.iter().any(|action| action.id == id) {
+        return Ok(false);
+    }
+    let plugin = match app
+        .behavior
+        .action(app.selected_note(), id)
+        .map(|action| action.plugin.clone())
+    {
+        Ok(plugin) => plugin,
+        Err(error) => {
+            app.message = error.to_string();
+            return Ok(true);
+        }
+    };
+    match plugin {
+        Some(ActionPlugin::CaptureUrl) => {
+            app.capture_url.clear();
+            app.mode = Mode::CaptureUrl;
+        }
+        Some(ActionPlugin::TagPicker) => {
+            if app.selected_note_ids().is_empty() {
+                app.message = "select at least one note first".into();
+            } else {
+                app.selected_tags_for_picker();
+                app.mode = Mode::TagPicker;
+            }
+        }
+        Some(ActionPlugin::Steel { prompt, .. }) => {
+            app.plugin_input.clear();
+            app.plugin_results.clear();
+            app.plugin_index = 0;
+            app.plugin_action = Some(id.to_owned());
+            app.plugin_prompt = prompt;
+            app.mode = Mode::PluginInput;
+        }
+        None => {
+            let note = app.run_action(id)?;
+            session.save(&note).await?;
+            app.message = format!("applied {id}");
+            app.mode = Mode::Normal;
+        }
+    }
+    Ok(true)
 }
 
 #[allow(clippy::too_many_lines)]

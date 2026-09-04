@@ -212,10 +212,13 @@ fn action(form: &Form) -> Result<ActionCall> {
 }
 
 fn event_key_name(event: KeyEvent) -> Option<String> {
+    let implicit_backtab = event.code == KeyCode::BackTab
+        || (event.code == KeyCode::Tab && event.modifiers.contains(KeyModifiers::SHIFT));
     let base = match event.code {
         KeyCode::Char(' ') => "space".to_owned(),
         KeyCode::Char(value) => value.to_string(),
         KeyCode::Enter => "enter".to_owned(),
+        KeyCode::Tab if implicit_backtab => "backtab".to_owned(),
         KeyCode::Tab => "tab".to_owned(),
         KeyCode::BackTab => "backtab".to_owned(),
         KeyCode::Left => "left".to_owned(),
@@ -235,7 +238,10 @@ fn event_key_name(event: KeyEvent) -> Option<String> {
     if event.modifiers.contains(KeyModifiers::ALT) {
         prefixes.push("alt");
     }
-    if event.modifiers.contains(KeyModifiers::SHIFT) && !matches!(event.code, KeyCode::Char(_)) {
+    if event.modifiers.contains(KeyModifiers::SHIFT)
+        && !matches!(event.code, KeyCode::Char(_))
+        && !implicit_backtab
+    {
         prefixes.push("shift");
     }
     prefixes.push(&base);
@@ -406,6 +412,15 @@ mod tests {
         );
         assert_eq!(ActionCall::parse("q").unwrap().name, "quit");
         assert_eq!(ActionCall::parse("p").unwrap().name, "open_peers");
+        for event in [
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT),
+        ] {
+            assert_eq!(
+                keys.action_for(event).unwrap().name,
+                "focus_subview_previous"
+            );
+        }
         let custom = KeyMap::from_source(
             r#"(keys (bind "b" (goto_view "books/read")) (bind ":" action_picker))"#,
         )

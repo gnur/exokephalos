@@ -564,6 +564,11 @@ impl App {
         self.mode = Mode::Normal;
     }
 
+    #[must_use]
+    pub fn selected_tui_action(&self) -> Option<String> {
+        self.matching_tui_actions().get(self.action_index).cloned()
+    }
+
     pub fn matching_tui_actions(&self) -> Vec<String> {
         let needle = self.action_query.to_lowercase();
         if needle.starts_with("goto_view ") {
@@ -1706,6 +1711,13 @@ mod tests {
             .collect::<String>();
         assert!(screen.contains("[;] actions"));
         assert!(screen.contains("edit_workspace_config"), "{screen}");
+        app.action_query = "open".into();
+        app.action_index = 1;
+        assert_eq!(
+            app.selected_tui_action(),
+            app.matching_tui_actions().get(1).cloned()
+        );
+        assert_ne!(app.selected_tui_action().as_deref(), Some("open"));
     }
 
     #[test]

@@ -1,3 +1,4 @@
+mod api_keys;
 mod auth;
 mod central;
 mod config;
@@ -103,7 +104,13 @@ async fn main() -> Result<()> {
         let client_id = oidc_client_id
             .as_deref()
             .context("oidc-client-id is required")?;
-        auth::Authenticator::discover(issuer, audience, client_id).await?
+        auth::Authenticator::discover(
+            issuer,
+            audience,
+            client_id,
+            std::sync::Arc::new(api_keys::ApiKeys::open(&state_dir)?),
+        )
+        .await?
     };
     let workspace = CentralWorkspace::open(&state_dir)?;
     let listener = TcpListener::bind(bind)

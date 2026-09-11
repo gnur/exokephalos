@@ -387,6 +387,16 @@ Public routes:
   rate and body limits when exposed publicly.
 - Other `GET` routes — embedded PWA with SPA fallback.
 
+In **Settings → API keys**, an authenticated user can create, list, and revoke
+personal scoped API keys. The secret is displayed once and only its SHA-256 hash
+is stored in the server state directory. API keys use the normal `Bearer` header
+and can grant `xo:read`, `xo:write`, and/or `xo:sync`; they cannot manage API
+keys themselves.
+
+Authenticated management routes are `GET` and `POST /api/api-keys` plus
+`DELETE /api/api-keys/{id}`. They require an OAuth access token, not an API key.
+
+
 Authenticated routes:
 
 - `GET /api/sync` — WebSocket sync; requires `xo:read`, `xo:write`, and `xo:sync`.

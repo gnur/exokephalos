@@ -8,6 +8,7 @@ import {
   Cloud,
   CloudOff,
   Database,
+  KeyRound,
   Menu,
   Plus,
   Radio,
@@ -32,6 +33,7 @@ type Pane = 'items' | 'tags' | 'detail' | 'settings';
 
 export function WorkspaceExperience({
   report,
+  accessToken,
   busy,
   error,
   activeView,
@@ -48,6 +50,7 @@ export function WorkspaceExperience({
   onWipe,
 }: {
   report: RuntimeReport;
+  accessToken: string;
   busy: boolean;
   error: string;
   activeView: string;
@@ -285,6 +288,7 @@ export function WorkspaceExperience({
         ) : pane === 'settings' ? (
           <SettingsPane
             report={report}
+            accessToken={accessToken}
             busy={busy}
             onRefresh={onRefresh}
             onRestore={(noteId) => void onMutate({ operation: 'restore', noteId })}
@@ -434,21 +438,81 @@ function EditorPane({ editingId, title, draft, busy, error, onTitle, onDraft, on
   return <section className="single-pane editor"><div className="detail-heading"><div><p className="legacy-eyebrow">{editingId ? `Edit ${editingId}` : 'Create item'}</p><h2>Markdown editor</h2></div><button className="icon-button" onClick={onCancel} aria-label="Close editor"><X /></button></div>{error ? <p className="error-message">{error}</p> : null}{!editingId ? <label>Title<input autoFocus value={title} onChange={(event) => onTitle(event.target.value)} /></label> : null}<label>Frontmatter and Markdown<textarea className="raw-editor" value={draft} onChange={(event) => onDraft(event.target.value)} spellCheck="true" /></label><div className="button-row"><button className="button" onClick={onCancel}>Cancel</button><button className="button primary" disabled={busy || (!editingId && !title.trim())} onClick={onSave}>{busy ? <RefreshCw className="spin" /> : <Check />} Save note</button></div></section>;
 }
 
-function SettingsPane({ report, busy, onRefresh, onRestore, onWipe }: {
+function SettingsPane({ report, accessToken, busy, onRefresh, onRestore, onWipe }: {
   report: RuntimeReport;
+  accessToken: string;
   busy: boolean;
   onRefresh: () => void;
   onRestore: (noteId: string) => void;
   onWipe: () => void;
 }) {
+  const [page, setPage] = useState<'general' | 'api-keys'>('general');
   return <section className="single-pane settings-pane">
-    <div className="settings-section"><p className="legacy-eyebrow">Automerge workspace</p><h2>Synchronization</h2><div className="status-grid compact"><Status icon={<Cloud />} label="Server" value={report.status.connection} /><Status icon={<Radio />} label="Connected clients" value={String(report.status.clients.length)} /><Status icon={<Check />} label="Pending writes" value={String(report.pendingWrites)} /><Status icon={<Database />} label="Workspace" value={short(report.status.workspaceId)} /></div><button className="button" disabled={busy} onClick={onRefresh}><RefreshCw className={busy ? 'spin' : ''} /> Sync now</button></div>
-    <div className="settings-section"><p className="legacy-eyebrow">Presence</p><h2>Connected clients</h2>{report.status.clients.length ? report.status.clients.map((client) => <div className="entry-row" key={client}><div><strong>{client}</strong><span>{client === report.clientId ? 'this browser' : 'connected through xo-syncd'}</span></div></div>) : <p>No clients are currently connected. Offline editing remains available.</p>}</div>
-    {report.workspace?.deleted.length ? <details className="deleted-panel"><summary>Deleted notes ({report.workspace.deleted.length})</summary>{report.workspace.deleted.map((note) => <div key={note.id}><span><strong>{noteTitle(note)}</strong><small>{note.id}</small></span><button className="button" onClick={() => onRestore(note.id)}>Restore</button></div>)}</details> : null}
-    {report.workspace?.diagnostics.map((diagnostic) => <p className="error-message" key={diagnostic}>{diagnostic}</p>)}
-    <details className="raw-panel"><summary>Raw Automerge records ({report.entries.length})</summary><div className="entry-list">{report.entries.map((entry) => <EntryRow key={entry.keyBase64} entry={entry} />)}</div></details>
-    <div className="settings-section danger-zone"><p className="legacy-eyebrow">Authentication and local data</p><h2>Sign out</h2><p>Sign out and remove the client label, OAuth credentials, durable Automerge replica, pending synchronization state, and offline application files from this browser.</p><button className="button danger-button" disabled={busy} onClick={onWipe}><Trash2 /> Sign out and wipe this browser</button></div>
+    <div className="settings-tabs" role="tablist" aria-label="Settings">
+      <button className={page === 'general' ? 'active' : ''} onClick={() => setPage('general')}>General</button>
+      <button className={page === 'api-keys' ? 'active' : ''} onClick={() => setPage('api-keys')}><KeyRound /> API keys</button>
+    </div>
+    {page === 'api-keys' ? <ApiKeysPane accessToken={accessToken} /> : <>
+      <div className="settings-section"><p className="legacy-eyebrow">Automerge workspace</p><h2>Synchronization</h2><div className="status-grid compact"><Status icon={<Cloud />} label="Server" value={report.status.connection} /><Status icon={<Radio />} label="Connected clients" value={String(report.status.clients.length)} /><Status icon={<Check />} label="Pending writes" value={String(report.pendingWrites)} /><Status icon={<Database />} label="Workspace" value={short(report.status.workspaceId)} /></div><button className="button" disabled={busy} onClick={onRefresh}><RefreshCw className={busy ? 'spin' : ''} /> Sync now</button></div>
+      <div className="settings-section"><p className="legacy-eyebrow">Presence</p><h2>Connected clients</h2>{report.status.clients.length ? report.status.clients.map((client) => <div className="entry-row" key={client}><div><strong>{client}</strong><span>{client === report.clientId ? 'this browser' : 'connected through xo-syncd'}</span></div></div>) : <p>No clients are currently connected. Offline editing remains available.</p>}</div>
+      {report.workspace?.deleted.length ? <details className="deleted-panel"><summary>Deleted notes ({report.workspace.deleted.length})</summary>{report.workspace.deleted.map((note) => <div key={note.id}><span><strong>{noteTitle(note)}</strong><small>{note.id}</small></span><button className="button" onClick={() => onRestore(note.id)}>Restore</button></div>)}</details> : null}
+      {report.workspace?.diagnostics.map((diagnostic) => <p className="error-message" key={diagnostic}>{diagnostic}</p>)}
+      <details className="raw-panel"><summary>Raw Automerge records ({report.entries.length})</summary><div className="entry-list">{report.entries.map((entry) => <EntryRow key={entry.keyBase64} entry={entry} />)}</div></details>
+      <div className="settings-section danger-zone"><p className="legacy-eyebrow">Authentication and local data</p><h2>Sign out</h2><p>Sign out and remove the client label, OAuth credentials, durable Automerge replica, pending synchronization state, and offline application files from this browser.</p><button className="button danger-button" disabled={busy} onClick={onWipe}><Trash2 /> Sign out and wipe this browser</button></div>
+    </>}
   </section>;
+}
+
+type ApiKey = { id: string; label: string; permissions: string[]; created_at: number };
+
+function ApiKeysPane({ accessToken }: { accessToken: string }) {
+  const [keys, setKeys] = useState<ApiKey[]>([]);
+  const [label, setLabel] = useState('');
+  const [permissions, setPermissions] = useState<string[]>(['xo:read']);
+  const [created, setCreated] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const headers = { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
+  const load = async () => {
+    const response = await fetch('/api/api-keys', { headers });
+    if (!response.ok) throw new Error(await apiError(response));
+    setKeys(await response.json() as ApiKey[]);
+  };
+  useEffect(() => { void load().catch((cause: unknown) => setError(errorMessage(cause))); }, []);
+  const toggle = (permission: string) => setPermissions((current) => current.includes(permission)
+    ? current.filter((value) => value !== permission)
+    : [...current, permission]);
+  const create = async () => {
+    setBusy(true); setError(''); setCreated('');
+    try {
+      const response = await fetch('/api/api-keys', { method: 'POST', headers, body: JSON.stringify({ label, permissions }) });
+      if (!response.ok) throw new Error(await apiError(response));
+      const key = await response.json() as ApiKey & { token: string };
+      setCreated(key.token); setLabel(''); await load();
+    } catch (cause) { setError(errorMessage(cause)); } finally { setBusy(false); }
+  };
+  const remove = async (key: ApiKey) => {
+    if (!window.confirm(`Revoke API key “${key.label}”? This cannot be undone.`)) return;
+    setBusy(true); setError('');
+    try {
+      const response = await fetch(`/api/api-keys/${encodeURIComponent(key.id)}`, { method: 'DELETE', headers });
+      if (!response.ok) throw new Error(await apiError(response));
+      await load();
+    } catch (cause) { setError(errorMessage(cause)); } finally { setBusy(false); }
+  };
+  return <div className="settings-section api-keys-pane"><p className="legacy-eyebrow">Developer access</p><h2>API keys</h2><p>Create scoped bearer tokens for scripts and integrations. A token is shown only once; store it in a password manager.</p>
+    {created ? <div className="api-key-created"><strong>Copy this new API key now</strong><code>{created}</code><button className="button" onClick={() => void navigator.clipboard.writeText(created)}>Copy key</button></div> : null}
+    {error ? <p className="error-message">{error}</p> : null}
+    <label>Label<input value={label} onChange={(event) => setLabel(event.target.value)} maxLength={120} placeholder="Deploy integration" /></label>
+    <fieldset><legend>Permissions</legend>{['xo:read', 'xo:write', 'xo:sync'].map((permission) => <label key={permission}><input type="checkbox" checked={permissions.includes(permission)} onChange={() => toggle(permission)} /> {permission}</label>)}</fieldset>
+    <button className="button primary" disabled={busy || !label.trim() || !permissions.length} onClick={() => void create()}><KeyRound /> Create API key</button>
+    <div className="api-key-list">{keys.map((key) => <div className="entry-row" key={key.id}><div><strong>{key.label}</strong><span>{key.permissions.join(', ')} · created {new Date(key.created_at * 1000).toLocaleDateString()}</span></div><button className="button danger-button" disabled={busy} onClick={() => void remove(key)}>Revoke</button></div>)}{!keys.length ? <p>No API keys created yet.</p> : null}</div>
+  </div>;
+}
+
+async function apiError(response: Response) {
+  const value = await response.json().catch(() => undefined) as { error?: string } | undefined;
+  return value?.error || `Request failed (${response.status})`;
 }
 
 function Status({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {

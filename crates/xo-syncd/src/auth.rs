@@ -7,6 +7,8 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
+use crate::api_keys::ApiKeys;
+
 pub const READ_PERMISSION: &str = "xo:read";
 pub const WRITE_PERMISSION: &str = "xo:write";
 pub const SYNC_PERMISSION: &str = "xo:sync";
@@ -51,12 +53,18 @@ pub enum Authenticator {
     Oidc {
         verifier: Arc<OidcVerifier>,
         browser: BrowserAuthConfig,
+        api_keys: Arc<ApiKeys>,
     },
     UnsafeDisabled,
 }
 
 impl Authenticator {
-    pub async fn discover(issuer: &str, audience: &str, client_id: &str) -> Result<Self> {
+    pub async fn discover(
+        issuer: &str,
+        audience: &str,
+        client_id: &str,
+        api_keys: Arc<ApiKeys>,
+    ) -> Result<Self> {
         let issuer = issuer.trim_end_matches('/');
         let client = reqwest::Client::builder()
             .build()
@@ -82,6 +90,7 @@ impl Authenticator {
                 scopes: vec![READ_PERMISSION, WRITE_PERMISSION, SYNC_PERMISSION],
                 native_redirect_uri: NATIVE_REDIRECT_URI,
             },
+            api_keys,
         })
     }
 
@@ -107,6 +116,9 @@ impl Authenticator {
                 scopes: vec![READ_PERMISSION, WRITE_PERMISSION, SYNC_PERMISSION],
                 native_redirect_uri: NATIVE_REDIRECT_URI,
             },
+            api_keys: Arc::new(
+                ApiKeys::open(&std::env::temp_dir()).expect("temporary API key store"),
+            ),
         }
     }
 
@@ -118,16 +130,38 @@ impl Authenticator {
     }
 
     pub async fn authorize(&self, token: Option<&str>, permission: &str) -> Result<()> {
-        let Self::Oidc { verifier, .. } = self else {
+        let Self::Oidc {
+            verifier, api_keys, ..
+        } = self
+        else {
             return Ok(());
         };
         let token = token.context("missing bearer access token")?;
-        verifier.verify(token, permission).await
+        if api_keys.authorize(token, permission) {
+            return Ok(());
+        }
+        verifier.verify(token, permission).await.map(|_| ())
+    }
+
+    pub async fn authorize_subject(&self, token: Option<&str>, permission: &str) -> Result<String> {
+        let Self::Oidc { verifier, .. } = self else {
+            return Ok("unsafe-disabled".into());
+        };
+        verifier
+            .verify(token.context("missing bearer access token")?, permission)
+            .await
+    }
+
+    pub fn api_keys(&self) -> Option<&Arc<ApiKeys>> {
+        match self {
+            Self::Oidc { api_keys, .. } => Some(api_keys),
+            Self::UnsafeDisabled => None,
+        }
     }
 }
 
 impl OidcVerifier {
-    async fn verify(&self, token: &str, permission: &str) -> Result<()> {
+    async fn verify(&self, token: &str, permission: &str) -> Result<String> {
         let header = decode_header(token).context("invalid access token header")?;
         if !matches!(
             header.alg,
@@ -139,12 +173,8 @@ impl OidcVerifier {
         ) {
             bail!("access token uses an unsupported signing algorithm");
         }
-        if self
-            .decode_with_keys(token, &header, permission)
-            .await
-            .is_ok()
-        {
-            return Ok(());
+        if let Ok(subject) = self.decode_with_keys(token, &header, permission).await {
+            return Ok(subject);
         }
         let refreshed = fetch_json(&self.client, &self.jwks_uri).await?;
         *self.keys.write().await = refreshed;
@@ -156,7 +186,7 @@ impl OidcVerifier {
         token: &str,
         header: &jsonwebtoken::Header,
         permission: &str,
-    ) -> Result<()> {
+    ) -> Result<String> {
         let keys = self.keys.read().await;
         let jwk = header
             .kid
@@ -179,7 +209,7 @@ impl OidcVerifier {
         if !permissions.contains(permission) {
             bail!("access token lacks {permission} permission");
         }
-        Ok(())
+        Ok(claims.sub)
     }
 }
 

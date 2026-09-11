@@ -304,6 +304,7 @@ function App({ accessToken }: { accessToken: string }) {
     return (
       <WorkspaceExperience
         report={report}
+        accessToken={accessToken}
         busy={busy}
         error={error}
         activeView={activeView}

@@ -45,6 +45,13 @@ struct ItemResponse {
     body: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateApiKey {
+    label: String,
+    permissions: std::collections::BTreeSet<String>,
+}
+
 pub async fn serve(
     listener: TcpListener,
     workspace: Arc<CentralWorkspace>,
@@ -126,6 +133,11 @@ async fn handle(
             }
             websocket_upgrade(&mut request, workspace, &sockets, socket_shutdown)
         }
+        (&Method::GET, "/api/api-keys") => api_keys_list(&auth, &request).await,
+        (&Method::POST, "/api/api-keys") => api_keys_create(&auth, request).await,
+        (&Method::DELETE, path) if path.starts_with("/api/api-keys/") => {
+            api_keys_remove(&auth, path, &request).await
+        }
         (&Method::POST, "/api/items") => {
             if let Err(error) = authorize_request(&auth, &request, WRITE_PERMISSION).await {
                 return error;
@@ -197,6 +209,90 @@ fn websocket_protocol_token(request: &Request<Incoming>) -> Option<String> {
                 .map(str::trim)
                 .find_map(|protocol| protocol.strip_prefix("xo-bearer.").map(str::to_owned))
         })
+}
+
+async fn api_keys_list(auth: &Authenticator, request: &Request<Incoming>) -> Response<Body> {
+    let subject = match auth
+        .authorize_subject(request_token(request).as_deref(), READ_PERMISSION)
+        .await
+    {
+        Ok(subject) => subject,
+        Err(error) => return unauthorized(&error.to_string()),
+    };
+    let Some(keys) = auth.api_keys() else {
+        return json_response(
+            StatusCode::OK,
+            &Vec::<crate::api_keys::ApiKeyMetadata>::new(),
+        );
+    };
+    json_response(StatusCode::OK, &keys.list(&subject))
+}
+
+async fn api_keys_create(auth: &Authenticator, request: Request<Incoming>) -> Response<Body> {
+    let token = request_token(&request);
+    let subject = match auth
+        .authorize_subject(token.as_deref(), READ_PERMISSION)
+        .await
+    {
+        Ok(subject) => subject,
+        Err(error) => return unauthorized(&error.to_string()),
+    };
+    let request = match parse_json::<CreateApiKey>(request).await {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let known = [READ_PERMISSION, WRITE_PERMISSION, SYNC_PERMISSION];
+    if request
+        .permissions
+        .iter()
+        .any(|permission| !known.contains(&permission.as_str()))
+    {
+        return json_error(StatusCode::BAD_REQUEST, "unknown API key permission");
+    }
+    for permission in &request.permissions {
+        if let Err(error) = auth.authorize_subject(token.as_deref(), permission).await {
+            return unauthorized(&error.to_string());
+        }
+    }
+    let Some(keys) = auth.api_keys() else {
+        return json_error(
+            StatusCode::NOT_IMPLEMENTED,
+            "API keys require OAuth authentication",
+        );
+    };
+    match keys.create(&subject, &request.label, request.permissions) {
+        Ok(key) => json_response(StatusCode::CREATED, &key),
+        Err(error) => json_error(StatusCode::BAD_REQUEST, &error.to_string()),
+    }
+}
+
+async fn api_keys_remove(
+    auth: &Authenticator,
+    path: &str,
+    request: &Request<Incoming>,
+) -> Response<Body> {
+    let id = &path["/api/api-keys/".len()..];
+    if id.len() != 16 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return json_error(StatusCode::BAD_REQUEST, "invalid API key ID");
+    }
+    let subject = match auth
+        .authorize_subject(request_token(request).as_deref(), READ_PERMISSION)
+        .await
+    {
+        Ok(subject) => subject,
+        Err(error) => return unauthorized(&error.to_string()),
+    };
+    let Some(keys) = auth.api_keys() else {
+        return json_error(
+            StatusCode::NOT_IMPLEMENTED,
+            "API keys require OAuth authentication",
+        );
+    };
+    match keys.remove(&subject, id) {
+        Ok(true) => response(StatusCode::NO_CONTENT, "application/json", Bytes::new()),
+        Ok(false) => json_error(StatusCode::NOT_FOUND, "API key not found"),
+        Err(error) => internal_error(&error),
+    }
 }
 
 async fn webhook(

@@ -27,7 +27,13 @@
 .brand-logo.loading { animation-play-state: running; }
 @keyframes logo-spin { to { transform: rotate(360deg); } }
 .loading-state { display: flex; align-items: center; justify-content: center; gap: 8px; }
-.legacy-content { width: 100%; min-width: 0; margin: 0; padding: 0 0 calc(92px + env(safe-area-inset-bottom)); }
+.legacy-content {
+  width: 100%; min-width: 0; margin: 0;
+  /* Reserve the fixed mobile search bar and its safe-area inset so the last
+     note can scroll completely above it. */
+  padding: 0 0 calc(118px + env(safe-area-inset-bottom));
+  scroll-padding-bottom: calc(118px + env(safe-area-inset-bottom));
+}
 
 .legacy-shell .button,
 .legacy-shell .icon-button {
@@ -84,6 +90,10 @@
 .items-header p { margin: 3px 0 0; color: #94a3b8; font-size: .82rem; }
 .list-pane, .single-pane { padding: 14px; }
 .item-list { display: grid; gap: 8px; }
+/* The application shell also has a desktop split-pane `.note-list` rule. This
+   mobile experience uses document scrolling; do not turn its list into a short
+   nested scroller that leaves the lower viewport covered by fixed controls. */
+.legacy-shell .note-list { max-height: none; overflow: visible; border: 0; }
 .year-heading { grid-column: 1 / -1; margin: 14px 0 2px; padding-bottom: 6px; border-bottom: 1px solid #334155; color: #7dd3fc; font-size: .95rem; letter-spacing: .08em; }
 .item-row {
   width: 100%;
@@ -167,7 +177,18 @@
 .error-message { border: 1px solid #7f1d1d; border-radius: 8px; padding: 10px; color: #fecaca; background: #450a0a77; overflow-wrap: anywhere; }
 
 .settings-pane { max-width: 860px; margin: 0 auto; }
+.settings-tabs { display: flex; gap: 8px; border-bottom: 1px solid #263244; padding-bottom: 12px; }
+.settings-tabs button { min-height: 38px; display: inline-flex; align-items: center; gap: 7px; border: 1px solid #334155; border-radius: 8px; padding: 7px 10px; color: #cbd5e1; background: #111827; }
+.settings-tabs button.active { border-color: #38bdf8; color: #7dd3fc; background: #0f2537; }
+.settings-tabs svg { width: 16px; }
 .settings-section { border: 1px solid #263244; border-radius: 8px; padding: 14px; background: #111827; }
+.api-keys-pane fieldset { display: grid; gap: 8px; margin: 0; border: 1px solid #334155; border-radius: 8px; padding: 10px; }
+.api-keys-pane fieldset label { display: flex; align-items: center; gap: 8px; }
+.api-keys-pane fieldset input { width: auto; }
+.api-key-created { display: grid; gap: 8px; border: 1px solid #0e7490; border-radius: 8px; padding: 12px; color: #cffafe; background: #083344; }
+.api-key-created code { overflow-wrap: anywhere; color: #f8fafc; font-size: .8rem; }
+.api-key-list { display: grid; gap: 8px; }
+.api-key-list > p { margin: 0; color: #94a3b8; }
 .settings-section h2 { margin: 0; color: #f8fafc; font-size: 1.15rem; }
 .danger-zone { border-color: #7f1d1d; }
 .danger-button { border-color: #b91c1c; color: #fecaca; }

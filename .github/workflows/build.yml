@@ -12,12 +12,12 @@ on:
   push:
     branches:
       - main
-    tags:
-      - "*"
 
+# Every accepted main commit gets its own release. Do not cancel older main
+# runs: cancelling would leave a pushed commit without its promised release.
 concurrency:
   group: build-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -25,11 +25,30 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
-  XO_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
 
 jobs:
+  prepare_release:
+    name: Prepare release version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Reserve a unique UTC release version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" != push || "${GITHUB_REF}" != refs/heads/main ]]; then
+            echo 'version=dev' >> "${GITHUB_OUTPUT}"
+          else
+            echo "version=$(date -u +%Y%m%dT%H%M%SZ)" >> "${GITHUB_OUTPUT}"
+          fi
+
   quality:
     name: Format, lint, and test
+    needs: prepare_release
+    env:
+      XO_VERSION: ${{ needs.prepare_release.outputs.version }}
     # Keep untrusted pull requests on ephemeral GitHub runners. Trusted branch
     # and tag builds use any available persistent Linux project runner and its warm caches.
     runs-on: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-24.04"]' || '["self-hosted","Linux"]') }}
@@ -58,6 +77,9 @@ jobs:
 
   web:
     name: xo-pwa static PWA
+    needs: prepare_release
+    env:
+      XO_VERSION: ${{ needs.prepare_release.outputs.version }}
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     steps:
@@ -225,8 +247,11 @@ jobs:
   binaries:
     name: Binaries (${{ matrix.target }})
     needs:
+      - prepare_release
       - quality
       - web
+    env:
+      XO_VERSION: ${{ needs.prepare_release.outputs.version }}
     runs-on: ${{ fromJSON(github.event_name == 'pull_request' && matrix.pull_request_runner || matrix.trusted_runner) }}
     timeout-minutes: 30
     strategy:
@@ -344,8 +369,11 @@ jobs:
   container:
     name: xo-syncd container
     needs:
+      - prepare_release
       - quality
       - binaries
+    env:
+      XO_VERSION: ${{ needs.prepare_release.outputs.version }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -395,6 +423,7 @@ jobs:
             type=ref,event=tag
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ needs.prepare_release.outputs.version }},enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha
           labels: |
@@ -410,14 +439,17 @@ jobs:
           push: ${{ github.event_name == 'push' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            XO_VERSION=${{ needs.prepare_release.outputs.version }}
           annotations: ${{ steps.meta.outputs.annotations }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
   release:
     name: GitHub Release
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs:
+      - prepare_release
       - binaries
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -425,13 +457,21 @@ jobs:
       actions: read
       contents: write
     steps:
-      - name: Validate timestamp release tag
+      - name: Checkout the released commit
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Create the release tag
         shell: bash
         run: |
-          if [[ ! "${GITHUB_REF_NAME}" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
-            echo "release tag must be a UTC timestamp such as 20260731T171136Z" >&2
+          tag="${{ needs.prepare_release.outputs.version }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "release tag ${tag} already exists" >&2
             exit 1
           fi
+          git tag -a "${tag}" "${GITHUB_SHA}" -m "Release ${tag}"
+          git push origin "refs/tags/${tag}"
 
       - name: Download release binaries
         uses: actions/download-artifact@v8
@@ -449,11 +489,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            echo "Release ${GITHUB_REF_NAME} already exists; leaving it unchanged."
+          tag="${{ needs.prepare_release.outputs.version }}"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            echo "Release ${tag} already exists; leaving it unchanged."
           else
-            gh release create "${GITHUB_REF_NAME}" release-assets/* \
+            gh release create "${tag}" release-assets/* \
               --verify-tag \
               --generate-notes \
-              --title "${GITHUB_REF_NAME}"
+              --title "${tag}"
           fi

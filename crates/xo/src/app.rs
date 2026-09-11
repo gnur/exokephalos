@@ -192,6 +192,10 @@ impl App {
     }
 
     pub fn toggle_selected_note(&mut self) {
+        if self.pane == Pane::Tags {
+            self.toggle_highlighted_tag();
+            return;
+        }
         if let Some(note) = self.selected_note().cloned() {
             if !self.selected_notes.remove(&note.id) {
                 self.selected_notes.insert(note.id);
@@ -2034,8 +2038,11 @@ mod tests {
         );
         assert_eq!(app.available_tags(), vec![("rust".into(), 1)]);
         app.pane = Pane::Tags;
-        app.toggle_highlighted_tag();
+        // Space's default toggle_selection action reaches this method. In the
+        // tag pane it must toggle the tag rather than start note selection.
+        app.toggle_selected_note();
         assert!(app.selected_tags.contains("rust"));
+        assert!(app.selected_notes.is_empty());
 
         let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
         terminal.draw(|frame| render(frame, &app)).unwrap();

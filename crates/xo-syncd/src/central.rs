@@ -18,6 +18,7 @@ use xo_core::{ActorId, CURRENT_SCHEMA, HlcClock, Note, NoteId, NoteRevision, Rev
 
 const WORKSPACE_ID_FILE: &str = "workspace-id";
 const SERVER_ACTOR_FILE: &str = "server-actor";
+const WEBSOCKET_KEEPALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug)]
 enum WorkspaceNotification {
@@ -278,6 +279,11 @@ impl CentralWorkspace {
                 sender.send(Message::Binary(message.into())).await?;
             }
             let mut notifications = self.notifications.subscribe();
+            let mut keepalive = tokio::time::interval(WEBSOCKET_KEEPALIVE_INTERVAL);
+            keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // The initial interval tick is immediate; consume it so only idle
+            // connections receive periodic WebSocket pings.
+            keepalive.tick().await;
             loop {
                 tokio::select! {
                     incoming = receiver.next() => {
@@ -322,6 +328,9 @@ impl CentralWorkspace {
                             Err(broadcast::error::RecvError::Lagged(_)) => {},
                             Err(broadcast::error::RecvError::Closed) => break,
                         }
+                    }
+                    _ = keepalive.tick() => {
+                        sender.send(Message::Ping(Vec::new().into())).await?;
                     }
                 }
             }

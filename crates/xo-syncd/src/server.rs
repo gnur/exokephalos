@@ -66,7 +66,7 @@ pub async fn serve(
         tokio::select! {
             _ = &mut shutdown => break,
             accepted = listener.accept() => {
-                let (stream, _) = accepted?;
+                let (stream, peer) = accepted?;
                 let workspace = Arc::clone(&workspace);
                 let sockets = Arc::clone(&sockets);
                 let auth = Arc::clone(&auth);
@@ -80,7 +80,7 @@ pub async fn serve(
                         let auth = Arc::clone(&auth);
                         async move {
                             Ok::<_, Infallible>(
-                                handle(request, workspace, auth, sockets, socket_shutdown).await,
+                                handle(request, workspace, auth, sockets, socket_shutdown, peer).await,
                             )
                         }
                     });
@@ -116,10 +116,12 @@ async fn handle(
     auth: Arc<Authenticator>,
     sockets: Arc<StdMutex<JoinSet<()>>>,
     socket_shutdown: watch::Receiver<bool>,
+    peer: std::net::SocketAddr,
 ) -> Response<Body> {
+    let started = std::time::Instant::now();
     let path = request.uri().path().to_owned();
     let method = request.method().clone();
-    match (&method, path.as_str()) {
+    let response = match (&method, path.as_str()) {
         (&Method::GET, "/healthz") => response(StatusCode::OK, "text/plain; charset=utf-8", "ok\n"),
         (&Method::GET, "/.well-known/xo-configuration") => auth_config(&auth),
         (&Method::POST, path) if path.starts_with("/api/webhook/") => {
@@ -163,6 +165,21 @@ async fn handle(
         (&Method::GET, _) => crate::pwa::serve(&path),
         (&Method::HEAD, _) => crate::pwa::serve_head(&path),
         _ => json_error(StatusCode::METHOD_NOT_ALLOWED, "method not allowed"),
+    };
+    eprintln!(
+        "xo-syncd request peer={peer} method={method} path={} status={} duration_ms={}",
+        log_path(&path),
+        response.status(),
+        started.elapsed().as_millis(),
+    );
+    response
+}
+
+fn log_path(path: &str) -> &str {
+    if path.starts_with("/api/webhook/") {
+        "/api/webhook/:name"
+    } else {
+        path
     }
 }
 
@@ -660,7 +677,9 @@ fn websocket_upgrade(
                             .await;
                     tokio::select! {
                         result = workspace.serve_socket(socket) => {
-                            if let Err(error) = result {
+                            if let Err(error) = result
+                                && !is_ungraceful_disconnect(&error)
+                            {
                                 eprintln!("xo-syncd synchronization connection failed: {error:#}");
                             }
                         }
@@ -681,6 +700,14 @@ fn websocket_upgrade(
     response
         .body(Full::new(Bytes::new()))
         .expect("static WebSocket response is valid")
+}
+
+fn is_ungraceful_disconnect(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .to_string()
+            .contains("Connection reset without closing handshake")
+    })
 }
 
 fn response(
@@ -708,6 +735,19 @@ mod tests {
     use xo_core::{Note, NoteId};
 
     use super::*;
+
+    #[test]
+    fn request_logging_redacts_webhook_names() {
+        assert_eq!(log_path("/api/webhook/secret-name"), "/api/webhook/:name");
+        assert_eq!(log_path("/api/items/example"), "/api/items/example");
+    }
+
+    #[test]
+    fn reset_without_websocket_close_is_not_reported_as_a_failure() {
+        assert!(is_ungraceful_disconnect(&anyhow::anyhow!(
+            "WebSocket protocol error: Connection reset without closing handshake"
+        )));
+    }
 
     async fn request(address: std::net::SocketAddr, request: &str) -> String {
         let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();

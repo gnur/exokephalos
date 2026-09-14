@@ -148,6 +148,13 @@ sorting, and actions that move books through a reading workflow.
 
 ## Using xo
 
+### Indexed pages
+
+Items with boolean frontmatter `index: true` are always listed before ordinary
+items. Within the indexed and ordinary groups, xo still uses the active
+view/subview sort field and direction. This makes a `type: stats, index: true`
+item a useful default page for a view.
+
 ### Offline synchronization and storage
 
 A write is acknowledged only after the local replica is durable. Clients
@@ -377,6 +384,26 @@ Manifest errors are reported by the management command before installation.
 Runtime errors are shown in the TUI without granting the plugin additional host
 access.
 
+### Read-only Steel Markdown blocks
+
+Any item body may contain a fenced `steel` block. xo evaluates it only for the
+preview; it is never saved back into the item. The block must return a Markdown
+string, which replaces the fence in both the TUI and PWA preview:
+
+````markdown
+```steel
+(let ([books (string->jsexpr (xo-query "{\\\"type\\\":\\\"book\\\"}"))])
+  (string-append "## Reading stats\\nBooks: " (number->string (length books))))
+```
+````
+
+`xo-query` takes a JSON object of exact frontmatter-field matches and returns a
+JSON array of matching `{id, frontmatter, body}` objects. Use `{}` to read all
+non-deleted items. Steel runs in a fresh sandbox with **only** this bounded,
+read-only primitive: it has no mutation, filesystem, environment, network,
+process, terminal, or clock access. Block source is limited to 64 KiB and its
+Markdown result to 256 KiB.
+
 ## Server API and operation
 
 Public routes:
@@ -404,6 +431,22 @@ Authenticated routes:
 - `POST /api/items` — safely capture a public URL.
 - `PATCH /api/items/{id}` — create an updated revision.
 - `DELETE /api/items/{id}` — create a deleted revision.
+
+`GET /api/items/{id}` represents an item as `{ "frontmatter": {}, "body": [] }`.
+The `body` array contains plaintext segments joined with implicit newlines.
+`PATCH /api/items/{id}` continues to accept the existing JSON object form, and
+also accepts RFC 6902 with `Content-Type: application/json-patch+json`. For
+example, append and prepend without managing newline characters:
+
+```console
+curl -X PATCH https://notes.example.com/api/items/ITEM_ID \
+  -H 'Authorization: Bearer …' \
+  -H 'Content-Type: application/json-patch+json' \
+  --data '[
+    {"op":"add","path":"/body/0","value":"Prepended paragraph"},
+    {"op":"add","path":"/body/-","value":"Appended paragraph"}
+  ]'
+```
 
 Send access tokens as `Authorization: Bearer …`. Reads require `xo:read` and
 writes require `xo:write`. JSON bodies are limited to 1 MiB. URL capture checks

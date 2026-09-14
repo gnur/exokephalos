@@ -20,6 +20,8 @@ pub mod record_workspace;
 pub mod records;
 pub mod resolution;
 #[cfg(feature = "steel")]
+pub mod steel_blocks;
+#[cfg(feature = "steel")]
 pub mod steel_runtime;
 #[cfg(feature = "native")]
 pub mod sync_state;

@@ -53,6 +53,7 @@ pub struct BrowserNote {
     id: String,
     frontmatter: Frontmatter,
     body: String,
+    rendered_body: String,
     path: String,
     markdown: String,
     winning_revision: String,
@@ -461,7 +462,29 @@ impl Repository {
         Ok(resolve_heads(&group.revisions, &group.heads))
     }
 
+    fn readable_notes(&self) -> Result<Vec<Note>> {
+        let mut notes = Vec::new();
+        for (id, group) in &self.groups {
+            let Some(resolved) = self.resolve(id)? else {
+                continue;
+            };
+            let Some(revision) = group.revisions.get(&resolved.winning_revision) else {
+                continue;
+            };
+            if !revision.deleted {
+                notes.push(Note {
+                    id: id.clone(),
+                    frontmatter: revision.frontmatter.clone(),
+                    body: revision.body.clone(),
+                    path: revision.materialized_path.clone(),
+                });
+            }
+        }
+        Ok(notes)
+    }
+
     fn notes(&self, deleted: bool) -> Result<Vec<BrowserNote>> {
+        let readable = self.readable_notes()?;
         let mut output = Vec::new();
         for (id, group) in &self.groups {
             let Some(resolved) = self.resolve(id)? else {
@@ -488,6 +511,7 @@ impl Repository {
                 id: id.to_string(),
                 frontmatter: winner.frontmatter.clone(),
                 body: winner.body.clone(),
+                rendered_body: xo_core::steel_blocks::render_steel_blocks(&winner.body, &readable),
                 path: winner.materialized_path.clone(),
                 markdown: xo_core::markdown::render(&winner.frontmatter, &winner.body)?,
                 winning_revision: resolved.winning_revision.to_string(),

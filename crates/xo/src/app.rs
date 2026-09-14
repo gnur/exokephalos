@@ -156,7 +156,19 @@ impl App {
     pub fn visible_notes(&self) -> Vec<&Note> {
         let mut notes = self.query_notes(self.selected_tags.clone());
         if self.sort_descending {
-            notes.reverse();
+            // Reverse each priority group without moving `index: true` items
+            // below ordinary notes.
+            let indexed = notes
+                .iter()
+                .take_while(|note| {
+                    matches!(
+                        note.frontmatter.get("index"),
+                        Some(FrontmatterValue::Bool(true))
+                    )
+                })
+                .count();
+            notes[..indexed].reverse();
+            notes[indexed..].reverse();
         }
         notes
     }
@@ -694,7 +706,7 @@ impl App {
             note.body.clone()
         };
         let mut visible = note.clone();
-        visible.body = body;
+        visible.body = xo_core::steel_blocks::render_steel_blocks(&body, &self.notes);
         Ok(xo_core::markdown::render(
             &visible.frontmatter,
             &visible.body,
@@ -1722,6 +1734,27 @@ mod tests {
             app.matching_tui_actions().get(1).cloned()
         );
         assert_ne!(app.selected_tui_action().as_deref(), Some("open"));
+    }
+
+    #[test]
+    fn reverse_sort_keeps_index_items_above_ordinary_notes() {
+        let mut app = fixture();
+        app.notes[0]
+            .frontmatter
+            .insert("index".into(), FrontmatterValue::Bool(true));
+        let mut ordinary = app.notes[0].clone();
+        ordinary.id = NoteId::new("note002");
+        ordinary.frontmatter.insert(
+            "title".into(),
+            FrontmatterValue::String("Later ordinary".into()),
+        );
+        ordinary.frontmatter.remove("index");
+        app.notes.push(ordinary);
+        app.toggle_sort();
+        assert!(matches!(
+            app.visible_notes()[0].frontmatter.get("index"),
+            Some(FrontmatterValue::Bool(true))
+        ));
     }
 
     #[test]

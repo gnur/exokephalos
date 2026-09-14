@@ -411,7 +411,7 @@ function DetailPane({ note, titleField, onBack, onEdit, onDelete }: {
   onDelete: () => void;
 }) {
   if (!note) return <div className="empty-state">No item selected.</div>;
-  const html = DOMPurify.sanitize(marked.parse(note.body || '', { async: false }) as string);
+  const html = DOMPurify.sanitize(marked.parse(note.renderedBody || '', { async: false }) as string);
   return (
     <article className="detail-pane note-preview">
       <div className="detail-toolbar"><button className="button back-button" onClick={onBack}><ArrowLeft /> Items</button><div><button className="button" onClick={onEdit}>Edit</button><button className="icon-button danger" onClick={onDelete} aria-label="Delete"><Trash2 /></button></div></div>

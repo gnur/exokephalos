@@ -61,6 +61,7 @@ export interface WorkspaceNote {
   id: string;
   frontmatter: Record<string, FrontmatterValue>;
   body: string;
+  renderedBody: string;
   path: string;
   markdown: string;
   winningRevision: string;

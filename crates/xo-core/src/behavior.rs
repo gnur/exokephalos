@@ -368,15 +368,16 @@ impl WorkspaceBehavior {
             .and_then(|value| value.sort_field.as_deref())
             .or_else(|| view.and_then(|value| value.sort_field.as_deref()))
             .unwrap_or("created");
+        let descending = view.is_some_and(|value| value.descending);
         result.sort_by(|left, right| {
-            field(left, sort_field)
-                .to_lowercase()
-                .cmp(&field(right, sort_field).to_lowercase())
-                .then_with(|| left.id.cmp(&right.id))
+            index_item(right).cmp(&index_item(left)).then_with(|| {
+                let order = field(left, sort_field)
+                    .to_lowercase()
+                    .cmp(&field(right, sort_field).to_lowercase())
+                    .then_with(|| left.id.cmp(&right.id));
+                if descending { order.reverse() } else { order }
+            })
         });
-        if view.is_some_and(|value| value.descending) {
-            result.reverse();
-        }
         result.truncate(limit);
         Ok(result)
     }
@@ -523,6 +524,14 @@ fn unique<'a>(
 /// Date and timestamp fields conventionally begin with an ISO year. Values
 /// without such a prefix are grouped under an undated heading by clients.
 #[must_use]
+fn index_item(note: &Note) -> bool {
+    matches!(
+        note.frontmatter.get("index"),
+        Some(FrontmatterValue::Bool(true))
+    )
+}
+
+#[must_use]
 pub fn sort_year(note: &Note, sort_field: &str) -> Option<String> {
     let value = field(note, sort_field);
     let year = value.get(..4)?;
@@ -598,6 +607,10 @@ mod tests {
                     FrontmatterValue::String(title.to_owned()),
                 ),
                 (
+                    "type".to_owned(),
+                    FrontmatterValue::String("note".to_owned()),
+                ),
+                (
                     "tags".to_owned(),
                     FrontmatterValue::Sequence(
                         tags.iter()
@@ -629,6 +642,32 @@ mod tests {
         assert_eq!(found[0].id.as_str(), "z title");
         assert_eq!(sort_year(found[0], "created").as_deref(), Some("2024"));
         assert_eq!(sort_year(found[1], "title"), None);
+    }
+
+    #[test]
+    fn index_items_precede_the_configured_sort_order() {
+        let mut behavior = WorkspaceBehavior {
+            views: default_views(),
+            ..WorkspaceBehavior::default()
+        };
+        behavior.views[0].sort_field = Some("title".into());
+        behavior.views[0].descending = true;
+        let mut indexed = note("A index", &[]);
+        indexed
+            .frontmatter
+            .insert("index".into(), FrontmatterValue::Bool(true));
+        let ordinary = note("Z ordinary", &[]);
+        let notes = [ordinary, indexed];
+        let found = behavior
+            .query(
+                &notes,
+                &Query {
+                    view: "notes".into(),
+                    ..Query::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(found[0].id.as_str(), "a index");
     }
 
     #[test]

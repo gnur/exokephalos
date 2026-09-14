@@ -42,7 +42,8 @@ struct CreateItem {
 #[derive(Debug, Serialize)]
 struct ItemResponse {
     frontmatter: Frontmatter,
-    body: String,
+    /// JSON Patch represents body as newline-joined string segments.
+    body: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -429,26 +430,40 @@ async fn item_request(
                 StatusCode::OK,
                 &ItemResponse {
                     frontmatter: note.frontmatter,
-                    body: note.body,
+                    body: vec![note.body],
                 },
             ),
             Ok(None) => json_error(StatusCode::NOT_FOUND, "item not found"),
             Err(error) => internal_error(&error),
         },
         Method::PATCH => {
-            let update = match parse_json::<PatchItem>(request).await {
-                Ok(value) => value,
-                Err(response) => return response,
+            let update = if is_json_patch(&request) {
+                let patch_document = match parse_json_patch(request).await {
+                    Ok(patch_document) => patch_document,
+                    Err(response) => return response,
+                };
+                let existing = match workspace.item(&note_id).await {
+                    Ok(Some(note)) => note,
+                    Ok(None) => return json_error(StatusCode::NOT_FOUND, "item not found"),
+                    Err(error) => return internal_error(&error),
+                };
+                match apply_item_patch(&existing.frontmatter, &existing.body, &patch_document) {
+                    Ok(update) => update,
+                    Err(error) => return json_error(StatusCode::BAD_REQUEST, &error),
+                }
+            } else {
+                let update = match parse_json::<PatchItem>(request).await {
+                    Ok(value) => value,
+                    Err(response) => return response,
+                };
+                (update.frontmatter, update.body)
             };
-            match workspace
-                .patch_item(&note_id, update.frontmatter, update.body)
-                .await
-            {
+            match workspace.patch_item(&note_id, update.0, update.1).await {
                 Ok(Some(note)) => json_response(
                     StatusCode::OK,
                     &ItemResponse {
                         frontmatter: note.frontmatter,
-                        body: note.body,
+                        body: vec![note.body],
                     },
                 ),
                 Ok(None) => json_error(StatusCode::NOT_FOUND, "item not found"),
@@ -485,6 +500,57 @@ async fn parse_json<T: serde::de::DeserializeOwned>(
     let body = read_body_limited(request.into_body()).await?;
     serde_json::from_slice(&body)
         .map_err(|_| json_error(StatusCode::BAD_REQUEST, "invalid JSON body"))
+}
+
+fn is_json_patch(request: &Request<Incoming>) -> bool {
+    request
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| {
+            value
+                .trim()
+                .eq_ignore_ascii_case("application/json-patch+json")
+        })
+}
+
+async fn parse_json_patch(request: Request<Incoming>) -> Result<json_patch::Patch, Response<Body>> {
+    let body = read_body_limited(request.into_body()).await?;
+    serde_json::from_slice(&body)
+        .map_err(|_| json_error(StatusCode::BAD_REQUEST, "invalid JSON Patch document"))
+}
+
+fn apply_item_patch(
+    frontmatter: &Frontmatter,
+    body: &str,
+    patch: &json_patch::Patch,
+) -> Result<(Option<Frontmatter>, Option<String>), String> {
+    let mut document = serde_json::json!({ "frontmatter": frontmatter, "body": [body] });
+    json_patch::patch(&mut document, patch)
+        .map_err(|error| format!("apply JSON Patch: {error}"))?;
+    let frontmatter = serde_json::from_value(
+        document
+            .get("frontmatter")
+            .cloned()
+            .ok_or("patch removed frontmatter")?,
+    )
+    .map_err(|error| format!("invalid patched frontmatter: {error}"))?;
+    let segments = document
+        .get("body")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("patched body must be an array of strings")?;
+    let mut body = String::new();
+    for segment in segments {
+        let segment = segment
+            .as_str()
+            .ok_or("patched body must contain only strings")?;
+        if !body.is_empty() && !segment.is_empty() {
+            body.push('\n');
+        }
+        body.push_str(segment);
+    }
+    Ok((Some(frontmatter), Some(body)))
 }
 
 async fn read_body_limited(mut body: Incoming) -> Result<Bytes, Response<Body>> {
@@ -691,7 +757,7 @@ mod tests {
         )
         .await;
         assert!(get.starts_with("HTTP/1.1 200 OK\r\n"));
-        assert!(get.contains(r#""body":"original""#));
+        assert!(get.contains(r#""body":["original"]"#));
 
         let patch_body = r#"{"body":"updated"}"#;
         let patch = request(
@@ -703,7 +769,7 @@ mod tests {
         )
         .await;
         assert!(patch.starts_with("HTTP/1.1 200 OK\r\n"));
-        assert!(patch.contains(r#""body":"updated""#));
+        assert!(patch.contains(r#""body":["updated"]"#));
         assert_eq!(workspace.revision_count(&note_id).await.unwrap(), 2);
 
         let mismatch = r#"{"frontmatter":{"id":"another"}}"#;
@@ -733,6 +799,17 @@ mod tests {
 
         let _ = shutdown_tx.send(());
         task.await.unwrap().unwrap();
+    }
+
+    #[test]
+    fn json_patch_joins_body_segments_with_implicit_newlines() {
+        let patch: json_patch::Patch = serde_json::from_str(
+            r#"[{"op":"add","path":"/body/-","value":"appended"},{"op":"add","path":"/body/0","value":"prepended"}]"#,
+        )
+        .unwrap();
+        let frontmatter = Frontmatter::new();
+        let (_, body) = apply_item_patch(&frontmatter, "existing", &patch).unwrap();
+        assert_eq!(body.as_deref(), Some("prepended\nexisting\nappended"));
     }
 
     #[tokio::test]

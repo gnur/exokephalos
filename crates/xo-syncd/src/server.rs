@@ -842,6 +842,31 @@ mod tests {
     }
 
     #[test]
+    fn json_patch_appends_an_object_to_nested_frontmatter_array() {
+        let frontmatter = serde_json::from_value(serde_json::json!({
+            "data": { "points": [{ "value": 1303 }] }
+        }))
+        .unwrap();
+        let patch = serde_json::from_value(serde_json::json!([
+            {
+                "op": "add",
+                "path": "/frontmatter/data/points/-",
+                "value": { "timestamp": "2026-09-14T18:17:00+02:00", "value": 1304 }
+            }
+        ]))
+        .unwrap();
+
+        let (frontmatter, _) = apply_item_patch(&frontmatter, "", &patch).unwrap();
+        assert_eq!(
+            serde_json::to_value(frontmatter.unwrap()).unwrap()["data"]["points"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
     fn json_patch_joins_body_segments_with_implicit_newlines() {
         let patch: json_patch::Patch = serde_json::from_str(
             r#"[{"op":"add","path":"/body/-","value":"appended"},{"op":"add","path":"/body/0","value":"prepended"}]"#,

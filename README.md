@@ -410,6 +410,7 @@ Public routes:
 
 - `GET /healthz` — returns `ok`.
 - `GET /.well-known/xo-configuration` — non-secret OIDC client settings.
+- `GET /llm.txt` — URL-aware project, Steel, CLI, and API documentation for LLMs.
 - `POST /api/webhook/{source}` — creates a webhook item; protect it with proxy
   rate and body limits when exposed publicly.
 - Other `GET` routes — embedded PWA with SPA fallback.
@@ -429,8 +430,38 @@ Authenticated routes:
 - `GET /api/sync` — WebSocket sync; requires `xo:read`, `xo:write`, and `xo:sync`.
 - `GET /api/items/{id}` — read an item.
 - `POST /api/items` — safely capture a public URL.
+- `POST /api/item/{type}` — create an item from plain text or JSON.
 - `PATCH /api/items/{id}` — create an updated revision.
 - `DELETE /api/items/{id}` — create a deleted revision.
+
+`POST /api/item/{type}` requires `xo:write`. It accepts a UTF-8 body with
+`Content-Type: text/plain`, or an `application/json` object containing a required
+string `body` and optional `frontmatter` object. The server generates and
+overrides `id` and `created`, supplies default `title` and `tags` when needed,
+and returns `201 Created` with the complete item. The URL `{type}` always
+overrides a conflicting `frontmatter.type`.
+
+Create a plain Markdown item:
+
+```console
+curl -X POST https://notes.example.com/api/item/note \
+  -H 'Authorization: Bearer …' \
+  -H 'Content-Type: text/plain; charset=utf-8' \
+  --data-binary 'A plain Markdown note.'
+```
+
+Create a structured item (this creates a `task`, not a `note`):
+
+```console
+curl -X POST https://notes.example.com/api/item/task \
+  -H 'Authorization: Bearer …' \
+  -H 'Content-Type: application/json' \
+  --data '{"frontmatter":{"title":"Ship release","type":"note","tags":["todo"]},"body":"Run the release checklist."}'
+```
+
+Types must be 1–64 ASCII letters, digits, dots, underscores, or hyphens. Invalid
+types or JSON return `400`, unsupported media types return `415`, and bodies over
+1 MiB return `413`.
 
 `GET /api/items/{id}` represents an item as `{ "frontmatter": {}, "body": [] }`.
 The `body` array contains plaintext segments joined with implicit newlines.

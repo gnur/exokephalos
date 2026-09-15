@@ -2,6 +2,7 @@ mod api_keys;
 mod auth;
 mod central;
 mod config;
+mod llm;
 mod pwa;
 mod server;
 

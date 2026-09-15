@@ -33,8 +33,9 @@ deterministic visible revision while concurrent revisions remain explicit
 conflicts. Deletion and restoration are revisions. Workspace Steel configuration
 is replicated state rather than a projection file.
 
-`xo-syncd` exposes `GET`, `PATCH`, and `DELETE /api/items/{id}` plus URL capture
-through `POST /api/items`. Reads require `xo:read`, writes require `xo:write`, and
+`xo-syncd` exposes `GET`, `PATCH`, and `DELETE /api/items/{id}`, typed item
+creation through `POST /api/item/{type}`, and URL capture through
+`POST /api/items`. Reads require `xo:read`, writes require `xo:write`, and
 sync requires all three permissions. The public `POST /api/webhook/{source}` exception creates
 a webhook note containing YAML-rendered headers and JSON. API writes use the same
 typed record repository, revision graph, heads, HLC, and Automerge document as

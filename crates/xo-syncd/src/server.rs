@@ -39,6 +39,14 @@ struct CreateItem {
     url: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateTypedItem {
+    #[serde(default)]
+    frontmatter: Frontmatter,
+    body: String,
+}
+
 #[derive(Debug, Serialize)]
 struct ItemResponse {
     frontmatter: Frontmatter,
@@ -123,6 +131,7 @@ async fn handle(
     let method = request.method().clone();
     let response = match (&method, path.as_str()) {
         (&Method::GET, "/healthz") => response(StatusCode::OK, "text/plain; charset=utf-8", "ok\n"),
+        (&Method::GET, "/llm.txt") => crate::llm::serve(&request),
         (&Method::GET, "/.well-known/xo-configuration") => auth_config(&auth),
         (&Method::POST, path) if path.starts_with("/api/webhook/") => {
             webhook(path, request, &workspace).await
@@ -146,6 +155,12 @@ async fn handle(
                 return error;
             }
             create_item(request, &workspace).await
+        }
+        (&Method::POST, path) if path.starts_with("/api/item/") => {
+            if let Err(error) = authorize_request(&auth, &request, WRITE_PERMISSION).await {
+                return error;
+            }
+            create_typed_item(path, request, &workspace).await
         }
         (method, path) if path.starts_with("/api/items/") => {
             let permission = if *method == Method::GET {
@@ -398,6 +413,84 @@ fn markdown_fence(language: &str, content: &str) -> String {
     let fence = "`".repeat(longest.saturating_add(1).max(3));
     let separator = if content.ends_with('\n') { "" } else { "\n" };
     format!("{fence}{language}\n{content}{separator}{fence}\n")
+}
+
+async fn create_typed_item(
+    path: &str,
+    request: Request<Incoming>,
+    workspace: &CentralWorkspace,
+) -> Response<Body> {
+    let item_type = &path["/api/item/".len()..];
+    if item_type.is_empty()
+        || item_type.len() > 64
+        || !item_type
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return json_error(StatusCode::BAD_REQUEST, "invalid item type");
+    }
+
+    let media_type = request
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(|value| value.trim().to_owned());
+    let body_bytes = match read_body_limited(request.into_body()).await {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+    let (mut frontmatter, body) = match media_type.as_deref() {
+        Some(value) if value.eq_ignore_ascii_case("text/plain") => {
+            let Ok(body) = String::from_utf8(body_bytes.to_vec()) else {
+                return json_error(StatusCode::BAD_REQUEST, "plain text body is not UTF-8");
+            };
+            (Frontmatter::new(), body)
+        }
+        Some(value) if value.eq_ignore_ascii_case("application/json") => {
+            match serde_json::from_slice::<CreateTypedItem>(&body_bytes) {
+                Ok(create) => (create.frontmatter, create.body),
+                Err(_) => return json_error(StatusCode::BAD_REQUEST, "invalid JSON item body"),
+            }
+        }
+        _ => {
+            return json_error(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "content-type must be text/plain or application/json",
+            );
+        }
+    };
+
+    let now = time::OffsetDateTime::now_utc();
+    let id = NoteId::new(xo_core::id::generate(now));
+    let created = match xo_core::timestamp::format(now) {
+        Ok(created) => created,
+        Err(error) => return internal_error(&error),
+    };
+    frontmatter = xo_core::markdown::required_frontmatter(frontmatter, id.as_str(), &created);
+    // The route identifies the item type and therefore takes precedence over JSON input.
+    frontmatter.insert(
+        "type".into(),
+        FrontmatterValue::String(item_type.to_owned()),
+    );
+    let note = Note {
+        path: xo_core::projection::canonical_note_path(&id, &frontmatter),
+        id,
+        frontmatter,
+        body,
+    };
+    match workspace.create_item(&note).await {
+        Ok(true) => json_response(
+            StatusCode::CREATED,
+            &serde_json::json!({
+                "id": note.id,
+                "frontmatter": note.frontmatter,
+                "body": note.body,
+            }),
+        ),
+        Ok(false) => json_error(StatusCode::CONFLICT, "generated item already exists"),
+        Err(error) => internal_error(&error),
+    }
 }
 
 async fn create_item(request: Request<Incoming>, workspace: &CentralWorkspace) -> Response<Body> {
@@ -841,6 +934,75 @@ mod tests {
         task.await.unwrap().unwrap();
     }
 
+    #[tokio::test]
+    async fn typed_item_creation_accepts_plain_text_and_json_and_route_type_wins() {
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = CentralWorkspace::open(directory.path()).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let task = tokio::spawn(serve(
+            listener,
+            Arc::clone(&workspace),
+            Arc::new(Authenticator::unsafe_disabled()),
+            shutdown_rx,
+        ));
+
+        let plain_body = "a plain text item";
+        let plain_response = request(
+            address,
+            &format!(
+                "POST /api/item/note HTTP/1.1\r\nHost: localhost\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{plain_body}",
+                plain_body.len()
+            ),
+        )
+        .await;
+        assert!(plain_response.starts_with("HTTP/1.1 201 Created\r\n"));
+        let plain_json: serde_json::Value =
+            serde_json::from_str(plain_response.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        let plain = workspace
+            .item(&NoteId::new(plain_json["id"].as_str().unwrap()))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(plain.body, plain_body);
+        assert_eq!(
+            plain.frontmatter["type"],
+            FrontmatterValue::String("note".into())
+        );
+        assert!(plain.frontmatter.contains_key("created"));
+
+        let json_body = r#"{"frontmatter":{"title":"A task","type":"note"},"body":"from JSON"}"#;
+        let json_response = request(
+            address,
+            &format!(
+                "POST /api/item/task HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json_body}",
+                json_body.len()
+            ),
+        )
+        .await;
+        assert!(json_response.starts_with("HTTP/1.1 201 Created\r\n"));
+        let json: serde_json::Value =
+            serde_json::from_str(json_response.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        let item = workspace
+            .item(&NoteId::new(json["id"].as_str().unwrap()))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(item.body, "from JSON");
+        assert_eq!(
+            item.frontmatter["title"],
+            FrontmatterValue::String("A task".into())
+        );
+        assert_eq!(
+            item.frontmatter["type"],
+            FrontmatterValue::String("task".into())
+        );
+
+        let _ = shutdown_tx.send(());
+        task.await.unwrap().unwrap();
+    }
+
     #[test]
     fn json_patch_appends_an_object_to_nested_frontmatter_array() {
         let frontmatter = serde_json::from_value(serde_json::json!({
@@ -908,6 +1070,14 @@ mod tests {
         assert!(config.starts_with("HTTP/1.1 200 OK\r\n"));
         assert!(config.contains("https://id.example.test"));
         assert!(config.contains("http://127.0.0.1:9465/callback"));
+        let llm = request(
+            address,
+            "GET /llm.txt HTTP/1.1\r\nHost: notes.example.test\r\nX-Forwarded-Proto: https\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(llm.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(llm.contains("Base URL for this xo instance: https://notes.example.test"));
+        assert!(llm.contains("https://notes.example.test/api/item/task"));
         let health = request(
             address,
             "GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",

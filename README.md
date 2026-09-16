@@ -397,12 +397,49 @@ string, which replaces the fence in both the TUI and PWA preview:
 ```
 ````
 
-`xo-query` takes a JSON object of exact frontmatter-field matches and returns a
-JSON array of matching `{id, frontmatter, body}` objects. Use `{}` to read all
-non-deleted items. Steel runs in a fresh sandbox with **only** this bounded,
-read-only primitive: it has no mutation, filesystem, environment, network,
-process, terminal, or clock access. Block source is limited to 64 KiB and its
-Markdown result to 256 KiB.
+Only the fenced block is replaced; surrounding body Markdown is retained. An
+evaluation failure replaces that block with
+`> Steel block error: <message>`.
+
+Two xo host functions are available:
+
+- `(current-note-id)` returns the ID of the note whose preview is being rendered.
+- `(xo-query filter-json)` takes a JSON object and returns a JSON array of
+  matching `{id, frontmatter, body}` objects. Use `{}` for all non-deleted items.
+
+The query filter is conjunction-based, top-level, exact equality against
+frontmatter fields. It has no nested paths, partial matching, or comparison
+operators such as `<` and `>`. Perform nested extraction, comparisons, filtering,
+and aggregation in Steel. A portable self-query is:
+
+```scheme
+(define self
+  (car (string->jsexpr
+    (xo-query
+      (value->jsexpr-string (hash 'id (current-note-id)))))))
+```
+
+`string->jsexpr` converts JSON objects to Steel hash tables and JSON arrays to
+Scheme lists. JSON object keys become symbols, so use `(hash-ref item 'id)` and
+`(hash-ref item 'frontmatter)`, not string keys. Inspect these values with
+`hash?`, `hash-contains?`, and `list?`, and process arrays with `car`, `cdr`,
+`map`, `filter`, and `length`.
+
+The normal sandboxed Steel core is present. Commonly useful functions include
+arithmetic and comparisons, `quotient`, `modulo`, `substring`, `string-append`,
+`string-length`, `number->string`, `string->number`, `inexact->exact`, `map`, and
+`filter`. Racket-specific libraries, filesystem module loading, project crates,
+and undeclared xo host functions are not available; keep blocks self-contained.
+
+There is deliberately no clock. For time-based output, derive a reference from
+the current note's `created` frontmatter or the newest queried item. Compare
+normalized date strings (for example, a fixed-offset `YYYY-MM-DD` prefix), or
+store a numeric/sortable date field in frontmatter; Steel cannot determine the
+actual current time.
+
+Each block runs in a fresh sandbox and cannot mutate notes or access the
+filesystem, environment, network, processes, terminal, or clock. Block source
+is limited to 64 KiB and its Markdown result to 256 KiB.
 
 ## Server API and operation
 

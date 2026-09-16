@@ -511,7 +511,11 @@ impl Repository {
                 id: id.to_string(),
                 frontmatter: winner.frontmatter.clone(),
                 body: winner.body.clone(),
-                rendered_body: xo_core::steel_blocks::render_steel_blocks(&winner.body, &readable),
+                rendered_body: xo_core::steel_blocks::render_steel_blocks(
+                    &winner.body,
+                    &winner.note_id,
+                    &readable,
+                ),
                 path: winner.materialized_path.clone(),
                 markdown: xo_core::markdown::render(&winner.frontmatter, &winner.body)?,
                 winning_revision: resolved.winning_revision.to_string(),

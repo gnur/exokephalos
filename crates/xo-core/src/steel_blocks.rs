@@ -1,8 +1,8 @@
 //! Read-only Steel evaluation for Markdown fenced blocks.
 //!
-//! A `steel` block receives only `xo-query`: a JSON equality filter over any
-//! frontmatter fields. It cannot mutate notes or access the filesystem,
-//! environment, process, network, terminal, or clock.
+//! A `steel` block receives `current-note-id` and `xo-query`, a JSON equality
+//! filter over top-level frontmatter fields. It cannot mutate notes or access
+//! the filesystem, environment, process, network, terminal, or clock.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -13,16 +13,18 @@ use steel::steel_vm::engine::Engine;
 use steel::steel_vm::interrupt::InterruptHandler;
 use steel::steel_vm::register_fn::RegisterFn;
 
-use crate::Note;
 use crate::domain::Frontmatter;
+use crate::{Note, NoteId};
 
 const MAX_BLOCK_BYTES: usize = 64 * 1024;
 const MAX_RESULT_BYTES: usize = 256 * 1024;
 const MAX_QUERY_RESULTS: usize = 10_000;
 
 /// Expand fenced `steel` blocks into their returned Markdown.
+///
+/// `current_note_id` is exposed to each block through `(current-note-id)`.
 #[must_use]
-pub fn render_steel_blocks(body: &str, notes: &[Note]) -> String {
+pub fn render_steel_blocks(body: &str, current_note_id: &NoteId, notes: &[Note]) -> String {
     let mut output = String::with_capacity(body.len());
     let mut lines = body.split_inclusive('\n');
     while let Some(line) = lines.next() {
@@ -44,7 +46,7 @@ pub fn render_steel_blocks(body: &str, notes: &[Note]) -> String {
             output.push_str(&source);
             break;
         }
-        match evaluate(&source, notes) {
+        match evaluate(&source, current_note_id, notes) {
             Ok(markdown) => output.push_str(&markdown),
             Err(error) => writeln!(output, "> Steel block error: {error}")
                 .expect("write Steel error to String"),
@@ -53,7 +55,7 @@ pub fn render_steel_blocks(body: &str, notes: &[Note]) -> String {
     output
 }
 
-fn evaluate(source: &str, notes: &[Note]) -> Result<String, String> {
+fn evaluate(source: &str, current_note_id: &NoteId, notes: &[Note]) -> Result<String, String> {
     if source.len() > MAX_BLOCK_BYTES {
         return Err("block exceeds the 64 KiB limit".into());
     }
@@ -67,6 +69,8 @@ fn evaluate(source: &str, notes: &[Note]) -> Result<String, String> {
         })
         .collect::<Vec<_>>();
     let mut engine = Engine::new_sandboxed();
+    let current_note_id = current_note_id.to_string();
+    engine.register_fn("current-note-id", move || current_note_id.clone());
     engine.register_fn(
         "xo-query",
         move |filter: String| -> Result<String, String> {
@@ -136,12 +140,57 @@ mod tests {
             path: "book.md".into(),
         }];
         let body = "# Stats\n```steel\n(let ([books (string->jsexpr (xo-query \"{\\\"type\\\":\\\"book\\\"}\"))])\n  (string-append \"Books: \" (number->string (length books))))\n```\n";
-        assert_eq!(render_steel_blocks(body, &notes), "# Stats\nBooks: 1");
+        assert_eq!(
+            render_steel_blocks(body, &NoteId::new("stats01"), &notes),
+            "# Stats\nBooks: 1"
+        );
+    }
+
+    #[test]
+    fn exposes_the_current_note_id_to_portable_blocks() {
+        let body = "```steel\n(string-append \"Current: \" (current-note-id))\n```";
+        assert_eq!(
+            render_steel_blocks(body, &NoteId::new("note001"), &[]),
+            "Current: note001"
+        );
+    }
+
+    #[test]
+    fn query_json_uses_lists_hashes_and_symbol_keys() {
+        let notes = vec![Note {
+            id: NoteId::new("note001"),
+            frontmatter: Frontmatter::from([(
+                "type".into(),
+                FrontmatterValue::String("note".into()),
+            )]),
+            body: String::new(),
+            path: "note.md".into(),
+        }];
+        let body = r#"```steel
+(let* ([items (string->jsexpr (xo-query "{}"))]
+       [item (car items)]
+       [frontmatter (hash-ref item 'frontmatter)])
+  (if (and (list? items)
+           (hash? item)
+           (hash-contains? frontmatter 'type))
+      (string-append (hash-ref frontmatter 'type) ":" (current-note-id))
+      "unexpected JSON mapping"))
+```"#;
+        assert_eq!(
+            render_steel_blocks(body, &NoteId::new("note001"), &notes),
+            "note:note001"
+        );
     }
 
     #[test]
     fn leaves_unclosed_blocks_unchanged_and_reports_invalid_code() {
-        assert_eq!(render_steel_blocks("```steel\n(+ 1", &[]), "```steel\n(+ 1");
-        assert!(render_steel_blocks("```steel\n(+ 1 2)\n```", &[]).contains("Steel block error"));
+        let id = NoteId::new("note001");
+        assert_eq!(
+            render_steel_blocks("```steel\n(+ 1", &id, &[]),
+            "```steel\n(+ 1"
+        );
+        assert!(
+            render_steel_blocks("```steel\n(+ 1 2)\n```", &id, &[]).contains("Steel block error")
+        );
     }
 }

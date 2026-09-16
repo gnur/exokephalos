@@ -34,7 +34,7 @@ The Markdown directory used by the native client is a projection, not the synchr
 
 ## Inline Steel in notes
 
-A note body may contain a fenced `steel` block. xo evaluates the block for preview in the TUI and PWA; the generated output is not saved into the note. The final Steel value must be a Markdown string.
+A note body may contain a fenced `steel` block. xo evaluates the block for preview in the TUI and PWA; the generated output is not saved into the note. The final Steel value must be a Markdown string. Evaluation replaces only that fenced block and retains the surrounding body. A failure renders as `> Steel block error: <message>` in place of the failed block.
 
 ````markdown
 ```steel
@@ -44,9 +44,31 @@ A note body may contain a fenced `steel` block. xo evaluates the block for previ
 ```
 ````
 
-`xo-query` accepts a JSON object whose fields are exact frontmatter matches. It returns a JSON array of `{id, frontmatter, body}` objects. Use `{}` to query all non-deleted items.
+Two read-only xo host functions are available:
 
-Each block runs in a fresh sandbox with only the bounded, read-only `xo-query` primitive. It cannot mutate notes or access the filesystem, environment, network, processes, terminal, or clock. Block source is limited to 64 KiB, output to 256 KiB, and execution is time-bounded.
+- `(current-note-id)` returns the ID string of the note containing the block. Use it instead of hardcoding an ID so blocks remain portable when copied or imported.
+- `(xo-query filter-json)` accepts a JSON object and returns a JSON array of matching `{id, frontmatter, body}` objects. Use `{}` to query all non-deleted items.
+
+`xo-query` applies a conjunction of top-level exact-equality comparisons against frontmatter. It does not support nested property paths, partial matches, ordering, or operators such as `<` and `>`. Extract nested values and perform comparisons, filtering, date handling, and aggregation in Steel after querying.
+
+Query the current note without embedding its ID:
+
+```scheme
+(define self
+  (car (string->jsexpr
+    (xo-query
+      (value->jsexpr-string (hash 'id (current-note-id)))))))
+(define self-frontmatter (hash-ref self 'frontmatter))
+(define self-created (hash-ref self-frontmatter 'created))
+```
+
+`string->jsexpr` converts JSON objects to Steel hash tables (`hash?`) and JSON arrays to Scheme lists (`list?`). JSON object keys become symbols, not strings: use `(hash-ref item 'id)` and `(hash-contains? item 'frontmatter)`. Process JSON arrays with list operations such as `car`, `cdr`, `map`, `filter`, and `length`.
+
+The normal `Engine::new_sandboxed()` Steel core is available. Common useful functions include arithmetic and comparisons, `quotient`, `modulo`, `substring`, `string-append`, `string-length`, `number->string`, `string->number`, `inexact->exact`, `map`, and `filter`. Racket-specific libraries, filesystem module loading, external crates, and host functions not listed here are unavailable; keep blocks self-contained.
+
+There is no clock. For time-based filtering, use the current note's `created` value or derive a relative reference point from the newest queried entry. Compare only consistently normalized date strings (for example a fixed-offset `YYYY-MM-DD` prefix), or store a numeric/sortable timestamp field in frontmatter. A block cannot know the actual current time.
+
+Each block runs in a fresh sandbox. It cannot mutate notes or access the filesystem, environment, network, processes, terminal, or clock. Block source is limited to 64 KiB, output to 256 KiB, and execution is time-bounded.
 
 ## Steel configuration
 
@@ -288,6 +310,8 @@ mod tests {
         let document = document(&request);
         assert!(document.contains("Base URL for this xo instance: https://notes.example.test"));
         assert!(document.contains("https://notes.example.test/api/item/task"));
+        assert!(document.contains("(current-note-id)"));
+        assert!(document.contains("JSON object keys become symbols"));
         assert!(!document.contains("{{BASE_URL}}"));
     }
 

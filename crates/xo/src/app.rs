@@ -706,7 +706,7 @@ impl App {
             note.body.clone()
         };
         let mut visible = note.clone();
-        visible.body = xo_core::steel_blocks::render_steel_blocks(&body, &self.notes);
+        visible.body = xo_core::steel_blocks::render_steel_blocks(&body, &note.id, &self.notes);
         Ok(xo_core::markdown::render(
             &visible.frontmatter,
             &visible.body,

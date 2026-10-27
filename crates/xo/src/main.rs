@@ -73,6 +73,8 @@ enum Command {
         #[arg(long = "type")]
         item_type: Option<String>,
     },
+    /// Fetch an item from the server and print its API representation as YAML.
+    Get { item_id: String },
     /// Manage local executable Steel plugins.
     Plugin {
         #[command(subcommand)]
@@ -134,6 +136,7 @@ async fn main() -> Result<()> {
             shutdown?;
             println!("exported={}", exported.exported);
         }
+        Some(Command::Get { item_id }) => get_command(&cli, item_id).await?,
         Some(Command::Plugin { command }) => plugin_command(command)?,
         None => {
             let config = configured(&cli)?;
@@ -147,6 +150,16 @@ async fn main() -> Result<()> {
             .await?;
         }
     }
+    Ok(())
+}
+
+async fn get_command(cli: &Cli, item_id: &str) -> Result<()> {
+    let config = configured(cli)?;
+    let access_token = xo::oauth::access_token(&config.server, &home_dir()?).await?;
+    print!(
+        "{}",
+        xo::item_get::fetch_yaml(&config.server, item_id, access_token.as_deref()).await?
+    );
     Ok(())
 }
 
@@ -1397,6 +1410,15 @@ mod cli_tests {
             cli.projection.as_deref(),
             Some(std::path::Path::new("/notes"))
         );
+    }
+
+    #[test]
+    fn get_command_parses_an_item_id() {
+        let cli = Cli::try_parse_from(["xo", "get", "abcdef2"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Get { item_id }) if item_id == "abcdef2"
+        ));
     }
 
     #[test]

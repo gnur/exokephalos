@@ -242,6 +242,13 @@ xo export ~/books-export --type book
 Output is grouped by item type, year, and month. Export is the portable handoff
 format for legacy workspaces.
 
+Fetch an item directly from the configured server as YAML (the same shape as
+`GET /api/items/{id}`), for use with tools such as `yq`:
+
+```console
+xo get ITEM_ID | yq .frontmatter
+```
+
 ### Editor integration
 
 Launch `xo-lsp` as a stdio language server for the projection. It reports
